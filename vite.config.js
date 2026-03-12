@@ -6,12 +6,15 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    allowedHosts: ['.ngrok-free.dev', '.ngrok.io', 'localhost'],
+    allowedHosts: ['.ngrok-free.dev', '.ngrok.io', 'localhost', 'chefsbud.com', '.chefsbud.com'],
     proxy: {
       '/api': {
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
     },
+  },
+  preview: {
+    allowedHosts: ['chefsbud.com', 'www.chefsbud.com', 'localhost'],
   },
 })

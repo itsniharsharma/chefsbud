@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: chefsbud-api
+    env: node
+    region: singapore
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      # Set these in Render dashboard (do NOT commit secrets):
+      # MONGO_URI
+      # JWT_SECRET
+      # GEMINI_API_KEY
+      # RAZORPAY_KEY_ID
+      # RAZORPAY_KEY_SECRET
+      # RAZORPAY_HYBRID_MONTHLY_PLAN_ID
+      # RAZORPAY_WEBHOOK_SECRET
+      # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM
+      # AWS_REGION, S3_BUCKET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+      - key: CORS_ORIGIN
+        value: https://chefsbud.com,https://www.chefsbud.com
+      - key: KEEP_ALIVE_TIMEOUT_MS
+        value: 65000
+      - key: HEADERS_TIMEOUT_MS
+        value: 66000
