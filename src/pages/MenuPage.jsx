@@ -41,7 +41,7 @@ export default function MenuPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const queryClient = useQueryClient()
 
-  const { data: menuData, isLoading, isFetching } = useMenuQuery({
+  const { data: menuData } = useMenuQuery({
     restaurantSlug: restaurant?.slug,
   })
 
@@ -305,8 +305,6 @@ export default function MenuPage() {
             </Button>
           </div>
         </div>
-
-        {(isLoading || isFetching) && <p className="mb-3 text-sm text-slate-500">Refreshing menu data...</p>}
 
         <div className="grid grid-cols-1 gap-3">
           <label className="block">

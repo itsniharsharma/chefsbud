@@ -14,7 +14,7 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope }) {
         status: statusFilter,
         scope: scope === 'Today' ? 'today' : 'all',
       }),
-    refetchInterval: 5_000,
+    refetchInterval: 10_000,
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
   })
@@ -25,7 +25,7 @@ export function useTablesQuery({ restaurantId }) {
     queryKey: queryKeys.dashboard.tables(restaurantId),
     enabled: Boolean(restaurantId),
     queryFn: () => tableService.list(restaurantId),
-    refetchInterval: 5_000,
+    refetchInterval: 20_000,
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
   })
@@ -36,7 +36,7 @@ export function useMenuQuery({ restaurantSlug }) {
     queryKey: queryKeys.dashboard.menu(restaurantSlug),
     enabled: Boolean(restaurantSlug),
     queryFn: () => menuService.getBySlug(restaurantSlug),
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
   })
@@ -47,7 +47,7 @@ export function useDashboardAnalyticsCardsQuery({ restaurantId }) {
     queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
     enabled: Boolean(restaurantId),
     queryFn: () => analyticsService.dashboard(restaurantId),
-    refetchInterval: 5_000,
+    refetchInterval: 15_000,
     refetchIntervalInBackground: true,
     placeholderData: (previousData) => previousData,
   })

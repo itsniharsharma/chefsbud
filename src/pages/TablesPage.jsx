@@ -15,7 +15,7 @@ export default function TablesPage() {
   const { restaurant } = useAuth()
   const queryClient = useQueryClient()
 
-  const { data: tables = [], isFetching, isLoading } = useTablesQuery({
+  const { data: tables = [] } = useTablesQuery({
     restaurantId: restaurant?._id,
   })
 
@@ -102,7 +102,6 @@ export default function TablesPage() {
           </Button>
         </div>
         {error && <p className="mb-3 text-sm text-[var(--primary)]">{error}</p>}
-        {(isLoading || isFetching) && <p className="mb-3 text-sm text-slate-500">Refreshing tables...</p>}
         <div className="flex flex-col gap-3 md:flex-row">
           <input
             className="input max-w-xs"

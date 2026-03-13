@@ -16,7 +16,7 @@ export default function OrdersPage() {
   const [error, setError] = useState('')
   const queryClient = useQueryClient()
 
-  const { data, isLoading, isFetching } = useOrdersBoardQuery({
+  const { data } = useOrdersBoardQuery({
     restaurantId: restaurant?._id,
     statusFilter,
     scope,
@@ -25,33 +25,106 @@ export default function OrdersPage() {
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
   const recentOrders = useMemo(() => data?.recentOrders || [], [data])
 
+  const applyOrderUpdateToBoard = (boardData, orderId, nextStatus, hideFromActive = false) => {
+    if (!boardData) return boardData
+
+    const normalize = (orders = []) => orders.map((order) => ({ ...order }))
+    const active = normalize(boardData.activeOrders)
+    const recent = normalize(boardData.recentOrders)
+
+    const activeIndex = active.findIndex((order) => String(order._id || order.id) === String(orderId))
+    const recentIndex = recent.findIndex((order) => String(order._id || order.id) === String(orderId))
+
+    if (activeIndex >= 0) {
+      const updated = {
+        ...active[activeIndex],
+        orderStatus: nextStatus || active[activeIndex].orderStatus,
+      }
+
+      if (hideFromActive) {
+        active.splice(activeIndex, 1)
+        recent.unshift({ ...updated, hiddenFromActive: true })
+      } else {
+        active[activeIndex] = updated
+      }
+    }
+
+    if (recentIndex >= 0 && nextStatus) {
+      recent[recentIndex] = {
+        ...recent[recentIndex],
+        orderStatus: nextStatus,
+      }
+    }
+
+    return {
+      ...boardData,
+      activeOrders: active,
+      recentOrders: recent,
+    }
+  }
+
   const refreshBoard = () => {
     if (!restaurant?._id) return Promise.resolve()
     return queryClient.invalidateQueries({
-      queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, statusFilter, scope),
+      queryKey: ['dashboard', 'orders-board', restaurant._id],
     })
   }
 
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }) => orderService.updateStatus(id, status),
+    onMutate: async ({ id, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
+      const previousBoards = queryClient.getQueriesData({
+        queryKey: ['dashboard', 'orders-board', restaurant?._id],
+      })
+
+      const shouldMoveToRecent = status === 'Completed'
+      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+        applyOrderUpdateToBoard(boardData, id, status, shouldMoveToRecent),
+      )
+
+      return { previousBoards }
+    },
     onSuccess: () => {
       setError('')
       refreshBoard()
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
     },
-    onError: (requestError) => {
+    onError: (requestError, _variables, context) => {
+      if (context?.previousBoards) {
+        for (const [key, value] of context.previousBoards) {
+          queryClient.setQueryData(key, value)
+        }
+      }
       setError(requestError?.response?.data?.message || 'Failed to update status')
     },
   })
 
   const deleteOrderMutation = useMutation({
     mutationFn: (id) => orderService.delete(id),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
+      const previousBoards = queryClient.getQueriesData({
+        queryKey: ['dashboard', 'orders-board', restaurant?._id],
+      })
+
+      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+        applyOrderUpdateToBoard(boardData, id, null, true),
+      )
+
+      return { previousBoards }
+    },
     onSuccess: () => {
       setError('')
       refreshBoard()
       queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
     },
-    onError: (requestError) => {
+    onError: (requestError, _variables, context) => {
+      if (context?.previousBoards) {
+        for (const [key, value] of context.previousBoards) {
+          queryClient.setQueryData(key, value)
+        }
+      }
       setError(requestError?.response?.data?.message || 'Failed to delete order')
     },
   })
@@ -69,9 +142,6 @@ export default function OrdersPage() {
   return (
     <div className="space-y-5">
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
-      {(isLoading || isFetching) && (
-        <p className="text-sm text-slate-500">Refreshing orders...</p>
-      )}
       <div className="card flex flex-wrap gap-2 p-4">
         {statusFilters.map((filter) => (
           <Button
@@ -99,8 +169,6 @@ export default function OrdersPage() {
                 key={order._id || order.id}
                 order={order}
                 onStatusChange={onStatusChange}
-                onDelete={onDeleteOrder}
-                deleteLabel="Move to Recent"
               />
             ))}
             {!activeOrders.length && <p className="text-sm text-slate-500">No active orders in this view.</p>}
