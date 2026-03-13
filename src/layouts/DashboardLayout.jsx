@@ -1,7 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import Sidebar from '../components/Sidebar'
 import Header from '../components/Header'
+import { useAuth } from '../hooks/useAuth'
+import { queryKeys } from '../lib/queryKeys'
+import { analyticsService } from '../services/analyticsService'
+import { menuService } from '../services/menuService'
+import { orderService } from '../services/orderService'
+import { tableService } from '../services/tableService'
+import { useOrderRealtimeSync } from '../hooks/useOrderRealtimeSync'
 
 const titles = {
   '/dashboard': 'Dashboard',
@@ -17,6 +25,38 @@ const titles = {
 export default function DashboardLayout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const { restaurant } = useAuth()
+  const queryClient = useQueryClient()
+
+  useOrderRealtimeSync({
+    restaurantId: restaurant?._id,
+    enabled: Boolean(restaurant?._id),
+  })
+
+  useEffect(() => {
+    if (!restaurant?._id || !restaurant?.slug) return
+
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.dashboard.analyticsCards(restaurant._id),
+      queryFn: () => analyticsService.dashboard(restaurant._id),
+    })
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, 'All', 'All'),
+      queryFn: () =>
+        orderService.listBoard(restaurant._id, {
+          status: 'All',
+          scope: 'all',
+        }),
+    })
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.dashboard.tables(restaurant._id),
+      queryFn: () => tableService.list(restaurant._id),
+    })
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.dashboard.menu(restaurant.slug),
+      queryFn: () => menuService.getBySlug(restaurant.slug),
+    })
+  }, [restaurant?._id, restaurant?.slug, queryClient])
 
   return (
     <div className="owner-shell">

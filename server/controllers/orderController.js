@@ -2,6 +2,7 @@ import MenuItem from '../models/MenuItem.js'
 import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
+import { emitOrderChanged } from '../realtime/orderEvents.js'
 
 const orderListProjection =
   '_id tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt'
@@ -177,6 +178,11 @@ export async function updateOrderStatus(req, res, next) {
     }
 
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    emitOrderChanged(restaurant._id, {
+      type: 'status-updated',
+      orderId: String(order._id),
+      orderStatus: order.orderStatus,
+    })
     return res.json(order)
   } catch (error) {
     next(error)
@@ -213,6 +219,10 @@ export async function deleteOrder(req, res, next) {
     )
 
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    emitOrderChanged(restaurant._id, {
+      type: 'hidden-from-active',
+      orderId: String(req.params.orderId),
+    })
     return res.json({ success: true, movedToRecent: true })
   } catch (error) {
     next(error)
@@ -251,6 +261,11 @@ export async function createOrder(req, res, next) {
     })
 
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    emitOrderChanged(restaurant._id, {
+      type: 'created',
+      orderId: String(order._id),
+      orderStatus: order.orderStatus,
+    })
 
     return res.status(201).json(order)
   } catch (error) {

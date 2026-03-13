@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import Button from '../components/Button'
 import FormInput from '../components/FormInput'
 import Modal from '../components/Modal'
 import { menuService } from '../services/menuService'
 import { useAuth } from '../hooks/useAuth'
 import { formatCurrencyINR } from '../utils/currency'
+import { useMenuQuery } from '../hooks/useDashboardQueries'
+import { queryKeys } from '../lib/queryKeys'
 
 const initialForm = {
   name: '',
@@ -28,17 +31,29 @@ const MAX_AI_IMAGE_SIZE_BYTES = 2 * 1024 * 1024
 
 export default function MenuPage() {
   const { restaurant } = useAuth()
-  const [categories, setCategories] = useState([])
   const [categoryName, setCategoryName] = useState('')
   const [showCategoryModal, setShowCategoryModal] = useState(false)
-  const [items, setItems] = useState([])
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [error, setError] = useState('')
   const [aiImages, setAiImages] = useState([])
   const [aiDraftCategories, setAiDraftCategories] = useState([])
   const [aiLoading, setAiLoading] = useState(false)
-  const [aiImporting, setAiImporting] = useState(false)
+  const queryClient = useQueryClient()
+
+  const { data: menuData, isLoading, isFetching } = useMenuQuery({
+    restaurantSlug: restaurant?.slug,
+  })
+
+  const categories = useMemo(() => menuData?.categories || [], [menuData?.categories])
+  const items = useMemo(() => menuData?.items || [], [menuData?.items])
+
+  const refreshMenu = () => {
+    if (!restaurant?.slug) return Promise.resolve()
+    return queryClient.invalidateQueries({
+      queryKey: queryKeys.dashboard.menu(restaurant.slug),
+    })
+  }
 
   const categoryMap = useMemo(() => {
     const map = new Map()
@@ -48,20 +63,64 @@ export default function MenuPage() {
     return map
   }, [categories])
 
-  const loadMenu = useCallback(async () => {
-    if (!restaurant?.slug) return
-    const data = await menuService.getBySlug(restaurant.slug)
-    setCategories(data.categories)
-    setItems(data.items)
+  useEffect(() => {
+    if (!categories.length) return
     setForm((prev) => {
       if (prev.categoryId) return prev
-      return { ...prev, categoryId: data.categories[0]?._id || '' }
+      return { ...prev, categoryId: categories[0]?._id || '' }
     })
-  }, [restaurant?.slug])
+  }, [categories])
 
-  useEffect(() => {
-    loadMenu().catch(() => setError('Failed to load menu data'))
-  }, [loadMenu])
+  const saveItemMutation = useMutation({
+    mutationFn: ({ targetEditingId, payload }) =>
+      targetEditingId ? menuService.updateItem(targetEditingId, payload) : menuService.createItem(payload),
+    onSuccess: () => {
+      setError('')
+      refreshMenu()
+      setEditingId(null)
+      setForm((prev) => ({ ...initialForm, categoryId: categories[0]?._id || prev.categoryId }))
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to save menu item')
+    },
+  })
+
+  const deleteItemMutation = useMutation({
+    mutationFn: (id) => menuService.deleteItem(id),
+    onSuccess: () => {
+      setError('')
+      refreshMenu()
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to delete item')
+    },
+  })
+
+  const addCategoryMutation = useMutation({
+    mutationFn: (payload) => menuService.createCategory(payload),
+    onSuccess: () => {
+      setError('')
+      refreshMenu()
+      setCategoryName('')
+      setShowCategoryModal(false)
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to add category')
+    },
+  })
+
+  const importDraftMutation = useMutation({
+    mutationFn: (payload) => menuService.importDraft(payload),
+    onSuccess: () => {
+      setError('')
+      refreshMenu()
+      setAiDraftCategories([])
+      clearAiImages()
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to import AI-generated menu')
+    },
+  })
 
   const onSubmit = (event) => {
     event.preventDefault()
@@ -72,19 +131,7 @@ export default function MenuPage() {
       price: Number(form.price),
     }
 
-    const request = editingId
-      ? menuService.updateItem(editingId, payload)
-      : menuService.createItem(payload)
-
-    request
-      .then(() => loadMenu())
-      .then(() => {
-        setEditingId(null)
-        setForm((prev) => ({ ...initialForm, categoryId: categories[0]?._id || prev.categoryId }))
-      })
-      .catch((requestError) => {
-        setError(requestError?.response?.data?.message || 'Failed to save menu item')
-      })
+    saveItemMutation.mutate({ targetEditingId: editingId, payload })
   }
 
   const onEdit = (item) => {
@@ -93,25 +140,13 @@ export default function MenuPage() {
   }
 
   const onDelete = (id) => {
-    menuService
-      .deleteItem(id)
-      .then(() => loadMenu())
-      .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to delete item'))
+    deleteItemMutation.mutate(id)
   }
 
   const addCategory = () => {
     if (!categoryName.trim()) return
 
-    menuService
-      .createCategory({ name: categoryName })
-      .then(() => loadMenu())
-      .then(() => {
-        setCategoryName('')
-        setShowCategoryModal(false)
-      })
-      .catch((requestError) => {
-        setError(requestError?.response?.data?.message || 'Failed to add category')
-      })
+    addCategoryMutation.mutate({ name: categoryName })
   }
 
   const clearAiImages = () => {
@@ -248,21 +283,9 @@ export default function MenuPage() {
 
   const importAiDraftToMenu = async () => {
     if (aiDraftCategories.length === 0) return
-
-    setAiImporting(true)
     setError('')
 
-    try {
-      await menuService.importDraft({ categories: aiDraftCategories })
-
-      await loadMenu()
-      setAiDraftCategories([])
-      clearAiImages()
-    } catch (requestError) {
-      setError(requestError?.response?.data?.message || 'Failed to import AI-generated menu')
-    } finally {
-      setAiImporting(false)
-    }
+    await importDraftMutation.mutateAsync({ categories: aiDraftCategories })
   }
 
   return (
@@ -282,6 +305,8 @@ export default function MenuPage() {
             </Button>
           </div>
         </div>
+
+        {(isLoading || isFetching) && <p className="mb-3 text-sm text-slate-500">Refreshing menu data...</p>}
 
         <div className="grid grid-cols-1 gap-3">
           <label className="block">
@@ -323,8 +348,8 @@ export default function MenuPage() {
                 <Button variant="secondary" onClick={addDraftCategory}>
                   Add Category
                 </Button>
-                <Button onClick={importAiDraftToMenu} disabled={aiImporting}>
-                  {aiImporting ? 'Importing...' : 'Import to Menu'}
+                <Button onClick={importAiDraftToMenu} disabled={importDraftMutation.isPending}>
+                  {importDraftMutation.isPending ? 'Importing...' : 'Import to Menu'}
                 </Button>
               </div>
             </div>

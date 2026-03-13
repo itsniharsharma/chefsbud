@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   Line,
   LineChart,
@@ -8,19 +8,15 @@ import {
   YAxis,
 } from 'recharts'
 import Card from '../components/Card'
-import { analyticsService } from '../services/analyticsService'
 import { useAuth } from '../hooks/useAuth'
 import { formatCurrencyINR } from '../utils/currency'
+import { useDashboardAnalyticsCardsQuery } from '../hooks/useDashboardQueries'
 
 export default function DashboardPage() {
   const { restaurant } = useAuth()
-  const [data, setData] = useState(null)
-
-  useEffect(() => {
-    if (!restaurant?._id) return
-
-    analyticsService.dashboard(restaurant._id).then(setData).catch(() => setData(null))
-  }, [restaurant?._id])
+  const { data } = useDashboardAnalyticsCardsQuery({
+    restaurantId: restaurant?._id,
+  })
 
   const cards = useMemo(() => {
     if (!data?.cards) {

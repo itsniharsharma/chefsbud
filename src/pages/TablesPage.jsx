@@ -1,31 +1,38 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import Button from '../components/Button'
 import QRCard from '../components/QRCard'
 import { useAuth } from '../hooks/useAuth'
 import { tableService } from '../services/tableService'
 import { buildCustomerMenuUrl } from '../utils/customerUrl'
+import { useTablesQuery } from '../hooks/useDashboardQueries'
+import { queryKeys } from '../lib/queryKeys'
 
 export default function TablesPage() {
   const [count, setCount] = useState('12')
-  const [tables, setTables] = useState([])
   const [error, setError] = useState('')
   const [batchDownloading, setBatchDownloading] = useState(false)
   const { restaurant } = useAuth()
+  const queryClient = useQueryClient()
 
-  useEffect(() => {
-    if (!restaurant?._id) return
+  const { data: tables = [], isFetching, isLoading } = useTablesQuery({
+    restaurantId: restaurant?._id,
+  })
 
-    tableService
-      .list(restaurant._id)
-      .then(setTables)
-      .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to load tables'))
-  }, [restaurant])
+  const createTablesMutation = useMutation({
+    mutationFn: (payload) => tableService.create(payload),
+    onSuccess: (nextTables) => {
+      setError('')
+      queryClient.setQueryData(queryKeys.dashboard.tables(restaurant?._id), nextTables)
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.tables(restaurant?._id) })
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to create tables')
+    },
+  })
 
   const generateTables = () => {
-    tableService
-      .create({ count: Number(count) })
-      .then(setTables)
-      .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to create tables'))
+    createTablesMutation.mutate({ count: Number(count) })
   }
 
   const downloadAllQRCodes = async () => {
@@ -95,6 +102,7 @@ export default function TablesPage() {
           </Button>
         </div>
         {error && <p className="mb-3 text-sm text-[var(--primary)]">{error}</p>}
+        {(isLoading || isFetching) && <p className="mb-3 text-sm text-slate-500">Refreshing tables...</p>}
         <div className="flex flex-col gap-3 md:flex-row">
           <input
             className="input max-w-xs"

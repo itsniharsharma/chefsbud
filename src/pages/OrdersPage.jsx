@@ -1,78 +1,77 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import OrderCard from '../components/OrderCard'
 import Button from '../components/Button'
 import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
+import { queryKeys } from '../lib/queryKeys'
+import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
 
 const statusFilters = ['All', 'Pending', 'Preparing', 'Ready', 'Served', 'Completed']
 
-function buildOrderBoardParams(statusFilter, scope) {
-  return {
-    status: statusFilter,
-    scope: scope === 'Today' ? 'today' : 'all',
-  }
-}
-
 export default function OrdersPage() {
   const { restaurant } = useAuth()
-  const [activeOrders, setActiveOrders] = useState([])
-  const [recentOrders, setRecentOrders] = useState([])
   const [statusFilter, setStatusFilter] = useState('All')
   const [scope, setScope] = useState('All')
   const [error, setError] = useState('')
+  const queryClient = useQueryClient()
 
-  useEffect(() => {
-    if (!restaurant?._id) return undefined
+  const { data, isLoading, isFetching } = useOrdersBoardQuery({
+    restaurantId: restaurant?._id,
+    statusFilter,
+    scope,
+  })
 
-    const loadOrders = () => {
-      orderService
-        .listBoard(restaurant._id, buildOrderBoardParams(statusFilter, scope))
-        .then(({ activeOrders: active = [], recentOrders: recent = [] }) => {
-          setActiveOrders(active)
-          setRecentOrders(recent)
-          setError('')
-        })
-        .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to load orders'))
-    }
+  const activeOrders = useMemo(() => data?.activeOrders || [], [data])
+  const recentOrders = useMemo(() => data?.recentOrders || [], [data])
 
-    loadOrders()
-    if (!restaurant?._id) return undefined
+  const refreshBoard = () => {
+    if (!restaurant?._id) return Promise.resolve()
+    return queryClient.invalidateQueries({
+      queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, statusFilter, scope),
+    })
+  }
 
-    const interval = setInterval(loadOrders, 5000)
-    return () => clearInterval(interval)
-  }, [restaurant, statusFilter, scope])
+  const updateStatusMutation = useMutation({
+    mutationFn: ({ id, status }) => orderService.updateStatus(id, status),
+    onSuccess: () => {
+      setError('')
+      refreshBoard()
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to update status')
+    },
+  })
+
+  const deleteOrderMutation = useMutation({
+    mutationFn: (id) => orderService.delete(id),
+    onSuccess: () => {
+      setError('')
+      refreshBoard()
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
+    },
+    onError: (requestError) => {
+      setError(requestError?.response?.data?.message || 'Failed to delete order')
+    },
+  })
 
   const onStatusChange = (id, status) => {
     if (!restaurant?._id) return
-
-    orderService
-      .updateStatus(id, status)
-      .then(() => orderService.listBoard(restaurant._id, buildOrderBoardParams(statusFilter, scope)))
-      .then(({ activeOrders: active = [], recentOrders: recent = [] }) => {
-        setActiveOrders(active)
-        setRecentOrders(recent)
-        setError('')
-      })
-      .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to update status'))
+    updateStatusMutation.mutate({ id, status })
   }
 
   const onDeleteOrder = (id) => {
     if (!restaurant?._id) return
-
-    orderService
-      .delete(id)
-      .then(() => orderService.listBoard(restaurant._id, buildOrderBoardParams(statusFilter, scope)))
-      .then(({ activeOrders: active = [], recentOrders: recent = [] }) => {
-        setActiveOrders(active)
-        setRecentOrders(recent)
-        setError('')
-      })
-      .catch((requestError) => setError(requestError?.response?.data?.message || 'Failed to delete order'))
+    deleteOrderMutation.mutate(id)
   }
 
   return (
     <div className="space-y-5">
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
+      {(isLoading || isFetching) && (
+        <p className="text-sm text-slate-500">Refreshing orders...</p>
+      )}
       <div className="card flex flex-wrap gap-2 p-4">
         {statusFilters.map((filter) => (
           <Button
