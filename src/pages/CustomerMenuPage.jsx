@@ -20,18 +20,31 @@ export default function CustomerMenuPage() {
   const cart = session.items
 
   useEffect(() => {
+    let active = true
     setLoading(true)
+    setError('')
+
     menuService
       .getBySlug(restaurantSlug)
       .then((data) => {
+        if (!active) return
         setMenu(data)
         setActiveCategory(null)
+        setError('')
       })
       .catch((requestError) => {
+        if (!active) return
         setError(requestError?.response?.data?.message || 'Unable to load menu')
       })
-      .finally(() => setLoading(false))
-  }, [restaurantSlug])
+      .finally(() => {
+        if (!active) return
+        setLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [restaurantSlug, tableNumber])
 
   const visibleItems = useMemo(() => {
     if (!activeCategory) return []

@@ -8,7 +8,7 @@ const orderListProjection =
   '_id tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt'
 
 async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).select('_id').lean()
+  return Restaurant.findOne({ ownerId }).select('_id slug').lean()
 }
 
 function buildOrderQuery({ restaurantId, view, status, scope }) {
@@ -177,7 +177,11 @@ export async function updateOrderStatus(req, res, next) {
       return res.status(404).json({ message: 'Order not found' })
     }
 
-    invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    invalidateCacheByTags([
+      `analytics:${String(restaurant._id)}`,
+      `orders:table:${restaurant.slug}:${order.tableNumber}`,
+      `orders:order:${String(order._id)}`,
+    ])
     emitOrderChanged(restaurant._id, {
       type: 'status-updated',
       orderId: String(order._id),
@@ -197,7 +201,7 @@ export async function deleteOrder(req, res, next) {
     }
 
     const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
-      .select('_id orderStatus')
+      .select('_id orderStatus tableNumber')
       .lean()
 
     if (!order) {
@@ -218,7 +222,11 @@ export async function deleteOrder(req, res, next) {
       },
     )
 
-    invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    invalidateCacheByTags([
+      `analytics:${String(restaurant._id)}`,
+      `orders:table:${restaurant.slug}:${order.tableNumber}`,
+      `orders:order:${String(req.params.orderId)}`,
+    ])
     emitOrderChanged(restaurant._id, {
       type: 'hidden-from-active',
       orderId: String(req.params.orderId),
@@ -261,6 +269,10 @@ export async function createOrder(req, res, next) {
     })
 
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+    invalidateCacheByTags([
+      `orders:table:${restaurantSlug}:${tableNumber}`,
+      `orders:order:${String(order._id)}`,
+    ])
     emitOrderChanged(restaurant._id, {
       type: 'created',
       orderId: String(order._id),

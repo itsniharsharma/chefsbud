@@ -3,8 +3,11 @@ import { withRedis } from '../config/redis.js'
 const cacheStore = new Map()
 const tagIndex = new Map()
 const inflightStore = new Map()
+const redisTagMembershipStore = new Map()
 const MAX_CACHE_ENTRIES = 500
 const MAX_INFLIGHT_MS = 30000
+const MAX_REDIS_TAG_MEMBERSHIP_ENTRIES = 5000
+const REDIS_TAG_REFRESH_BUFFER_MS = 5000
 const CACHE_NS = 'response-cache'
 let requestCounter = 0
 
@@ -71,6 +74,31 @@ function cleanupStaleInflight() {
   }
 }
 
+function cleanupRedisTagMembership() {
+  const current = nowMs()
+  for (const [membershipKey, expiresAt] of redisTagMembershipStore.entries()) {
+    if (expiresAt <= current) {
+      redisTagMembershipStore.delete(membershipKey)
+    }
+  }
+}
+
+function shouldRefreshRedisTagMembership(tag, key, ttlSeconds) {
+  const membershipKey = `${tag}::${key}`
+  const current = nowMs()
+  const cachedExpiresAt = Number(redisTagMembershipStore.get(membershipKey) || 0)
+  if (cachedExpiresAt > current + REDIS_TAG_REFRESH_BUFFER_MS) {
+    return false
+  }
+
+  if (redisTagMembershipStore.size >= MAX_REDIS_TAG_MEMBERSHIP_ENTRIES) {
+    cleanupRedisTagMembership()
+  }
+
+  redisTagMembershipStore.set(membershipKey, current + ttlSeconds * 1000)
+  return true
+}
+
 function normalizeTags(tags = []) {
   return [...new Set(tags.map((tag) => String(tag || '').trim()).filter(Boolean))]
 }
@@ -108,8 +136,11 @@ async function writeToRedisCache({ key, status, payload, tags, ttlSeconds }) {
       await redis.set(redisCacheKey(key), JSON.stringify(entry), { ex: ttlSeconds })
       if (!tags.length) return
 
+      const tagsToSync = tags.filter((tag) => shouldRefreshRedisTagMembership(tag, key, ttlSeconds))
+      if (!tagsToSync.length) return
+
       await Promise.all(
-        tags.map(async (tag) => {
+        tagsToSync.map(async (tag) => {
           const tagKey = redisTagKey(tag)
           await redis.sadd(tagKey, redisCacheKey(key))
           await redis.expire(tagKey, Math.max(60, ttlSeconds + 30))
@@ -144,6 +175,14 @@ export function invalidateCacheByTags(tags = []) {
   const normalizedTags = normalizeTags(tags)
 
   for (const tag of normalizedTags) {
+    for (const membershipKey of [...redisTagMembershipStore.keys()]) {
+      if (membershipKey.startsWith(`${tag}::`)) {
+        redisTagMembershipStore.delete(membershipKey)
+      }
+    }
+  }
+
+  for (const tag of normalizedTags) {
     const keys = tagIndex.get(tag)
     if (!keys) continue
 
@@ -167,6 +206,7 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder } = {})
     if (requestCounter % 100 === 0) {
       cleanupExpiredEntries()
       cleanupStaleInflight()
+      cleanupRedisTagMembership()
     }
 
     const key = String(keyBuilder ? keyBuilder(req) : req.originalUrl)

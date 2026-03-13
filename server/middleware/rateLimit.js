@@ -94,19 +94,19 @@ export function createRateLimiter({
         if (count === 1) {
           await redis.expire(redisKey, refillWindowSeconds)
         }
-        const ttl = Number(await redis.ttl(redisKey))
-        return { count, ttl }
+        return { count }
       },
       null,
     )
 
     if (redisResult) {
-      const { count, ttl } = redisResult
-      const retryAfterSeconds = ttl > 0 ? ttl : refillWindowSeconds
+      const { count } = redisResult
       const remaining = Math.max(0, maxTokens - count)
       setRateLimitHeaders(res, remaining)
 
       if (count > maxTokens) {
+        const ttl = await withRedis('rate_limit_ttl', (redis) => redis.ttl(redisKey), refillWindowSeconds)
+        const retryAfterSeconds = Number(ttl) > 0 ? Number(ttl) : refillWindowSeconds
         res.setHeader('Retry-After', String(retryAfterSeconds))
         return res.status(429).json({ message: 'Too many requests. Please retry shortly.' })
       }

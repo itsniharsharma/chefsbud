@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { jsPDF } from 'jspdf'
 import Button from '../components/Button'
 import { useAuth } from '../hooks/useAuth'
 import { orderService } from '../services/orderService'
@@ -246,7 +245,16 @@ export default function BillingPage() {
     setReadyToDeleteOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]))
   }
 
-  const downloadBill = (order) => {
+  const downloadBill = async (order) => {
+    let jsPDF
+    try {
+      const module = await import('jspdf')
+      jsPDF = module.jsPDF
+    } catch {
+      setError('Unable to load PDF generator. Please try again.')
+      return
+    }
+
     const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
     const left = 44
     let y = 42

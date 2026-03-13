@@ -15,18 +15,32 @@ export default function CustomerOrderTrackingPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    let active = true
     const fetchStatus = () => {
       orderService
         .track(restaurantSlug, tableNumber, orderId)
-        .then(setOrder)
+        .then((data) => {
+          if (!active) return
+          setOrder(data)
+          setError('')
+        })
         .catch((requestError) => {
+          if (!active) return
           setError(requestError?.response?.data?.message || 'Unable to fetch order status')
         })
     }
 
     fetchStatus()
-    const interval = setInterval(fetchStatus, 5000)
-    return () => clearInterval(interval)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchStatus()
+      }
+    }, 8000)
+
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
   }, [restaurantSlug, tableNumber, orderId])
 
   const currentIndex = order?.orderStatus ? Math.max(0, steps.indexOf(order.orderStatus)) : 0

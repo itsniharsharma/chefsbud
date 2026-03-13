@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
 :root {
   --primary: #e50914;
@@ -23,7 +22,7 @@
 
 html,
 body {
-  font-family: 'Manrope', 'Avenir Next', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', 'Avenir Next', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 body {
@@ -98,7 +97,7 @@ canvas {
     radial-gradient(circle at -8% 100%, rgba(16, 29, 59, 0.24), transparent 40%),
     linear-gradient(168deg, #0b132b 0%, #101b3a 42%, #121d3d 100%);
   color: #f8f5ef;
-  font-family: 'Manrope', 'Avenir Next', 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', 'Avenir Next', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 .customer-hero {
@@ -167,7 +166,7 @@ canvas {
 .customer-page-title {
   letter-spacing: 0.24em;
   color: #f3d28f;
-  font-family: 'Cinzel', 'Times New Roman', serif;
+  font-family: 'Georgia', 'Times New Roman', serif;
 }
 
 .customer-nav-shell {

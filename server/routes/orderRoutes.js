@@ -11,6 +11,7 @@ import {
 import { requireAuth } from '../middleware/auth.js'
 import { requireActiveBilling } from '../middleware/billing.js'
 import { validateRequest } from '../middleware/validateRequest.js'
+import { cacheResponse } from '../services/responseCache.js'
 
 const router = Router()
 
@@ -27,8 +28,28 @@ router.post(
 	validateRequest,
 	createOrder,
 )
-router.get('/track/:restaurantSlug/:tableNumber', getPublicTableOrders)
-router.get('/track/:restaurantSlug/:tableNumber/:orderId', getPublicOrderStatus)
+router.get(
+	'/track/:restaurantSlug/:tableNumber',
+	cacheResponse({
+		ttlSeconds: 8,
+		keyBuilder: (req) => `orders:table:${req.params.restaurantSlug}:${req.params.tableNumber}`,
+		tagsBuilder: (req) => [`orders:table:${req.params.restaurantSlug}:${req.params.tableNumber}`],
+	}),
+	getPublicTableOrders,
+)
+router.get(
+	'/track/:restaurantSlug/:tableNumber/:orderId',
+	cacheResponse({
+		ttlSeconds: 6,
+		keyBuilder: (req) =>
+			`orders:status:${req.params.restaurantSlug}:${req.params.tableNumber}:${req.params.orderId}`,
+		tagsBuilder: (req) => [
+			`orders:table:${req.params.restaurantSlug}:${req.params.tableNumber}`,
+			`orders:order:${req.params.orderId}`,
+		],
+	}),
+	getPublicOrderStatus,
+)
 router.get('/:restaurantId', requireAuth, requireActiveBilling, getOrders)
 router.patch(
 	'/:orderId/status',

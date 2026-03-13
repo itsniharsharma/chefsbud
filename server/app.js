@@ -6,7 +6,7 @@ import restaurantRoutes from './routes/restaurantRoutes.js'
 import menuRoutes from './routes/menuRoutes.js'
 import tableRoutes from './routes/tableRoutes.js'
 import orderRoutes from './routes/orderRoutes.js'
-// import offerRoutes from './routes/offerRoutes.js'
+import offerRoutes from './routes/offerRoutes.js'
 import analyticsRoutes from './routes/analyticsRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
@@ -27,7 +27,9 @@ const globalLimiter = createRateLimiter({
   capacity: Number(process.env.RATE_LIMIT_GLOBAL_CAPACITY || 240),
   windowMs: Number(process.env.RATE_LIMIT_GLOBAL_WINDOW_MS || 60_000),
   keyFn: (req) => req.ip,
-  skip: (req) => req.path === '/api/health',
+  skip: (req) =>
+    req.path === '/api/health' ||
+    (req.method === 'GET' && (req.path.startsWith('/api/menu/') || req.path.startsWith('/api/orders/track/'))),
 })
 
 const originConfig = (process.env.CORS_ORIGIN || 'http://localhost:5173')
@@ -77,8 +79,7 @@ app.use('/api/restaurants', restaurantRoutes)
 app.use('/api/menu', menuRoutes)
 app.use('/api/tables', tableRoutes)
 app.use('/api/orders', orderRoutes)
-// Offers module is temporarily under development.
-// app.use('/api/offers', offerRoutes)
+app.use('/api/offers', offerRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/payments', paymentRoutes)
 

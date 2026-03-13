@@ -46,3 +46,10 @@ export function warmCriticalRoutes() {
   importers.orders()
   importers.menu()
 }
+
+export function warmCustomerRoutes() {
+  importers.customerMenu()
+  importers.customerCheckout()
+  importers.customerStatus()
+  importers.customerTracking()
+}

@@ -21,21 +21,32 @@ export default function CustomerStatusPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
+    let active = true
     const fetchOrders = () => {
       orderService
         .trackTable(restaurantSlug, tableNumber)
         .then((data) => {
+          if (!active) return
           setOrders(data)
           setError('')
         })
         .catch((requestError) => {
+          if (!active) return
           setError(requestError?.response?.data?.message || 'Unable to load order statuses')
         })
     }
 
     fetchOrders()
-    const interval = setInterval(fetchOrders, 5000)
-    return () => clearInterval(interval)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchOrders()
+      }
+    }, 8000)
+
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
   }, [restaurantSlug, tableNumber])
 
   const activeOrders = useMemo(

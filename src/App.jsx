@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
-import { importers, warmCriticalRoutes } from './utils/routePreload'
+import { importers, warmCriticalRoutes, warmCustomerRoutes } from './utils/routePreload'
 import { buildCustomerMenuUrl } from './utils/customerUrl'
 
 const DashboardLayout = lazy(importers.dashboardLayout)
@@ -37,7 +37,12 @@ function App() {
     const cancelIdle = window.cancelIdleCallback || window.clearTimeout
 
     const id = idleCallback(() => {
-      warmCriticalRoutes()
+      const currentPath = String(window.location.pathname || '')
+      if (currentPath.startsWith('/r/')) {
+        warmCustomerRoutes()
+      } else {
+        warmCriticalRoutes()
+      }
     })
 
     return () => cancelIdle(id)
