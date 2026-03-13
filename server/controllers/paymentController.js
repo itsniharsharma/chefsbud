@@ -11,13 +11,18 @@ import {
   verifyWebhookSignature,
 } from '../services/razorpayService.js'
 import { sendBillingStatusEmail } from '../services/emailService.js'
+import {
+  acquireWebhookLock,
+  isWebhookProcessed,
+  markWebhookProcessed,
+  releaseWebhookLock,
+} from '../services/webhookIdempotencyService.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1000000
 const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 3)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const customerIdByEmailCache = new Map()
-const inFlightWebhookEvents = new Map()
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase()
@@ -389,14 +394,8 @@ export async function verifyHybridSubscription(req, res, next) {
 }
 
 export async function handleRazorpayWebhook(req, res, next) {
-  const providerEventIdHeader = String(req.get('x-razorpay-event-id') || '').trim()
-  if (providerEventIdHeader && inFlightWebhookEvents.has(providerEventIdHeader)) {
-    return res.status(200).json({ received: true, processing: true })
-  }
-
-  if (providerEventIdHeader) {
-    inFlightWebhookEvents.set(providerEventIdHeader, Date.now())
-  }
+  let providerEventId = ''
+  let hasDistributedLock = false
 
   try {
     const signature = req.get('x-razorpay-signature')
@@ -412,9 +411,18 @@ export async function handleRazorpayWebhook(req, res, next) {
     const payload = webhook?.payload || {}
     const context = extractSubscriptionContext(payload)
 
-    const providerEventId =
+    providerEventId =
       String(req.get('x-razorpay-event-id') || '').trim() ||
       `${eventType}:${context.subscriptionId || 'unknown'}:${String(webhook?.created_at || Date.now())}`
+
+    if (await isWebhookProcessed(providerEventId)) {
+      return res.status(200).json({ received: true, duplicate: true })
+    }
+
+    hasDistributedLock = await acquireWebhookLock(providerEventId)
+    if (!hasDistributedLock) {
+      return res.status(200).json({ received: true, processing: true })
+    }
 
     try {
       await BillingEvent.create({
@@ -429,6 +437,7 @@ export async function handleRazorpayWebhook(req, res, next) {
       })
     } catch (error) {
       if (error?.code === 11000) {
+        await markWebhookProcessed(providerEventId)
         return res.status(200).json({ received: true, duplicate: true })
       }
       throw error
@@ -446,6 +455,7 @@ export async function handleRazorpayWebhook(req, res, next) {
           },
         },
       )
+      await markWebhookProcessed(providerEventId)
       return res.status(200).json({ received: true, ignored: true })
     }
 
@@ -466,6 +476,7 @@ export async function handleRazorpayWebhook(req, res, next) {
           },
         },
       )
+      await markWebhookProcessed(providerEventId)
       return res.status(200).json({ received: true, ignored: true })
     }
 
@@ -494,9 +505,10 @@ export async function handleRazorpayWebhook(req, res, next) {
       })
     }
 
+    await markWebhookProcessed(providerEventId)
+
     return res.status(200).json({ received: true, processed: true })
   } catch (error) {
-    const providerEventId = String(req.get('x-razorpay-event-id') || '').trim()
     if (providerEventId) {
       await BillingEvent.updateOne(
         { provider: 'razorpay', providerEventId },
@@ -511,8 +523,8 @@ export async function handleRazorpayWebhook(req, res, next) {
     }
     next(error)
   } finally {
-    if (providerEventIdHeader) {
-      inFlightWebhookEvents.delete(providerEventIdHeader)
+    if (hasDistributedLock && providerEventId) {
+      await releaseWebhookLock(providerEventId)
     }
   }
 }

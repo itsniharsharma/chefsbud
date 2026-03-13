@@ -1,3 +1,5 @@
+import { withRedis } from '../config/redis.js'
+
 function nowMs() {
   return Date.now()
 }
@@ -16,6 +18,7 @@ export function createRateLimiter({
   const maxTokens = Math.max(1, Number(capacity) || 60)
   const refillWindowMs = Math.max(1000, Number(windowMs) || 60_000)
   const refillRatePerMs = maxTokens / refillWindowMs
+  const refillWindowSeconds = Math.max(1, Math.ceil(refillWindowMs / 1000))
   const store = new Map()
 
   const cleanupInterval = setInterval(() => {
@@ -31,12 +34,13 @@ export function createRateLimiter({
     cleanupInterval.unref()
   }
 
-  return function rateLimitMiddleware(req, res, next) {
-    if (typeof skip === 'function' && skip(req) === true) {
-      return next()
-    }
+  function setRateLimitHeaders(res, remaining) {
+    res.setHeader('X-RateLimit-Limit', String(maxTokens))
+    res.setHeader('X-RateLimit-Remaining', String(Math.max(0, Math.floor(remaining))))
+    res.setHeader('X-RateLimit-Policy', `${id};w=${Math.round(refillWindowMs / 1000)};c=${maxTokens}`)
+  }
 
-    const key = (typeof keyFn === 'function' ? keyFn(req) : req.ip) || req.ip || 'unknown'
+  function applyLocalRateLimit(key, req, res, next) {
     const currentMs = nowMs()
     const existing = store.get(key) || {
       tokens: maxTokens,
@@ -48,8 +52,7 @@ export function createRateLimiter({
     if (existing.blockedUntilMs > currentMs) {
       const retryAfterMs = existing.blockedUntilMs - currentMs
       res.setHeader('Retry-After', String(secondsFromMs(retryAfterMs)))
-      res.setHeader('X-RateLimit-Limit', String(maxTokens))
-      res.setHeader('X-RateLimit-Policy', `${id};w=${Math.round(refillWindowMs / 1000)};c=${maxTokens}`)
+      setRateLimitHeaders(res, existing.tokens)
       return res.status(429).json({ message: 'Too many requests. Please retry shortly.' })
     }
 
@@ -66,18 +69,51 @@ export function createRateLimiter({
       store.set(key, existing)
 
       res.setHeader('Retry-After', String(secondsFromMs(retryAfterMs)))
-      res.setHeader('X-RateLimit-Limit', String(maxTokens))
-      res.setHeader('X-RateLimit-Policy', `${id};w=${Math.round(refillWindowMs / 1000)};c=${maxTokens}`)
+      setRateLimitHeaders(res, existing.tokens)
       return res.status(429).json({ message: 'Too many requests. Please retry shortly.' })
     }
 
     existing.tokens -= 1
     store.set(key, existing)
-
-    res.setHeader('X-RateLimit-Limit', String(maxTokens))
-    res.setHeader('X-RateLimit-Remaining', String(Math.floor(existing.tokens)))
-    res.setHeader('X-RateLimit-Policy', `${id};w=${Math.round(refillWindowMs / 1000)};c=${maxTokens}`)
-
+    setRateLimitHeaders(res, existing.tokens)
     return next()
+  }
+
+  return async function rateLimitMiddleware(req, res, next) {
+    if (typeof skip === 'function' && skip(req) === true) {
+      return next()
+    }
+
+    const key = (typeof keyFn === 'function' ? keyFn(req) : req.ip) || req.ip || 'unknown'
+    const redisKey = `ratelimit:${id}:${key}`
+
+    const redisResult = await withRedis(
+      'rate_limit_increment',
+      async (redis) => {
+        const count = Number(await redis.incr(redisKey))
+        if (count === 1) {
+          await redis.expire(redisKey, refillWindowSeconds)
+        }
+        const ttl = Number(await redis.ttl(redisKey))
+        return { count, ttl }
+      },
+      null,
+    )
+
+    if (redisResult) {
+      const { count, ttl } = redisResult
+      const retryAfterSeconds = ttl > 0 ? ttl : refillWindowSeconds
+      const remaining = Math.max(0, maxTokens - count)
+      setRateLimitHeaders(res, remaining)
+
+      if (count > maxTokens) {
+        res.setHeader('Retry-After', String(retryAfterSeconds))
+        return res.status(429).json({ message: 'Too many requests. Please retry shortly.' })
+      }
+
+      return next()
+    }
+
+    return applyLocalRateLimit(key, req, res, next)
   }
 }
