@@ -17,6 +17,7 @@ const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 3)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const customerIdByEmailCache = new Map()
+const inFlightWebhookEvents = new Map()
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase()
@@ -388,6 +389,15 @@ export async function verifyHybridSubscription(req, res, next) {
 }
 
 export async function handleRazorpayWebhook(req, res, next) {
+  const providerEventIdHeader = String(req.get('x-razorpay-event-id') || '').trim()
+  if (providerEventIdHeader && inFlightWebhookEvents.has(providerEventIdHeader)) {
+    return res.status(200).json({ received: true, processing: true })
+  }
+
+  if (providerEventIdHeader) {
+    inFlightWebhookEvents.set(providerEventIdHeader, Date.now())
+  }
+
   try {
     const signature = req.get('x-razorpay-signature')
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}))
@@ -500,5 +510,9 @@ export async function handleRazorpayWebhook(req, res, next) {
       )
     }
     next(error)
+  } finally {
+    if (providerEventIdHeader) {
+      inFlightWebhookEvents.delete(providerEventIdHeader)
+    }
   }
 }

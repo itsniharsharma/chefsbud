@@ -1,4 +1,4 @@
-import { createContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useEffect, useMemo, useState } from 'react'
 import { authService } from '../services/authService'
 
 export const AuthContext = createContext(null)
@@ -51,33 +51,41 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
-  const hydrateSession = (result) => {
+  const hydrateSession = useCallback((result) => {
     setToken(result.token)
     setUser(result.user)
     setRestaurant(result.restaurant)
-  }
+  }, [])
 
-  const login = async (payload) => {
+  const login = useCallback(async (payload) => {
     const result = await authService.login(payload)
     hydrateSession(result)
     return result
-  }
+  }, [hydrateSession])
 
-  const initiateRegistration = async (payload) => {
+  const initiateRegistration = useCallback(async (payload) => {
     return authService.initiateRegistration(payload)
-  }
+  }, [])
 
-  const verifyRegistration = async (payload) => {
+  const verifyRegistration = useCallback(async (payload) => {
     const result = await authService.verifyRegistration(payload)
     hydrateSession(result)
     return result
-  }
+  }, [hydrateSession])
 
-  const logout = () => {
+  const logout = useCallback(async () => {
+    if (token) {
+      try {
+        await authService.logout()
+      } catch {
+        // Always clear local auth state even if server logout fails.
+      }
+    }
+
     setToken(null)
     setUser(null)
     setRestaurant(null)
-  }
+  }, [token])
 
   const value = useMemo(
     () => ({
@@ -92,7 +100,7 @@ export function AuthProvider({ children }) {
       logout,
       setRestaurant,
     }),
-    [token, user, restaurant, authLoading],
+    [token, user, restaurant, authLoading, login, initiateRegistration, verifyRegistration, logout, setRestaurant],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -2,6 +2,7 @@ import axios from 'axios'
 import crypto from 'crypto'
 
 const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1'
+const RAZORPAY_TIMEOUT_MS = Math.max(1000, Number(process.env.RAZORPAY_TIMEOUT_MS || 10000))
 
 function getRazorpayAuth() {
   const keyId = process.env.RAZORPAY_KEY_ID
@@ -25,7 +26,10 @@ function getRazorpayAuth() {
 async function razorpayPost(path, payload) {
   const { auth } = getRazorpayAuth()
   try {
-    const response = await axios.post(`${RAZORPAY_API_BASE}${path}`, payload, { auth })
+    const response = await axios.post(`${RAZORPAY_API_BASE}${path}`, payload, {
+      auth,
+      timeout: RAZORPAY_TIMEOUT_MS,
+    })
     return response.data
   } catch (error) {
     const statusCode = Number(error?.response?.status || error?.status || 500)
@@ -49,6 +53,7 @@ async function razorpayGet(path, params = {}) {
     const response = await axios.get(`${RAZORPAY_API_BASE}${path}`, {
       auth,
       params,
+      timeout: RAZORPAY_TIMEOUT_MS,
     })
     return response.data
   } catch (error) {

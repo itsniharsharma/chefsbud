@@ -366,3 +366,12 @@ export async function me(req, res, next) {
     next(error)
   }
 }
+
+export async function logout(req, res, next) {
+  try {
+    await User.updateOne({ _id: req.user._id }, { $inc: { tokenVersion: 1 } })
+    return res.json({ message: 'Logged out' })
+  } catch (error) {
+    next(error)
+  }
+}

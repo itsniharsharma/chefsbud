@@ -3,6 +3,7 @@ import { body } from 'express-validator'
 import {
   initiateRegistration,
   login,
+  logout,
   me,
   resendRegistrationCode,
   verifyRegistration,
@@ -73,5 +74,6 @@ router.post(
 )
 
 router.get('/me', requireAuth, me)
+router.post('/logout', requireAuth, logout)
 
 export default router
