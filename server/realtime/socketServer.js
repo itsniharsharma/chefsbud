@@ -33,8 +33,21 @@ async function configureRedisAdapter(io) {
   const redisUrl = String(process.env.REDIS_URL || '').trim()
   if (!redisUrl) return
 
+  if (!/^rediss?:\/\//i.test(redisUrl)) {
+    console.warn('socket_redis_adapter_disabled', 'REDIS_URL must start with redis:// or rediss://')
+    return
+  }
+
   const pubClient = createClient({ url: redisUrl })
   const subClient = pubClient.duplicate()
+
+  // Redis clients emit error events that must be handled to avoid process crash.
+  pubClient.on('error', (error) => {
+    console.warn('socket_redis_pub_error', error?.message || 'unknown_redis_pub_error')
+  })
+  subClient.on('error', (error) => {
+    console.warn('socket_redis_sub_error', error?.message || 'unknown_redis_sub_error')
+  })
 
   await Promise.all([pubClient.connect(), subClient.connect()])
   io.adapter(createAdapter(pubClient, subClient))
