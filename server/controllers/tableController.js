@@ -12,7 +12,12 @@ export async function createTables(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const { count, tableNumber, active = true } = req.body
+    const { count, tableNumber, floorNumber = 1, active = true } = req.body
+    const parsedFloorNumber = Number(floorNumber)
+    if (!Number.isFinite(parsedFloorNumber) || parsedFloorNumber < 1) {
+      return res.status(400).json({ message: 'floorNumber must be at least 1' })
+    }
+    const normalizedFloorNumber = Math.floor(parsedFloorNumber)
 
     if (count) {
       const total = Number(count)
@@ -28,12 +33,13 @@ export async function createTables(req, res, next) {
 
       const docs = Array.from({ length: total }, (_, index) => ({
         restaurantId: restaurant._id,
+        floorNumber: normalizedFloorNumber,
         tableNumber: maxTable + index + 1,
         active: true,
       }))
 
       await Table.insertMany(docs, { ordered: false })
-      const tables = await Table.find({ restaurantId: restaurant._id }).sort({ tableNumber: 1 }).lean()
+      const tables = await Table.find({ restaurantId: restaurant._id }).sort({ floorNumber: 1, tableNumber: 1 }).lean()
       return res.status(201).json(tables)
     }
 
@@ -43,6 +49,7 @@ export async function createTables(req, res, next) {
 
     const table = await Table.create({
       restaurantId: restaurant._id,
+      floorNumber: normalizedFloorNumber,
       tableNumber: Number(tableNumber),
       active: Boolean(active),
     })
@@ -67,7 +74,7 @@ export async function getTables(req, res, next) {
       return res.status(403).json({ message: 'Forbidden' })
     }
 
-    const tables = await Table.find({ restaurantId: req.params.restaurantId }).sort({ tableNumber: 1 }).lean()
+    const tables = await Table.find({ restaurantId: req.params.restaurantId }).sort({ floorNumber: 1, tableNumber: 1 }).lean()
     return res.json(tables)
   } catch (error) {
     next(error)

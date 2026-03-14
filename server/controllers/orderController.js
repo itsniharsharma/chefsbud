@@ -1,11 +1,12 @@
 import MenuItem from '../models/MenuItem.js'
 import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
+import Table from '../models/Table.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
 
 const orderListProjection =
-  '_id tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt'
 
 async function getOwnerRestaurant(ownerId) {
   return Restaurant.findOne({ ownerId }).select('_id slug').lean()
@@ -255,9 +256,18 @@ export async function createOrder(req, res, next) {
       totalAmount: subtotalAmount,
     }
 
+    const normalizedTableNumber = Number(tableNumber)
+    const table = await Table.findOne({
+      restaurantId: restaurant._id,
+      tableNumber: normalizedTableNumber,
+    })
+      .select('floorNumber')
+      .lean()
+
     const order = await Order.create({
       restaurantId: restaurant._id,
-      tableNumber: Number(tableNumber),
+      floorNumber: Number(table?.floorNumber || 1),
+      tableNumber: normalizedTableNumber,
       items: orderItems,
       subtotalAmount: pricing.subtotalAmount,
       discountTotal: pricing.discountTotal,
@@ -300,7 +310,7 @@ export async function getPublicOrderStatus(req, res, next) {
       tableNumber: Number(tableNumber),
     })
       .select(
-        '_id tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
       )
       .lean()
 
@@ -330,7 +340,7 @@ export async function getPublicTableOrders(req, res, next) {
       .sort({ createdAt: -1 })
       .limit(100)
       .select(
-        '_id tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
       )
       .lean()
 

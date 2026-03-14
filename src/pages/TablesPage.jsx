@@ -10,6 +10,7 @@ import { queryKeys } from '../lib/queryKeys'
 
 export default function TablesPage() {
   const [count, setCount] = useState('12')
+  const [floorNumber, setFloorNumber] = useState('1')
   const [error, setError] = useState('')
   const [batchDownloading, setBatchDownloading] = useState(false)
   const { restaurant } = useAuth()
@@ -32,7 +33,7 @@ export default function TablesPage() {
   })
 
   const generateTables = () => {
-    createTablesMutation.mutate({ count: Number(count) })
+    createTablesMutation.mutate({ count: Number(count), floorNumber: Number(floorNumber || 1) })
   }
 
   const downloadAllQRCodes = async () => {
@@ -47,6 +48,7 @@ export default function TablesPage() {
       const zip = new JSZip()
 
       for (const table of tables) {
+        const floor = Number(table.floorNumber || 1)
         const tableNumber = table.tableNumber
         const qrValue = buildCustomerMenuUrl({
           baseUrl: frontendBaseUrl,
@@ -60,14 +62,19 @@ export default function TablesPage() {
         })
 
         const base64Png = dataUrl.split(',')[1]
-        zip.file(`table-${tableNumber}-qr.png`, base64Png, { base64: true })
+        zip.file(`floor-${floor}-table-${tableNumber}-qr.png`, base64Png, { base64: true })
       }
+
+      const floorsIncluded = [...new Set(tables.map((table) => Number(table.floorNumber || 1)))]
+        .sort((a, b) => a - b)
+        .join(', ')
 
       zip.file(
         'README.txt',
         [
           `Restaurant: ${restaurant.name || restaurant.slug}`,
           `Generated at: ${new Date().toLocaleString()}`,
+          `Floors included: ${floorsIncluded}`,
           '',
           'Each PNG file contains the table QR code URL in this format:',
           buildCustomerMenuUrl({
@@ -107,6 +114,14 @@ export default function TablesPage() {
             className="input max-w-xs"
             type="number"
             min="1"
+            value={floorNumber}
+            onChange={(e) => setFloorNumber(e.target.value)}
+            placeholder="Floor number"
+          />
+          <input
+            className="input max-w-xs"
+            type="number"
+            min="1"
             value={count}
             onChange={(e) => setCount(e.target.value)}
           />
@@ -127,7 +142,12 @@ export default function TablesPage() {
                 {table.active ? 'Active' : 'Inactive'}
               </span>
             </div>
-            <QRCard tableNumber={table.tableNumber} slug={restaurant?.slug || ''} />
+            <p className="mb-2 text-sm text-slate-600">Floor {Number(table.floorNumber || 1)}</p>
+            <QRCard
+              tableNumber={table.tableNumber}
+              floorNumber={Number(table.floorNumber || 1)}
+              slug={restaurant?.slug || ''}
+            />
           </div>
         ))}
       </div>

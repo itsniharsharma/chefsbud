@@ -3,7 +3,7 @@ import { QRCodeCanvas } from 'qrcode.react'
 import Button from './Button'
 import { buildCustomerMenuUrl } from '../utils/customerUrl'
 
-export default function QRCard({ tableNumber, slug }) {
+export default function QRCard({ tableNumber, floorNumber = 1, slug }) {
   const qrRef = useRef(null)
   const hasValidSlug = Boolean(String(slug || '').trim())
   const value = hasValidSlug
@@ -21,13 +21,13 @@ export default function QRCard({ tableNumber, slug }) {
     const url = canvas.toDataURL('image/png')
     const link = document.createElement('a')
     link.href = url
-    link.download = `table-${tableNumber}-qr.png`
+    link.download = `floor-${Number(floorNumber || 1)}-table-${tableNumber}-qr.png`
     link.click()
   }
 
   return (
     <div className="card p-4">
-      <p className="font-semibold text-slate-800">Table {tableNumber}</p>
+      <p className="font-semibold text-slate-800">Floor {Number(floorNumber || 1)} | Table {tableNumber}</p>
       {hasValidSlug ? (
         <>
           <p className="mb-3 mt-1 text-sm text-slate-500">QR: {value}</p>

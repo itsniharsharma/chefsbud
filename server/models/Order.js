@@ -13,6 +13,7 @@ const orderItemSchema = new mongoose.Schema(
 const orderSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
+    floorNumber: { type: Number, required: true, min: 1, default: 1 },
     tableNumber: { type: Number, required: true },
     items: { type: [orderItemSchema], required: true },
     subtotalAmount: { type: Number, default: 0, min: 0 },
@@ -54,6 +55,7 @@ const orderSchema = new mongoose.Schema(
 
 orderSchema.index({ restaurantId: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, orderStatus: 1, createdAt: -1 })
+orderSchema.index({ restaurantId: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, tableNumber: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt: -1 })
