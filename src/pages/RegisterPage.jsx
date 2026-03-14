@@ -1,11 +1,27 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import FormInput from '../components/FormInput'
 import Button from '../components/Button'
 import { authService } from '../services/authService'
 
+function toTimestamp(value) {
+  const ts = value ? new Date(value).getTime() : NaN
+  return Number.isFinite(ts) ? ts : 0
+}
+
+function hasBillingAccess(billing) {
+  if (!billing) return false
+  if (billing.status === 'active') return true
+  const now = Date.now()
+  const graceWindowEnds = Math.max(toTimestamp(billing.graceEndsAt), toTimestamp(billing.currentPeriodEnd))
+  return ['grace_period', 'past_due'].includes(billing.status) && graceWindowEnds > now
+}
+
 export default function RegisterPage() {
+  const [tab, setTab] = useState('signup')
+
+  // signup state
   const [step, setStep] = useState('details')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -19,8 +35,19 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
-  const { initiateRegistration, verifyRegistration } = useAuth()
+
+  // login state
+  const [loginMode, setLoginMode] = useState('manager')
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [staffUsername, setStaffUsername] = useState('')
+  const [staffPasskey, setStaffPasskey] = useState('')
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [loginError, setLoginError] = useState('')
+
+  const { initiateRegistration, verifyRegistration, login, staffLogin } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const onSubmitDetails = async (event) => {
     event.preventDefault()
@@ -80,6 +107,30 @@ export default function RegisterPage() {
     }
   }
 
+  const onLoginSubmit = async (event) => {
+    event.preventDefault()
+    setLoginLoading(true)
+    setLoginError('')
+    try {
+      const result =
+        loginMode === 'staff'
+          ? await staffLogin({ username: staffUsername, passkey: staffPasskey })
+          : await login({ email: loginEmail, password: loginPassword })
+
+      if (!hasBillingAccess(result?.user?.billing)) {
+        navigate('/plans', { replace: true })
+        return
+      }
+
+      const defaultDashboard = result?.user?.role === 'staff' ? '/dashboard/orders' : '/dashboard'
+      navigate(location.state?.from?.pathname || defaultDashboard, { replace: true })
+    } catch (requestError) {
+      setLoginError(requestError?.response?.data?.message || 'Login failed. Please try again.')
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_-10%,rgba(229,9,20,0.18),transparent_34%),radial-gradient(circle_at_100%_0%,rgba(2,6,23,0.12),transparent_30%),#f6f8fc] px-4 py-8 md:px-6 md:py-10">
       <div className="mx-auto w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_30px_70px_rgba(15,23,42,0.14)]">
@@ -119,8 +170,9 @@ export default function RegisterPage() {
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
-                  className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${tab === 'signup' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                   onClick={() => {
+                    setTab('signup')
                     setError('')
                     setInfo('')
                   }}
@@ -129,11 +181,10 @@ export default function RegisterPage() {
                 </button>
                 <button
                   type="button"
-                  className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:text-slate-900"
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${tab === 'login' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                   onClick={() => {
-                    navigate('/login', { replace: true })
-                    setError('')
-                    setInfo('')
+                    setTab('login')
+                    setLoginError('')
                   }}
                 >
                   Login
@@ -141,95 +192,153 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">
-              {step === 'details' ? 'Create owner account' : 'Verify your email'}
-            </h1>
-            <p className="mb-5 mt-2 text-sm text-slate-500">
-              {step === 'details'
-                ? 'Set up your profile and restaurant details to begin.'
-                : 'Enter the 6-digit code sent to your email to continue.'}
-            </p>
+            {tab === 'login' ? (
+              <>
+                <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Welcome back</h1>
+                <p className="mb-5 mt-2 text-sm text-slate-500">Choose how you want to access your workspace.</p>
 
-            {error ? <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--primary)]">{error}</p> : null}
-            {info ? <p className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{info}</p> : null}
-
-            <form className="space-y-3" onSubmit={step === 'details' ? onSubmitDetails : onVerifyCode}>
-              {step === 'details' ? (
-                <>
-                  <FormInput label="Full Name" value={name} onChange={(e) => setName(e.target.value)} required />
-                  <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-                  <FormInput
-                    label="Password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                  <FormInput
-                    label="Restaurant Name"
-                    value={restaurantName}
-                    onChange={(e) => setRestaurantName(e.target.value)}
-                    required
-                  />
-                  <FormInput
-                    label="GSTIN"
-                    value={gstin}
-                    onChange={(e) => setGstin(e.target.value)}
-                    placeholder="22AAAAA0000A1Z5"
-                    required
-                  />
-                  <FormInput label="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
-                  <FormInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-                </>
-              ) : (
-                <>
-                  <FormInput label="Email" type="email" value={email} disabled required />
-                  <FormInput
-                    label="Verification Code"
-                    value={verificationCode}
-                    onChange={(e) => setVerificationCode(e.target.value)}
-                    inputMode="numeric"
-                    pattern="[0-9]{6}"
-                    maxLength={6}
-                    placeholder="Enter 6-digit code"
-                    required
-                  />
+                <div className="mb-5 grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    className="text-sm font-semibold text-slate-700 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={onResendCode}
-                    disabled={resendLoading}
+                    onClick={() => { setLoginMode('manager'); setLoginError('') }}
+                    className={`rounded-2xl border p-4 text-left transition ${loginMode === 'manager' ? 'border-red-300 bg-red-50 shadow-sm' : 'border-slate-200 bg-white hover:border-red-200'}`}
                   >
-                    {resendLoading ? 'Resending code...' : 'Resend code'}
+                    <p className="text-sm font-semibold text-slate-900">Login As Manager</p>
+                    <p className="mt-1 text-xs text-slate-600">Full access to all modules and settings.</p>
                   </button>
-                </>
-              )}
+                  <button
+                    type="button"
+                    onClick={() => { setLoginMode('staff'); setLoginError('') }}
+                    className={`rounded-2xl border p-4 text-left transition ${loginMode === 'staff' ? 'border-red-300 bg-red-50 shadow-sm' : 'border-slate-200 bg-white hover:border-red-200'}`}
+                  >
+                    <p className="text-sm font-semibold text-slate-900">Login As Staff</p>
+                    <p className="mt-1 text-xs text-slate-600">Access Orders, Menu, Offers and Billing.</p>
+                  </button>
+                </div>
 
-              <Button className="mt-4 w-full" type="submit" disabled={loading || (step === 'verify' && verificationCode.length < 6)}>
-                {loading
-                  ? step === 'details'
-                    ? 'Sending code...'
-                    : 'Verifying...'
-                  : step === 'details'
-                    ? 'Send verification code'
-                    : 'Verify and continue'}
-              </Button>
+                {loginError && <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--primary)]">{loginError}</p>}
 
-              {step === 'verify' ? (
-                <button
-                  type="button"
-                  className="mt-2 text-sm font-semibold text-slate-600 hover:text-[var(--primary)]"
-                  onClick={() => {
-                    setStep('details')
-                    setVerificationCode('')
-                    setError('')
-                    setInfo('')
-                  }}
-                >
-                  Edit registration details
-                </button>
-              ) : null}
-            </form>
+                <form className="space-y-3" onSubmit={onLoginSubmit}>
+                  {loginMode === 'manager' ? (
+                    <>
+                      <FormInput label="Email" type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} required />
+                      <FormInput label="Password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
+                    </>
+                  ) : (
+                    <>
+                      <FormInput label="Staff Username" value={staffUsername} onChange={(e) => setStaffUsername(e.target.value)} required />
+                      <FormInput label="Passkey" type="password" value={staffPasskey} onChange={(e) => setStaffPasskey(e.target.value)} required />
+                    </>
+                  )}
+                  <Button className="mt-4 w-full" type="submit" disabled={loginLoading}>
+                    {loginLoading ? 'Signing in...' : loginMode === 'staff' ? 'Login as Staff' : 'Login as Manager'}
+                  </Button>
+                  {loginMode === 'manager' ? (
+                    <p className="mt-3 text-sm text-slate-600">
+                      New here?{' '}
+                      <button type="button" className="font-semibold text-[var(--primary)]" onClick={() => { setTab('signup'); setLoginError('') }}>
+                        Sign up
+                      </button>
+                    </p>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-600">Staff credentials are created by the manager from Settings.</p>
+                  )}
+                </form>
+              </>
+            ) : (
+              <>
+                <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">
+                  {step === 'details' ? 'Create owner account' : 'Verify your email'}
+                </h1>
+
+                <p className="mb-5 mt-2 text-sm text-slate-500">
+                  {step === 'details'
+                    ? 'Set up your profile and restaurant details to begin.'
+                    : 'Enter the 6-digit code sent to your email to continue.'}
+                </p>
+
+                {error ? <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--primary)]">{error}</p> : null}
+                {info ? <p className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{info}</p> : null}
+
+                <form className="space-y-3" onSubmit={step === 'details' ? onSubmitDetails : onVerifyCode}>
+                  {step === 'details' ? (
+                    <>
+                      <FormInput label="Full Name" value={name} onChange={(e) => setName(e.target.value)} required />
+                      <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                      <FormInput
+                        label="Password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        required
+                      />
+                      <FormInput
+                        label="Restaurant Name"
+                        value={restaurantName}
+                        onChange={(e) => setRestaurantName(e.target.value)}
+                        required
+                      />
+                      <FormInput
+                        label="GSTIN"
+                        value={gstin}
+                        onChange={(e) => setGstin(e.target.value)}
+                        placeholder="22AAAAA0000A1Z5"
+                        required
+                      />
+                      <FormInput label="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
+                      <FormInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                    </>
+                  ) : (
+                    <>
+                      <FormInput label="Email" type="email" value={email} disabled required />
+                      <FormInput
+                        label="Verification Code"
+                        value={verificationCode}
+                        onChange={(e) => setVerificationCode(e.target.value)}
+                        inputMode="numeric"
+                        pattern="[0-9]{6}"
+                        maxLength={6}
+                        placeholder="Enter 6-digit code"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="text-sm font-semibold text-slate-700 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={onResendCode}
+                        disabled={resendLoading}
+                      >
+                        {resendLoading ? 'Resending code...' : 'Resend code'}
+                      </button>
+                    </>
+                  )}
+
+                  <Button className="mt-4 w-full" type="submit" disabled={loading || (step === 'verify' && verificationCode.length < 6)}>
+                    {loading
+                      ? step === 'details'
+                        ? 'Sending code...'
+                        : 'Verifying...'
+                      : step === 'details'
+                        ? 'Send verification code'
+                        : 'Verify and continue'}
+                  </Button>
+
+                  {step === 'verify' ? (
+                    <button
+                      type="button"
+                      className="mt-2 text-sm font-semibold text-slate-600 hover:text-[var(--primary)]"
+                      onClick={() => {
+                        setStep('details')
+                        setVerificationCode('')
+                        setError('')
+                        setInfo('')
+                      }}
+                    >
+                      Edit registration details
+                    </button>
+                  ) : null}
+                </form>
+              </>
+            )}
           </section>
         </div>
       </div>
