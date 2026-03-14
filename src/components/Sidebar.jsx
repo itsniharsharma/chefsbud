@@ -8,7 +8,7 @@ const links = [
   { label: 'Menu', to: '/dashboard/menu' },
   { label: 'Tables', to: '/dashboard/tables' },
   { label: 'Offers (Dev)', to: '/dashboard/offers' },
-  { label: 'Analytics', to: '/dashboard/analytics' },
+  { label: 'Analytics (Dev)', to: '/dashboard/analytics' },
   { label: 'Billing', to: '/dashboard/billing' },
   { label: 'Settings', to: '/dashboard/settings' },
 ]

@@ -17,7 +17,7 @@ const titles = {
   '/dashboard/menu': 'Menu Management',
   '/dashboard/tables': 'Table Management',
   '/dashboard/offers': 'Offers (Under Development)',
-  '/dashboard/analytics': 'Analytics',
+  '/dashboard/analytics': 'Analytics (Under Development)',
   '/dashboard/billing': 'Billing',
   '/dashboard/settings': 'Settings',
 }
