@@ -5,6 +5,8 @@ import Table from '../models/Table.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
 
+const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
+
 const orderListProjection =
   '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt'
 
@@ -325,6 +327,7 @@ export async function getPublicOrderStatus(req, res, next) {
       _id: orderId,
       restaurantId: restaurant._id,
       tableNumber: Number(tableNumber),
+      isArchived: false,
     })
       .select(
         '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
@@ -353,9 +356,10 @@ export async function getPublicTableOrders(req, res, next) {
     const orders = await Order.find({
       restaurantId: restaurant._id,
       tableNumber: Number(tableNumber),
+      isArchived: false,
     })
       .sort({ createdAt: -1 })
-      .limit(100)
+      .limit(PUBLIC_TABLE_ORDER_LIMIT)
       .select(
         '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
       )

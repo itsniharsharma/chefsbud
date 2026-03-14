@@ -60,6 +60,8 @@ orderSchema.index({ restaurantId: 1, tableNumber: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, createdAt: -1 })
+orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
+orderSchema.index({ restaurantId: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
 orderSchema.index({ hiddenFromActive: 1, deletedByOwnerAt: 1, isArchived: 1 })
 
 export default mongoose.model('Order', orderSchema)

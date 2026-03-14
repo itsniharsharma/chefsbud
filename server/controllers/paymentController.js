@@ -31,13 +31,22 @@ function normalizeEmail(value) {
 function getCachedCustomerIdByEmail(email) {
   const key = normalizeEmail(email)
   if (!key) return ''
-  return customerIdByEmailCache.get(key) || ''
+  const value = customerIdByEmailCache.get(key) || ''
+  if (value) {
+    customerIdByEmailCache.delete(key)
+    customerIdByEmailCache.set(key, value)
+  }
+  return value
 }
 
 function setCachedCustomerIdByEmail(email, customerId) {
   const key = normalizeEmail(email)
   const id = String(customerId || '').trim()
   if (!key || !id) return
+
+  if (customerIdByEmailCache.has(key)) {
+    customerIdByEmailCache.delete(key)
+  }
 
   // Bound map size to avoid unbounded memory growth.
   if (customerIdByEmailCache.size >= CUSTOMER_CACHE_MAX_ENTRIES) {

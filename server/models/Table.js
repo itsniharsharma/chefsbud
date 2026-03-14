@@ -13,5 +13,6 @@ const tableSchema = new mongoose.Schema(
 tableSchema.index({ restaurantId: 1, tableNumber: 1 }, { unique: true })
 tableSchema.index({ restaurantId: 1, floorNumber: 1, tableNumber: 1 })
 tableSchema.index({ restaurantId: 1, active: 1 })
+tableSchema.index({ restaurantId: 1, active: 1, tableNumber: 1 })
 
 export default mongoose.model('Table', tableSchema)
