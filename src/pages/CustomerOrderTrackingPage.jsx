@@ -50,7 +50,7 @@ export default function CustomerOrderTrackingPage() {
       <header className="mb-4 flex items-center justify-between">
         <div>
           <p className="customer-page-title text-xs font-semibold uppercase">Live Status</p>
-          <h1 className="text-2xl font-bold text-amber-50">Track Your Order</h1>
+          <h1 className="text-2xl font-bold text-white">Track Your Order</h1>
         </div>
         <Button
           variant="secondary"

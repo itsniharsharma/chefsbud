@@ -59,8 +59,8 @@ export default function CustomerStatusPage() {
       <header className="mb-4 flex items-center justify-between">
         <div>
           <p className="customer-page-title text-xs font-semibold uppercase">Order Status Board</p>
-          <h1 className="text-2xl font-bold text-amber-50">Your Orders</h1>
-          <p className="text-sm royal-muted">Table {tableNumber} • Live updates every 5s</p>
+          <h1 className="text-2xl font-bold text-white">Your Orders</h1>
+          <p className="text-sm royal-muted">Table {tableNumber} • Live updates every 8s</p>
         </div>
         <Button
           variant="secondary"

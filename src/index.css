@@ -90,127 +90,227 @@ canvas {
   box-shadow: 0 0 0 4px var(--ring);
 }
 
-.customer-shell {
+.customer-shell,
+.customer-shell-v2 {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 92% -8%, rgba(196, 158, 75, 0.2), transparent 34%),
-    radial-gradient(circle at -8% 100%, rgba(16, 29, 59, 0.24), transparent 40%),
-    linear-gradient(168deg, #0b132b 0%, #101b3a 42%, #121d3d 100%);
-  color: #f8f5ef;
-  font-family: 'Segoe UI', 'Avenir Next', -apple-system, BlinkMacSystemFont, sans-serif;
+    radial-gradient(circle at 100% -12%, rgba(239, 68, 68, 0.24), transparent 34%),
+    radial-gradient(circle at -10% 100%, rgba(127, 29, 29, 0.24), transparent 38%),
+    linear-gradient(176deg, #050507 0%, #0a0b11 45%, #0b0b12 100%);
+  color: #f8fafc;
+  font-family: 'Manrope', 'Poppins', 'Nunito Sans', sans-serif;
 }
 
-.customer-hero {
-  border-radius: 1.2rem;
-  border: 1px solid rgba(245, 208, 122, 0.28);
-  background:
-    radial-gradient(circle at 84% 12%, rgba(248, 217, 155, 0.22), transparent 36%),
-    linear-gradient(132deg, rgba(255, 248, 233, 0.14), rgba(215, 184, 117, 0.08));
-  box-shadow:
-    0 18px 38px rgba(3, 8, 24, 0.42),
-    inset 0 1px 0 rgba(255, 244, 214, 0.26);
+.customer-appbar {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(5, 5, 7, 0.92);
+  backdrop-filter: blur(10px);
 }
 
-.lux-card {
+.customer-icon-chip {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.28rem 0.62rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.customer-banner-card {
   border-radius: 1.15rem;
-  border: 1px solid rgba(245, 208, 122, 0.22);
+  border: 1px solid rgba(248, 113, 113, 0.5);
   background:
-    linear-gradient(170deg, rgba(255, 249, 236, 0.12), rgba(255, 240, 210, 0.06));
-  box-shadow:
-    0 16px 36px rgba(2, 10, 30, 0.35),
-    inset 0 1px 0 rgba(255, 243, 210, 0.18);
+    radial-gradient(circle at 90% 18%, rgba(248, 113, 113, 0.35), transparent 40%),
+    linear-gradient(140deg, rgba(127, 29, 29, 0.92) 0%, rgba(9, 9, 11, 0.94) 100%);
+  padding: 1.2rem;
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.44);
 }
 
-.customer-glass {
-  border: 1px solid rgba(245, 208, 122, 0.3);
-  background: rgba(16, 30, 62, 0.66);
-  backdrop-filter: blur(14px);
-  box-shadow: inset 0 1px 0 rgba(255, 243, 210, 0.15);
-}
-
-.customer-floating-cta {
-  border-top: 1px solid rgba(245, 208, 122, 0.28);
-  background: rgba(7, 15, 35, 0.85);
-  backdrop-filter: blur(14px);
-  box-shadow: 0 -14px 28px rgba(0, 0, 0, 0.36);
-}
-
-.dish-badge {
-  border: 1px solid rgba(245, 208, 122, 0.44);
-  background: linear-gradient(180deg, #f7ddb1 0%, #e7c182 100%);
-  color: #372300;
-}
-
-.status-step {
-  border-radius: 0.8rem;
-  border: 1px solid rgba(245, 208, 122, 0.24);
-  background: rgba(255, 249, 236, 0.08);
-  color: #c8d2eb;
-  transition: all 0.2s ease;
-}
-
-.status-step.active {
-  border-color: rgba(245, 208, 122, 0.6);
-  background: linear-gradient(180deg, rgba(250, 226, 176, 0.24) 0%, rgba(255, 251, 242, 0.12) 100%);
-  color: #f7ddb1;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
-}
-
-.customer-kpi {
+.customer-search-box {
   border-radius: 0.95rem;
-  border: 1px solid rgba(245, 208, 122, 0.26);
-  background: linear-gradient(180deg, rgba(255, 248, 233, 0.12) 0%, rgba(255, 240, 210, 0.06) 100%);
-  box-shadow: 0 12px 24px rgba(2, 8, 24, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.84rem 0.95rem;
+}
+
+.customer-category-strip {
+  display: flex;
+  gap: 0.58rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.customer-category-strip::-webkit-scrollbar {
+  height: 0;
+}
+
+.customer-category-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #d1d5db;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.83rem;
+  font-weight: 700;
+}
+
+.customer-category-pill.active {
+  border-color: rgba(248, 113, 113, 0.88);
+  background: rgba(127, 29, 29, 0.72);
+  color: #fff;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.32);
+}
+
+.customer-food-card,
+.lux-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(127, 29, 29, 0.4), transparent 45%),
+    rgba(255, 255, 255, 0.03);
+  padding: 0.9rem;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.34);
+}
+
+.customer-mini-photo {
+  display: flex;
+  height: 4.1rem;
+  width: 4.1rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  background: linear-gradient(145deg, rgba(127, 29, 29, 0.7), rgba(24, 24, 27, 0.8));
+  color: #fff;
+  font-size: 1.6rem;
+  font-weight: 800;
+}
+
+.customer-add-btn,
+.customer-cta-btn,
+.royal-button-primary {
+  border-radius: 0.86rem;
+  border: 1px solid rgba(248, 113, 113, 0.75);
+  background: linear-gradient(125deg, #dc2626 0%, #b91c1c 100%);
+  color: #fff;
+  padding: 0.5rem 0.92rem;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.customer-add-btn:hover,
+.customer-cta-btn:hover,
+.royal-button-primary:hover {
+  filter: brightness(1.05);
+}
+
+.customer-qty-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.customer-qty-control button {
+  border-radius: 0.68rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  height: 1.95rem;
+  width: 1.95rem;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.customer-qty-control span {
+  min-width: 1.5rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.customer-empty-card {
+  border-radius: 0.9rem;
+  border: 1px dashed rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.03);
+  color: #cbd5e1;
+  padding: 1rem;
+}
+
+.customer-glass,
+.customer-kpi {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+}
+
+.customer-floating-cta,
+.customer-cart-cta {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .customer-page-title {
-  letter-spacing: 0.24em;
-  color: #f3d28f;
-  font-family: 'Georgia', 'Times New Roman', serif;
+  letter-spacing: 0.2em;
+  color: #fca5a5;
+  font-family: 'Sora', 'Manrope', sans-serif;
 }
 
 .customer-nav-shell {
-  border-top: 1px solid rgba(245, 208, 122, 0.26);
-  background: rgba(7, 15, 35, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(3, 4, 9, 0.92);
   backdrop-filter: blur(16px);
 }
 
 .customer-nav-item-active {
-  border-color: rgba(245, 208, 122, 0.6);
-  background: linear-gradient(180deg, rgba(247, 221, 177, 0.24) 0%, rgba(255, 252, 244, 0.16) 100%);
-  color: #f7ddb1;
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.34);
-}
-
-.royal-button-primary {
-  border: 1px solid rgba(245, 208, 122, 0.58);
-  background: linear-gradient(130deg, #f2cb7f 0%, #dbac5c 100%);
-  color: #241600;
-  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.34);
-}
-
-.royal-button-primary:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.04);
+  border-color: rgba(248, 113, 113, 0.8);
+  background: linear-gradient(125deg, rgba(220, 38, 38, 0.82), rgba(127, 29, 29, 0.82));
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
 .royal-button-secondary {
-  border: 1px solid rgba(245, 208, 122, 0.36);
-  background: rgba(16, 30, 62, 0.55);
-  color: #f6dfb0;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e5e7eb;
 }
 
 .royal-highlight {
-  color: #f6d798;
+  color: #f87171;
 }
 
 .royal-muted {
-  color: #c8d2eb;
+  color: #cbd5e1;
 }
 
 .royal-surface {
-  border: 1px solid rgba(245, 208, 122, 0.2);
-  background: rgba(255, 248, 233, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dish-badge {
+  border: 1px solid rgba(248, 113, 113, 0.8);
+  background: rgba(127, 29, 29, 0.9);
+  color: #fff;
+}
+
+.status-step {
+  border-radius: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+  transition: all 0.2s ease;
+}
+
+.status-step.active {
+  border-color: rgba(248, 113, 113, 0.82);
+  background: rgba(127, 29, 29, 0.75);
+  color: #fff;
 }
 
 .royal-reveal {

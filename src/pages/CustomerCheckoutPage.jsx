@@ -83,7 +83,7 @@ export default function CustomerCheckoutPage() {
       <header className="mb-4 flex items-center justify-between">
         <div>
           <p className="customer-page-title text-xs font-semibold uppercase">Secure Checkout</p>
-          <h1 className="text-2xl font-bold text-amber-50">Complete Your Premium Order</h1>
+          <h1 className="text-2xl font-bold text-white">Complete Your Order</h1>
         </div>
         <Button
           variant="secondary"

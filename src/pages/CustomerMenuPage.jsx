@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { menuService } from '../services/menuService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
@@ -29,8 +28,8 @@ export default function CustomerMenuPage() {
       .then((data) => {
         if (!active) return
         setMenu(data)
-        setActiveCategory(null)
-        setError('')
+        const firstCategory = data?.categories?.[0]?._id || null
+        setActiveCategory(firstCategory)
       })
       .catch((requestError) => {
         if (!active) return
@@ -44,22 +43,23 @@ export default function CustomerMenuPage() {
     return () => {
       active = false
     }
-  }, [restaurantSlug, tableNumber])
+  }, [restaurantSlug])
 
-  const visibleItems = useMemo(() => {
-    if (!activeCategory) return []
-    return menu.items.filter((item) => item.available && item.categoryId === activeCategory)
-  }, [activeCategory, menu.items])
+  const availableItems = useMemo(() => menu.items.filter((item) => item.available), [menu.items])
 
   const itemCountByCategory = useMemo(() => {
     const counts = new Map()
-    for (const item of menu.items) {
-      if (!item.available) continue
+    for (const item of availableItems) {
       const key = item.categoryId
       counts.set(key, (counts.get(key) || 0) + 1)
     }
     return counts
-  }, [menu.items])
+  }, [availableItems])
+
+  const visibleItems = useMemo(() => {
+    if (!activeCategory) return []
+    return availableItems.filter((item) => item.categoryId === activeCategory)
+  }, [activeCategory, availableItems])
 
   const cartQuantityByItemId = useMemo(() => {
     const quantityMap = new Map()
@@ -69,133 +69,137 @@ export default function CustomerMenuPage() {
     return quantityMap
   }, [cart])
 
+  const total = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
+  const totalItemCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart])
+
+  const selectedCategoryName =
+    menu.categories.find((category) => category._id === activeCategory)?.name || 'Recommended'
+
   const openCheckout = () => {
     navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber }))
   }
 
-  const total = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
-
-  const totalItemCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart])
-
   if (loading) {
-    return <div className="min-h-screen p-4 text-sm royal-muted customer-shell">Loading royal dining menu...</div>
+    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-slate-300">Loading menu...</div>
   }
 
   if (error) {
-    return <div className="min-h-screen p-4 text-sm text-amber-200 customer-shell">{error}</div>
+    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-red-300">{error}</div>
   }
 
   return (
-    <div className="customer-shell pb-32">
-      <header className="sticky top-0 z-20 border-b border-amber-200/20 bg-[#09112a]/80 p-4 backdrop-blur">
-        <div className="customer-hero royal-reveal p-4 md:p-5">
-          <p className="customer-page-title text-xs font-semibold uppercase">Chef's Bud Royal Lounge</p>
-          <h1 className="mt-1 text-2xl font-bold text-amber-50 md:text-3xl">Welcome to {menu.restaurant?.name}</h1>
-          <p className="mt-1 text-sm royal-muted">Table {tableNumber} • Signature dining, elegantly delivered</p>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="royal-surface rounded-lg px-2 py-2">
-              <p className="font-bold royal-highlight">{menu.categories.length}</p>
-              <p className="royal-muted">Categories</p>
+    <div className="customer-shell-v2 pb-32">
+      <header className="customer-appbar sticky top-0 z-30">
+        <div className="mx-auto max-w-3xl px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Your table</p>
+              <p className="text-xl font-bold text-white">{menu.restaurant?.name || 'Restaurant'}</p>
             </div>
-            <div className="royal-surface rounded-lg px-2 py-2">
-              <p className="font-bold royal-highlight">{menu.items.length}</p>
-              <p className="royal-muted">Dishes</p>
-            </div>
-            <div className="royal-surface rounded-lg px-2 py-2">
-              <p className="font-bold royal-highlight">{totalItemCount}</p>
-              <p className="royal-muted">In Cart</p>
+            <div className="flex items-center gap-2 text-slate-300">
+              <span className="customer-icon-chip">T{tableNumber}</span>
+              <span className="customer-icon-chip">Menu</span>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="p-4">
-        {menu.offers?.length > 0 && (
-          <div className="customer-glass royal-reveal royal-reveal-delay-1 mb-4 rounded-xl p-3 text-sm royal-highlight shadow-sm">
-            {menu.offers.map((offer) => `✨ ${offer.name}`).join('   •   ')}
-          </div>
-        )}
+      <main className="mx-auto max-w-3xl px-4 pb-4">
+        <section className="customer-banner-card mt-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-200">Now serving</p>
+          <h1 className="mt-2 text-2xl font-extrabold leading-tight text-white md:text-3xl">
+            {menu.restaurant?.name || 'Restaurant Menu'}
+          </h1>
+          <p className="mt-1 text-sm text-slate-200">Explore categories and order instantly from your table.</p>
+          {Array.isArray(menu.offers) && menu.offers.length ? (
+            <p className="mt-3 text-xs font-medium text-red-100">{menu.offers.map((offer) => offer.name).join('  |  ')}</p>
+          ) : null}
+        </section>
 
-        {!activeCategory ? (
-          <div>
-            <h2 className="mb-3 text-lg font-semibold text-amber-50">Explore Signature Categories</h2>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-              {menu.categories.map((category) => (
+        <section className="customer-search mt-4">
+          <div className="customer-search-box">
+            <span className="text-sm text-slate-500">Search items, dishes, drinks...</span>
+          </div>
+        </section>
+
+        <section className="mt-4">
+          <div className="customer-category-strip">
+            {menu.categories.map((category) => {
+              const isActive = category._id === activeCategory
+              return (
                 <button
                   key={category._id}
                   onClick={() => setActiveCategory(category._id)}
-                  className="lux-card royal-reveal royal-reveal-delay-1 min-h-32 overflow-hidden px-3 py-4 text-center text-base font-semibold text-amber-50 transition hover:-translate-y-1 hover:border-amber-300"
+                  className={`customer-category-pill ${isActive ? 'active' : ''}`}
                 >
-                  <div className="mb-2 rounded-lg border border-amber-200/30 bg-gradient-to-br from-amber-200/20 to-transparent p-2 text-2xl">🍽️</div>
-                  <p>{category.name}</p>
-                  <p className="mt-1 text-xs royal-muted">{itemCountByCategory.get(category._id) || 0} dishes</p>
+                  <span>{category.name}</span>
+                  <span className="text-[11px] opacity-80">{itemCountByCategory.get(category._id) || 0}</span>
                 </button>
-              ))}
-            </div>
+              )
+            })}
           </div>
-        ) : (
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <Button variant="secondary" className="royal-button-secondary" onClick={() => setActiveCategory(null)}>
-                ← Back to Categories
-              </Button>
-              <p className="text-sm font-medium royal-muted">Chef Selection</p>
-            </div>
+        </section>
 
-            <div className="grid grid-cols-1 gap-3">
+        <section className="mt-5">
+          <div className="mb-3 flex items-end justify-between">
+            <h2 className="text-2xl font-bold text-white">{selectedCategoryName}</h2>
+            <p className="text-xs text-slate-400">{visibleItems.length} items</p>
+          </div>
+
+          {!visibleItems.length ? (
+            <div className="customer-empty-card">No available dishes in this category right now.</div>
+          ) : (
+            <div className="space-y-3">
               {visibleItems.map((item) => {
                 const quantity = cartQuantityByItemId.get(item._id) || 0
                 return (
-                  <div key={item._id} className="lux-card royal-reveal royal-reveal-delay-2 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-start gap-3">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-xl border border-amber-200/35 bg-gradient-to-br from-amber-100/25 to-transparent text-sm font-bold royal-highlight">
-                          {item.name?.charAt(0) || 'D'}
-                        </div>
-                        <div>
-                          <h3 className="text-base font-semibold text-amber-50">{item.name}</h3>
-                        <p className="text-sm royal-muted">{item.description || 'A signature dish from our kitchen.'}</p>
-                        </div>
-                      </div>
-                      <p className="dish-badge rounded-full px-3 py-1 text-sm font-bold">
-                        {formatCurrencyINR(item.price)}
+                  <article key={item._id} className="customer-food-card">
+                    <div className="min-w-0">
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300">
+                        {item.bestseller ? 'Bestseller' : 'Fresh pick'}
                       </p>
+                      <h3 className="truncate text-xl font-bold text-white">{item.name}</h3>
+                      <p className="mt-1 line-clamp-2 text-sm text-slate-300">
+                        {item.description || 'Chef special prepared with quality ingredients.'}
+                      </p>
+                      <p className="mt-2 text-2xl font-extrabold text-red-400">{formatCurrencyINR(item.price)}</p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <span className="text-xs font-medium royal-muted">
-                        {item.bestseller ? '⭐ Bestseller' : 'Popular in this section'}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="h-8 w-8 rounded-lg border border-amber-200/35 text-amber-50"
-                          onClick={() => removeItem(restaurantSlug, tableNumber, item._id)}
-                        >
-                          -
+
+                    <div className="ml-3 flex flex-col items-end justify-between gap-3">
+                      <div className="customer-mini-photo">{item.name?.charAt(0) || 'F'}</div>
+                      {quantity > 0 ? (
+                        <div className="customer-qty-control">
+                          <button onClick={() => removeItem(restaurantSlug, tableNumber, item._id)}>-</button>
+                          <span>{quantity}</span>
+                          <button onClick={() => addItem(restaurantSlug, tableNumber, item)}>+</button>
+                        </div>
+                      ) : (
+                        <button className="customer-add-btn" onClick={() => addItem(restaurantSlug, tableNumber, item)}>
+                          ADD
                         </button>
-                        <span className="min-w-6 text-center text-sm font-semibold text-amber-50">{quantity}</span>
-                        <button
-                          className="h-8 w-8 rounded-lg border border-amber-300/70 bg-amber-200 text-[#2d1b00]"
-                          onClick={() => addItem(restaurantSlug, tableNumber, item)}
-                        >
-                          +
-                        </button>
-                      </div>
+                      )}
                     </div>
-                  </div>
+                  </article>
                 )
               })}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </section>
+      </main>
 
-      {cart.length > 0 && (
-        <div className="customer-floating-cta fixed bottom-20 left-0 right-0 z-30 p-4">
-          <Button className="royal-button-primary w-full" onClick={openCheckout}>
-            View Cart • {formatCurrencyINR(total)}
-          </Button>
+      {totalItemCount > 0 ? (
+        <div className="customer-cart-cta fixed bottom-20 left-0 right-0 z-40 px-4">
+          <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-2xl border border-red-400/45 bg-black/95 px-4 py-3 shadow-[0_16px_30px_rgba(0,0,0,0.45)]">
+            <div>
+              <p className="text-xs uppercase tracking-[0.12em] text-slate-300">Cart</p>
+              <p className="text-sm font-semibold text-white">{totalItemCount} items</p>
+            </div>
+            <button className="customer-cta-btn" onClick={openCheckout}>
+              View Cart {formatCurrencyINR(total)}
+            </button>
+          </div>
         </div>
-      )}
+      ) : null}
 
       <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} />
     </div>
