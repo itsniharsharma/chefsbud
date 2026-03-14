@@ -156,6 +156,7 @@ function buildBillHtml(order, restaurantName) {
           </div>
           <div class="meta-box">
             <p><strong>Order:</strong> ${escapeHtml(order._id)}</p>
+            <p><strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</p>
             <p><strong>Table:</strong> ${escapeHtml(order.tableNumber)}</p>
             <p><strong>Date:</strong> ${escapeHtml(new Date(order.createdAt).toLocaleString())}</p>
             <p><strong>Payment:</strong> ${escapeHtml(order.paymentStatus)}</p>
@@ -245,144 +246,6 @@ export default function BillingPage() {
     setReadyToDeleteOrderIds((prev) => (prev.includes(orderId) ? prev : [...prev, orderId]))
   }
 
-  const downloadBill = async (order) => {
-    let jsPDF
-    try {
-      const module = await import('jspdf')
-      jsPDF = module.jsPDF
-    } catch {
-      setError('Unable to load PDF generator. Please try again.')
-      return
-    }
-
-    const pdf = new jsPDF({ unit: 'pt', format: 'a4' })
-    const left = 44
-    let y = 42
-    const pageWidth = pdf.internal.pageSize.getWidth()
-    const pageHeight = pdf.internal.pageSize.getHeight()
-
-    const drawPageBackground = () => {
-      pdf.setFillColor(246, 241, 235)
-      pdf.rect(0, 0, pageWidth, pageHeight, 'F')
-      pdf.setFillColor(255, 255, 255)
-      pdf.roundedRect(26, 20, pageWidth - 52, pageHeight - 40, 14, 14, 'F')
-      pdf.setDrawColor(247, 215, 219)
-      pdf.roundedRect(26, 20, pageWidth - 52, pageHeight - 40, 14, 14)
-    }
-
-    const drawHeader = () => {
-      pdf.setFillColor(127, 29, 29)
-      pdf.roundedRect(26, 20, pageWidth - 52, 92, 14, 14, 'F')
-      pdf.setTextColor(255, 248, 242)
-      pdf.setFont('helvetica', 'bold')
-      pdf.setFontSize(28)
-      pdf.text(String(restaurant?.name || "Chef's Bud"), left, 62)
-      pdf.setTextColor(253, 230, 138)
-      pdf.setFont('helvetica', 'normal')
-      pdf.setFontSize(10)
-      pdf.text("CHEF'S BUD • LUXURY RESTAURANT INTELLIGENCE", left, 82)
-    }
-
-    const ensureSpace = (needed = 24) => {
-      if (y + needed <= pageHeight - 48) return
-      pdf.addPage()
-      drawPageBackground()
-      drawHeader()
-      y = 132
-    }
-
-    drawPageBackground()
-    drawHeader()
-    y = 136
-
-    pdf.setTextColor(51, 65, 85)
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(11)
-    pdf.text(`Order: ${order._id}`, left, y)
-    y += 16
-    pdf.text(`Table: ${order.tableNumber}`, left, y)
-    y += 16
-    pdf.text(`Date: ${new Date(order.createdAt).toLocaleString()}`, left, y)
-    y += 16
-    pdf.text(`Payment: ${order.paymentStatus} | Status: ${order.orderStatus}`, left, y)
-    y += 24
-
-    pdf.setFillColor(255, 245, 245)
-    pdf.roundedRect(left - 8, y - 14, pageWidth - left * 2 + 16, 26, 6, 6, 'F')
-    pdf.setTextColor(153, 27, 27)
-    pdf.setFont('helvetica', 'bold')
-    pdf.setFontSize(10)
-    pdf.text('ITEM', left, y)
-    pdf.text('QTY', pageWidth - 250, y)
-    pdf.text('PRICE', pageWidth - 190, y)
-    pdf.text('SUBTOTAL', pageWidth - 110, y)
-    y += 18
-
-    pdf.setTextColor(51, 65, 85)
-    pdf.setFont('helvetica', 'normal')
-    pdf.setFontSize(11)
-
-    for (const item of order.items || []) {
-      ensureSpace(30)
-      const qty = Number(item.quantity || 0)
-      const price = Number(item.price || 0)
-      const subtotal = qty * price
-      const wrapped = pdf.splitTextToSize(String(item.name || ''), pageWidth - 320)
-      pdf.text(wrapped, left, y)
-      pdf.text(String(qty), pageWidth - 250, y)
-      pdf.text(formatCurrencyINR(price), pageWidth - 190, y)
-      pdf.text(formatCurrencyINR(subtotal), pageWidth - 110, y)
-      y += Math.max(18, wrapped.length * 13)
-
-      pdf.setDrawColor(241, 245, 249)
-      pdf.line(left, y - 6, pageWidth - left, y - 6)
-    }
-
-    if ((order.appliedOffers || []).length) {
-      ensureSpace(34)
-      y += 8
-      pdf.setFont('helvetica', 'bold')
-      pdf.setTextColor(5, 150, 105)
-      pdf.text('Applied Offers', left, y)
-      y += 14
-      pdf.setFont('helvetica', 'normal')
-      pdf.setTextColor(51, 65, 85)
-      for (const offer of order.appliedOffers || []) {
-        ensureSpace(24)
-        const line = `${offer.description || offer.name || 'Offer'}  -${formatCurrencyINR(offer.discountAmount || 0)}`
-        const wrapped = pdf.splitTextToSize(line, pageWidth - left * 2)
-        pdf.text(wrapped, left, y)
-        y += wrapped.length * 13
-      }
-    }
-
-    ensureSpace(90)
-    y += 12
-    pdf.setFillColor(255, 248, 245)
-    pdf.roundedRect(pageWidth - 290, y - 14, 246, 76, 8, 8, 'F')
-    pdf.setFont('helvetica', 'bold')
-    pdf.setTextColor(71, 85, 105)
-    pdf.setFontSize(11)
-    pdf.text(`Subtotal: ${formatCurrencyINR(order.subtotalAmount || order.totalAmount || 0)}`, pageWidth - 274, y)
-    y += 14
-    pdf.text(`Discount: ${formatCurrencyINR(order.discountTotal || 0)}`, pageWidth - 274, y)
-    y += 14
-    pdf.setFontSize(14)
-    pdf.setTextColor(185, 28, 28)
-    pdf.text(`Total: ${formatCurrencyINR(order.totalAmount || 0)}`, pageWidth - 274, y)
-
-    pdf.setFont('helvetica', 'normal')
-    pdf.setTextColor(100, 116, 139)
-    pdf.setFontSize(10)
-    pdf.text("Chef's Bud", left, pageHeight - 46)
-    pdf.text('Luxury Restaurant Intelligence • Premium Billing', left, pageHeight - 32)
-
-    y += 14
-
-    pdf.save(`bill-${order._id}.pdf`)
-    markReadyToDelete(order._id)
-  }
-
   const printBill = (order) => {
     const html = buildBillHtml(order, restaurant?.name)
     const printWindow = window.open('', '_blank', 'width=900,height=700')
@@ -432,13 +295,6 @@ export default function BillingPage() {
                   <p className="text-base font-bold text-[var(--primary)]">{formatCurrencyINR(order.totalAmount)}</p>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => downloadBill(order)}
-                    disabled={deletingOrderId === order._id}
-                  >
-                    Download Bill
-                  </Button>
                   <Button onClick={() => printBill(order)} disabled={deletingOrderId === order._id}>
                     Print Bill
                   </Button>
