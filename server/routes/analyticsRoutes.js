@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { getDashboard } from '../controllers/analyticsController.js'
 import { requireAuth } from '../middleware/auth.js'
+import { requireOwner } from '../middleware/authorize.js'
 import { requireActiveBilling } from '../middleware/billing.js'
 import { cacheResponse } from '../services/responseCache.js'
 
@@ -10,6 +11,7 @@ router.get(
 	'/dashboard/:restaurantId',
 	requireAuth,
 	requireActiveBilling,
+	requireOwner,
 	cacheResponse({
 		ttlSeconds: 60,
 		keyBuilder: (req) => `analytics:dashboard:${req.user._id}:${req.params.restaurantId}`,

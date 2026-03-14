@@ -25,8 +25,9 @@ const titles = {
 export default function DashboardLayout() {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const { restaurant } = useAuth()
+  const { restaurant, user } = useAuth()
   const queryClient = useQueryClient()
+  const isOwner = user?.role === 'owner'
 
   useOrderRealtimeSync({
     restaurantId: restaurant?._id,
@@ -37,10 +38,6 @@ export default function DashboardLayout() {
     if (!restaurant?._id || !restaurant?.slug) return
 
     queryClient.prefetchQuery({
-      queryKey: queryKeys.dashboard.analyticsCards(restaurant._id),
-      queryFn: () => analyticsService.dashboard(restaurant._id),
-    })
-    queryClient.prefetchQuery({
       queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, 'All', 'All'),
       queryFn: () =>
         orderService.listBoard(restaurant._id, {
@@ -49,14 +46,21 @@ export default function DashboardLayout() {
         }),
     })
     queryClient.prefetchQuery({
-      queryKey: queryKeys.dashboard.tables(restaurant._id),
-      queryFn: () => tableService.list(restaurant._id),
-    })
-    queryClient.prefetchQuery({
       queryKey: queryKeys.dashboard.menu(restaurant.slug),
       queryFn: () => menuService.getBySlug(restaurant.slug),
     })
-  }, [restaurant?._id, restaurant?.slug, queryClient])
+
+    if (isOwner) {
+      queryClient.prefetchQuery({
+        queryKey: queryKeys.dashboard.analyticsCards(restaurant._id),
+        queryFn: () => analyticsService.dashboard(restaurant._id),
+      })
+      queryClient.prefetchQuery({
+        queryKey: queryKeys.dashboard.tables(restaurant._id),
+        queryFn: () => tableService.list(restaurant._id),
+      })
+    }
+  }, [restaurant?._id, restaurant?.slug, queryClient, isOwner])
 
   return (
     <div className="owner-shell">

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { body } from 'express-validator'
 import { requireAuth } from '../middleware/auth.js'
+import { requireOwner } from '../middleware/authorize.js'
 import {
   createCheckout,
   createHybridSubscription,
@@ -31,6 +32,7 @@ router.post('/webhook', webhookLimiter, handleRazorpayWebhook)
 router.post(
   '/checkout',
   requireAuth,
+  requireOwner,
   paymentLimiter,
   [body('plan').isIn(['hybrid']).withMessage('plan must be hybrid')],
   createCheckout,
@@ -39,6 +41,7 @@ router.post(
 router.post(
   '/checkout/verify',
   requireAuth,
+  requireOwner,
   paymentLimiter,
   [
     body('plan').isIn(['hybrid']).withMessage('plan must be hybrid'),
@@ -49,11 +52,12 @@ router.post(
   verifyOrder,
 )
 
-router.post('/subscription/hybrid', requireAuth, paymentLimiter, createHybridSubscription)
+router.post('/subscription/hybrid', requireAuth, requireOwner, paymentLimiter, createHybridSubscription)
 
 router.post(
   '/subscription/hybrid/verify',
   requireAuth,
+  requireOwner,
   paymentLimiter,
   [
     body('razorpay_payment_id').notEmpty().withMessage('razorpay_payment_id is required'),

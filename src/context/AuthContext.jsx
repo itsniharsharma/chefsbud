@@ -63,6 +63,12 @@ export function AuthProvider({ children }) {
     return result
   }, [hydrateSession])
 
+  const staffLogin = useCallback(async (payload) => {
+    const result = await authService.staffLogin(payload)
+    hydrateSession(result)
+    return result
+  }, [hydrateSession])
+
   const initiateRegistration = useCallback(async (payload) => {
     return authService.initiateRegistration(payload)
   }, [])
@@ -95,12 +101,13 @@ export function AuthProvider({ children }) {
       authLoading,
       isAuthenticated: Boolean(token),
       login,
+      staffLogin,
       initiateRegistration,
       verifyRegistration,
       logout,
       setRestaurant,
     }),
-    [token, user, restaurant, authLoading, login, initiateRegistration, verifyRegistration, logout, setRestaurant],
+    [token, user, restaurant, authLoading, login, staffLogin, initiateRegistration, verifyRegistration, logout, setRestaurant],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

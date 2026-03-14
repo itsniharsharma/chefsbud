@@ -3,19 +3,21 @@ import { useAuth } from '../hooks/useAuth'
 import { preloadRouteByPath } from '../utils/routePreload'
 
 const links = [
-  { label: 'Dashboard', to: '/dashboard' },
-  { label: 'Orders', to: '/dashboard/orders' },
-  { label: 'Menu', to: '/dashboard/menu' },
-  { label: 'Tables', to: '/dashboard/tables' },
-  { label: 'Offers (Dev)', to: '/dashboard/offers' },
-  { label: 'Analytics (Dev)', to: '/dashboard/analytics' },
-  { label: 'Billing', to: '/dashboard/billing' },
-  { label: 'Settings', to: '/dashboard/settings' },
+  { label: 'Dashboard', to: '/dashboard', roles: ['owner'] },
+  { label: 'Orders', to: '/dashboard/orders', roles: ['owner', 'staff'] },
+  { label: 'Menu', to: '/dashboard/menu', roles: ['owner', 'staff'] },
+  { label: 'Tables', to: '/dashboard/tables', roles: ['owner'] },
+  { label: 'Offers (Dev)', to: '/dashboard/offers', roles: ['owner', 'staff'] },
+  { label: 'Analytics (Dev)', to: '/dashboard/analytics', roles: ['owner'] },
+  { label: 'Billing', to: '/dashboard/billing', roles: ['owner', 'staff'] },
+  { label: 'Settings', to: '/dashboard/settings', roles: ['owner'] },
 ]
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { logout } = useAuth()
+  const { logout, user } = useAuth()
   const navigate = useNavigate()
+  const role = user?.role || 'owner'
+  const visibleLinks = links.filter((link) => link.roles.includes(role))
 
   const onLogout = () => {
     logout()
@@ -40,7 +42,7 @@ export default function Sidebar({ isOpen, onClose }) {
         Close
       </button>
       <nav className="space-y-1.5">
-        {links.map((link) => (
+        {visibleLinks.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}

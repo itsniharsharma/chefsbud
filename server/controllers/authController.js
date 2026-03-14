@@ -5,6 +5,7 @@ import { validationResult } from 'express-validator'
 import User from '../models/User.js'
 import Restaurant from '../models/Restaurant.js'
 import PendingRegistration from '../models/PendingRegistration.js'
+import StaffAccount from '../models/StaffAccount.js'
 import { sendRegistrationOtpEmail } from '../services/emailService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
@@ -47,7 +48,7 @@ function getResendWaitSeconds(lastCodeSentAt) {
   return Math.max(0, OTP_RESEND_COOLDOWN_SECONDS - elapsed)
 }
 
-function signToken(user) {
+function signToken(payload) {
   if (!process.env.JWT_SECRET) {
     const error = new Error('JWT_SECRET is not configured')
     error.statusCode = 500
@@ -55,13 +56,7 @@ function signToken(user) {
   }
 
   return jwt.sign(
-    {
-      userId: String(user._id || user.id),
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      tokenVersion: Number(user.tokenVersion || 0),
-    },
+    payload,
     process.env.JWT_SECRET,
     { expiresIn: '7d' },
   )
@@ -79,6 +74,18 @@ function serializeUser(user) {
     emailVerified: user.emailVerified !== false,
     role: user.role,
     billing: user.billing,
+  }
+}
+
+function serializeStaffSessionUser({ staff, owner }) {
+  return {
+    id: staff._id,
+    name: staff.displayName || staff.username,
+    email: owner.email,
+    emailVerified: owner.emailVerified !== false,
+    role: 'staff',
+    billing: owner.billing,
+    username: staff.username,
   }
 }
 
@@ -280,7 +287,13 @@ export async function verifyRegistration(req, res, next) {
 
     await PendingRegistration.deleteOne({ _id: pending._id })
 
-    const token = signToken(user)
+    const token = signToken({
+      userId: String(user._id || user.id),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      tokenVersion: Number(user.tokenVersion || 0),
+    })
     return res.status(201).json({
       token,
       user: serializeUser(user),
@@ -339,7 +352,13 @@ export async function login(req, res, next) {
     }
 
     const restaurant = await getOwnerRestaurant(user._id)
-    const token = signToken(user)
+    const token = signToken({
+      userId: String(user._id || user.id),
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      tokenVersion: Number(user.tokenVersion || 0),
+    })
     return res.json({
       token,
       user: serializeUser(user),
@@ -350,8 +369,89 @@ export async function login(req, res, next) {
   }
 }
 
+export async function staffLogin(req, res, next) {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
+    }
+
+    const username = String(req.body?.username || '').trim().toLowerCase()
+    const passkey = String(req.body?.passkey || '')
+
+    const staff = await StaffAccount.findOne({ username, isActive: true })
+      .select('_id ownerId restaurantId username displayName passkeyHash isActive')
+      .lean()
+
+    if (!staff || !staff.passkeyHash) {
+      return res.status(401).json({ message: 'Invalid username or passkey' })
+    }
+
+    const valid = await bcrypt.compare(passkey, staff.passkeyHash)
+    if (!valid) {
+      return res.status(401).json({ message: 'Invalid username or passkey' })
+    }
+
+    const [owner, restaurant] = await Promise.all([
+      User.findById(staff.ownerId)
+        .select('_id name email role emailVerified tokenVersion billing')
+        .lean(),
+      Restaurant.findById(staff.restaurantId).lean(),
+    ])
+
+    if (!owner || !restaurant) {
+      return res.status(401).json({ message: 'Staff account configuration is invalid' })
+    }
+
+    if (owner.emailVerified === false) {
+      return res.status(403).json({ message: 'Manager email is not verified' })
+    }
+
+    await StaffAccount.updateOne({ _id: staff._id }, { $set: { lastLoginAt: new Date() } })
+
+    const token = signToken({
+      userId: String(owner._id),
+      ownerId: String(owner._id),
+      staffId: String(staff._id),
+      restaurantId: String(staff.restaurantId),
+      name: staff.displayName || staff.username,
+      email: owner.email,
+      role: 'staff',
+      tokenVersion: Number(owner.tokenVersion || 0),
+    })
+
+    return res.json({
+      token,
+      user: serializeStaffSessionUser({ staff, owner }),
+      restaurant,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export async function me(req, res, next) {
   try {
+    if (req.user?.role === 'staff') {
+      const restaurant = await Restaurant.findById(req.user.restaurantId).lean()
+      if (!restaurant) {
+        return res.status(401).json({ message: 'Unauthorized' })
+      }
+
+      return res.json({
+        user: {
+          id: req.user.staffId,
+          name: req.user.staffDisplayName || req.user.staffUsername,
+          email: req.user.email,
+          emailVerified: req.user.emailVerified !== false,
+          role: 'staff',
+          billing: req.user.billing,
+          username: req.user.staffUsername,
+        },
+        restaurant,
+      })
+    }
+
     const currentUser = await User.findById(req.user._id).lean()
     if (!currentUser) {
       return res.status(401).json({ message: 'Unauthorized' })
@@ -369,6 +469,10 @@ export async function me(req, res, next) {
 
 export async function logout(req, res, next) {
   try {
+    if (req.user?.role === 'staff') {
+      return res.json({ message: 'Logged out' })
+    }
+
     await User.updateOne({ _id: req.user._id }, { $inc: { tokenVersion: 1 } })
     return res.json({ message: 'Logged out' })
   } catch (error) {

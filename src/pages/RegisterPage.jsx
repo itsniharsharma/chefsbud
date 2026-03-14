@@ -5,27 +5,7 @@ import FormInput from '../components/FormInput'
 import Button from '../components/Button'
 import { authService } from '../services/authService'
 
-function toTimestamp(value) {
-  const ts = value ? new Date(value).getTime() : NaN
-  return Number.isFinite(ts) ? ts : 0
-}
-
-function hasBillingAccess(billing) {
-  if (!billing) {
-    return false
-  }
-
-  if (billing.status === 'active') {
-    return true
-  }
-
-  const now = Date.now()
-  const graceWindowEnds = Math.max(toTimestamp(billing.graceEndsAt), toTimestamp(billing.currentPeriodEnd))
-  return ['grace_period', 'past_due'].includes(billing.status) && graceWindowEnds > now
-}
-
 export default function RegisterPage() {
-  const [mode, setMode] = useState('signup')
   const [step, setStep] = useState('details')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -39,9 +19,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
-  const { initiateRegistration, verifyRegistration, login } = useAuth()
+  const { initiateRegistration, verifyRegistration } = useAuth()
   const navigate = useNavigate()
 
   const onSubmitDetails = async (event) => {
@@ -102,29 +80,6 @@ export default function RegisterPage() {
     }
   }
 
-  const onLoginSubmit = async (event) => {
-    event.preventDefault()
-    setLoading(true)
-    setError('')
-    setInfo('')
-
-    try {
-      const result = await login({ email: loginEmail, password: loginPassword })
-      if (!hasBillingAccess(result?.user?.billing)) {
-        navigate('/plans', { replace: true })
-        return
-      }
-
-      navigate('/dashboard', { replace: true })
-    } catch (requestError) {
-      setError(requestError?.response?.data?.message || 'Login failed. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const isSignupMode = mode === 'signup'
-
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_10%_-10%,rgba(229,9,20,0.18),transparent_34%),radial-gradient(circle_at_100%_0%,rgba(2,6,23,0.12),transparent_30%),#f6f8fc] px-4 py-8 md:px-6 md:py-10">
       <div className="mx-auto w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_30px_70px_rgba(15,23,42,0.14)]">
@@ -164,9 +119,8 @@ export default function RegisterPage() {
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
-                  className={`${isSignupMode ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'} rounded-xl px-3 py-2 text-sm font-semibold transition`}
+                  className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm"
                   onClick={() => {
-                    setMode('signup')
                     setError('')
                     setInfo('')
                   }}
@@ -175,9 +129,9 @@ export default function RegisterPage() {
                 </button>
                 <button
                   type="button"
-                  className={`${!isSignupMode ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'} rounded-xl px-3 py-2 text-sm font-semibold transition`}
+                  className="rounded-xl px-3 py-2 text-sm font-semibold text-slate-600 transition hover:text-slate-900"
                   onClick={() => {
-                    setMode('login')
+                    navigate('/login', { replace: true })
                     setError('')
                     setInfo('')
                   }}
@@ -188,127 +142,94 @@ export default function RegisterPage() {
             </div>
 
             <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">
-              {isSignupMode
-                ? step === 'details'
-                  ? 'Create owner account'
-                  : 'Verify your email'
-                : 'Welcome back'}
+              {step === 'details' ? 'Create owner account' : 'Verify your email'}
             </h1>
             <p className="mb-5 mt-2 text-sm text-slate-500">
-              {isSignupMode
-                ? step === 'details'
-                  ? 'Set up your profile and restaurant details to begin.'
-                  : 'Enter the 6-digit code sent to your email to continue.'
-                : 'Login to continue setup or access your dashboard.'}
+              {step === 'details'
+                ? 'Set up your profile and restaurant details to begin.'
+                : 'Enter the 6-digit code sent to your email to continue.'}
             </p>
 
             {error ? <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--primary)]">{error}</p> : null}
             {info ? <p className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{info}</p> : null}
 
-            {isSignupMode ? (
-              <form className="space-y-3" onSubmit={step === 'details' ? onSubmitDetails : onVerifyCode}>
-                {step === 'details' ? (
-                  <>
-                    <FormInput label="Full Name" value={name} onChange={(e) => setName(e.target.value)} required />
-                    <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-                    <FormInput
-                      label="Password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                    />
-                    <FormInput
-                      label="Restaurant Name"
-                      value={restaurantName}
-                      onChange={(e) => setRestaurantName(e.target.value)}
-                      required
-                    />
-                    <FormInput
-                      label="GSTIN"
-                      value={gstin}
-                      onChange={(e) => setGstin(e.target.value)}
-                      placeholder="22AAAAA0000A1Z5"
-                      required
-                    />
-                    <FormInput label="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
-                    <FormInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
-                  </>
-                ) : (
-                  <>
-                    <FormInput label="Email" type="email" value={email} disabled required />
-                    <FormInput
-                      label="Verification Code"
-                      value={verificationCode}
-                      onChange={(e) => setVerificationCode(e.target.value)}
-                      inputMode="numeric"
-                      pattern="[0-9]{6}"
-                      maxLength={6}
-                      placeholder="Enter 6-digit code"
-                      required
-                    />
-                    <button
-                      type="button"
-                      className="text-sm font-semibold text-slate-700 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
-                      onClick={onResendCode}
-                      disabled={resendLoading}
-                    >
-                      {resendLoading ? 'Resending code...' : 'Resend code'}
-                    </button>
-                  </>
-                )}
-
-                <Button className="mt-4 w-full" type="submit" disabled={loading || (step === 'verify' && verificationCode.length < 6)}>
-                  {loading
-                    ? step === 'details'
-                      ? 'Sending code...'
-                      : 'Verifying...'
-                    : step === 'details'
-                      ? 'Send verification code'
-                      : 'Verify and continue'}
-                </Button>
-
-                {step === 'verify' ? (
+            <form className="space-y-3" onSubmit={step === 'details' ? onSubmitDetails : onVerifyCode}>
+              {step === 'details' ? (
+                <>
+                  <FormInput label="Full Name" value={name} onChange={(e) => setName(e.target.value)} required />
+                  <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                  <FormInput
+                    label="Password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                  <FormInput
+                    label="Restaurant Name"
+                    value={restaurantName}
+                    onChange={(e) => setRestaurantName(e.target.value)}
+                    required
+                  />
+                  <FormInput
+                    label="GSTIN"
+                    value={gstin}
+                    onChange={(e) => setGstin(e.target.value)}
+                    placeholder="22AAAAA0000A1Z5"
+                    required
+                  />
+                  <FormInput label="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
+                  <FormInput label="Phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                </>
+              ) : (
+                <>
+                  <FormInput label="Email" type="email" value={email} disabled required />
+                  <FormInput
+                    label="Verification Code"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value)}
+                    inputMode="numeric"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    placeholder="Enter 6-digit code"
+                    required
+                  />
                   <button
                     type="button"
-                    className="mt-2 text-sm font-semibold text-slate-600 hover:text-[var(--primary)]"
-                    onClick={() => {
-                      setStep('details')
-                      setVerificationCode('')
-                      setError('')
-                      setInfo('')
-                    }}
+                    className="text-sm font-semibold text-slate-700 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={onResendCode}
+                    disabled={resendLoading}
                   >
-                    Edit registration details
+                    {resendLoading ? 'Resending code...' : 'Resend code'}
                   </button>
-                ) : null}
-              </form>
-            ) : (
-              <form className="space-y-3" onSubmit={onLoginSubmit}>
-                <FormInput
-                  label="Email"
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  required
-                />
-                <FormInput
-                  label="Password"
-                  type="password"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  required
-                />
+                </>
+              )}
 
-                <Button className="mt-4 w-full" type="submit" disabled={loading}>
-                  {loading ? 'Signing in...' : 'Login'}
-                </Button>
+              <Button className="mt-4 w-full" type="submit" disabled={loading || (step === 'verify' && verificationCode.length < 6)}>
+                {loading
+                  ? step === 'details'
+                    ? 'Sending code...'
+                    : 'Verifying...'
+                  : step === 'details'
+                    ? 'Send verification code'
+                    : 'Verify and continue'}
+              </Button>
 
-                <p className="text-xs text-slate-500">
-                  If billing setup is incomplete, you will be redirected to plan activation.
-                </p>
-              </form>
-            )}
+              {step === 'verify' ? (
+                <button
+                  type="button"
+                  className="mt-2 text-sm font-semibold text-slate-600 hover:text-[var(--primary)]"
+                  onClick={() => {
+                    setStep('details')
+                    setVerificationCode('')
+                    setError('')
+                    setInfo('')
+                  }}
+                >
+                  Edit registration details
+                </button>
+              ) : null}
+            </form>
           </section>
         </div>
       </div>

@@ -13,6 +13,9 @@ export const authService = {
   login(payload) {
     return api.post('/auth/login', payload).then((response) => response.data)
   },
+  staffLogin(payload) {
+    return api.post('/auth/staff/login', payload).then((response) => response.data)
+  },
   me() {
     return api.get('/auth/me').then((response) => response.data)
   },

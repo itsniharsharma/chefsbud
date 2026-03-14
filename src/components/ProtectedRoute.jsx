@@ -1,5 +1,12 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+
+const staffAllowedPaths = new Set([
+  '/dashboard/orders',
+  '/dashboard/menu',
+  '/dashboard/offers',
+  '/dashboard/billing',
+])
 
 function toTimestamp(value) {
   const ts = value ? new Date(value).getTime() : NaN
@@ -22,6 +29,7 @@ function hasBillingAccess(billing) {
 
 export default function ProtectedRoute({ children }) {
   const { isAuthenticated, authLoading, user } = useAuth()
+  const location = useLocation()
 
   if (authLoading) {
     return <div className="p-6 text-sm text-slate-500">Loading...</div>
@@ -33,6 +41,13 @@ export default function ProtectedRoute({ children }) {
 
   if (!hasBillingAccess(user?.billing)) {
     return <Navigate to="/plans" replace />
+  }
+
+  if (user?.role === 'staff') {
+    const currentPath = String(location.pathname || '')
+    if (!staffAllowedPaths.has(currentPath)) {
+      return <Navigate to="/dashboard/orders" replace />
+    }
   }
 
   return children

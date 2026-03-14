@@ -6,6 +6,7 @@ import {
   logout,
   me,
   resendRegistrationCode,
+  staffLogin,
   verifyRegistration,
 } from '../controllers/authController.js'
 import { requireAuth } from '../middleware/auth.js'
@@ -19,6 +20,13 @@ const loginLimiter = createRateLimiter({
   capacity: Number(process.env.RATE_LIMIT_LOGIN_CAPACITY || 12),
   windowMs: Number(process.env.RATE_LIMIT_LOGIN_WINDOW_MS || 60_000),
   keyFn: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
+})
+
+const staffLoginLimiter = createRateLimiter({
+  id: 'auth-staff-login',
+  capacity: Number(process.env.RATE_LIMIT_LOGIN_CAPACITY || 12),
+  windowMs: Number(process.env.RATE_LIMIT_LOGIN_WINDOW_MS || 60_000),
+  keyFn: (req) => `${req.ip}:${String(req.body?.username || '').trim().toLowerCase()}`,
 })
 
 const registerLimiter = createRateLimiter({
@@ -71,6 +79,13 @@ router.post(
   loginLimiter,
   [body('email').isEmail().withMessage('valid email is required'), body('password').notEmpty()],
   login,
+)
+
+router.post(
+  '/staff/login',
+  staffLoginLimiter,
+  [body('username').isString().trim().isLength({ min: 3, max: 40 }), body('passkey').isString().isLength({ min: 6, max: 80 })],
+  staffLogin,
 )
 
 router.get('/me', requireAuth, me)
