@@ -228,15 +228,7 @@ export async function deleteOrder(req, res, next) {
       return res.status(400).json({ message: 'Order can be deleted only after Served or Completed' })
     }
 
-    await Order.updateOne(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
-      {
-        $set: {
-          hiddenFromActive: true,
-          deletedByOwnerAt: new Date(),
-        },
-      },
-    )
+    await Order.deleteOne({ _id: req.params.orderId, restaurantId: restaurant._id })
 
     invalidateCacheByTags([
       `analytics:${String(restaurant._id)}`,
@@ -244,10 +236,10 @@ export async function deleteOrder(req, res, next) {
       `orders:order:${String(req.params.orderId)}`,
     ])
     emitOrderChanged(restaurant._id, {
-      type: 'hidden-from-active',
+      type: 'deleted',
       orderId: String(req.params.orderId),
     })
-    return res.json({ success: true, movedToRecent: true })
+    return res.json({ success: true, deleted: true })
   } catch (error) {
     next(error)
   }
