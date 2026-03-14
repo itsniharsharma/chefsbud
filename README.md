@@ -1,6 +1,6 @@
 # Chef's Bud - Restaurant Revenue OS
 
-Full-stack SaaS restaurant revenue platform with:
+Full-stack SaaS restaurant revenue platform with
 
 - Owner dashboard (menu, tables, orders, offers, analytics, settings)
 - Public customer ordering route via QR: `/r/:restaurantSlug/t/:tableNumber`
