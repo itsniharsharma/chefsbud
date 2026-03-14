@@ -80,11 +80,11 @@ export default function CustomerMenuPage() {
   }
 
   if (loading) {
-    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-slate-300">Loading menu...</div>
+    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-gray-500">Loading menu...</div>
   }
 
   if (error) {
-    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-red-300">{error}</div>
+    return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-red-500">{error}</div>
   }
 
   return (
@@ -93,10 +93,10 @@ export default function CustomerMenuPage() {
         <div className="mx-auto max-w-3xl px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Your table</p>
-              <p className="text-xl font-bold text-white">{menu.restaurant?.name || 'Restaurant'}</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-gray-500">Your table</p>
+              <p className="text-xl font-bold text-gray-900">{menu.restaurant?.name || 'Restaurant'}</p>
             </div>
-            <div className="flex items-center gap-2 text-slate-300">
+            <div className="flex items-center gap-2 text-gray-600">
               <span className="customer-icon-chip">T{tableNumber}</span>
               <span className="customer-icon-chip">Menu</span>
             </div>
@@ -110,7 +110,7 @@ export default function CustomerMenuPage() {
           <h1 className="mt-2 text-2xl font-extrabold leading-tight text-white md:text-3xl">
             {menu.restaurant?.name || 'Restaurant Menu'}
           </h1>
-          <p className="mt-1 text-sm text-slate-200">Explore categories and order instantly from your table.</p>
+          <p className="mt-1 text-sm text-red-100">Explore categories and order instantly from your table.</p>
           {Array.isArray(menu.offers) && menu.offers.length ? (
             <p className="mt-3 text-xs font-medium text-red-100">{menu.offers.map((offer) => offer.name).join('  |  ')}</p>
           ) : null}
@@ -118,7 +118,7 @@ export default function CustomerMenuPage() {
 
         <section className="customer-search mt-4">
           <div className="customer-search-box">
-            <span className="text-sm text-slate-500">Search items, dishes, drinks...</span>
+            <span className="text-sm text-gray-400">Search items, dishes, drinks...</span>
           </div>
         </section>
 
@@ -142,8 +142,8 @@ export default function CustomerMenuPage() {
 
         <section className="mt-5">
           <div className="mb-3 flex items-end justify-between">
-            <h2 className="text-2xl font-bold text-white">{selectedCategoryName}</h2>
-            <p className="text-xs text-slate-400">{visibleItems.length} items</p>
+            <h2 className="text-2xl font-bold text-gray-900">{selectedCategoryName}</h2>
+            <p className="text-xs text-gray-500">{visibleItems.length} items</p>
           </div>
 
           {!visibleItems.length ? (
@@ -155,14 +155,14 @@ export default function CustomerMenuPage() {
                 return (
                   <article key={item._id} className="customer-food-card">
                     <div className="min-w-0">
-                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-300">
+                      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-600">
                         {item.bestseller ? 'Bestseller' : 'Fresh pick'}
                       </p>
-                      <h3 className="truncate text-xl font-bold text-white">{item.name}</h3>
-                      <p className="mt-1 line-clamp-2 text-sm text-slate-300">
+                      <h3 className="truncate text-xl font-bold text-gray-900">{item.name}</h3>
+                      <p className="mt-1 line-clamp-2 text-sm text-gray-500">
                         {item.description || 'Chef special prepared with quality ingredients.'}
                       </p>
-                      <p className="mt-2 text-2xl font-extrabold text-red-400">{formatCurrencyINR(item.price)}</p>
+                      <p className="mt-2 text-2xl font-extrabold text-red-600">{formatCurrencyINR(item.price)}</p>
                     </div>
 
                     <div className="ml-3 flex flex-col items-end justify-between gap-3">
@@ -188,11 +188,11 @@ export default function CustomerMenuPage() {
       </main>
 
       {totalItemCount > 0 ? (
-        <div className="customer-cart-cta fixed bottom-20 left-0 right-0 z-40 px-4">
-          <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-2xl border border-red-400/45 bg-black/95 px-4 py-3 shadow-[0_16px_30px_rgba(0,0,0,0.45)]">
+        <div className="customer-cart-cta fixed bottom-20 left-0 right-0 z-40 px-4 pointer-events-none">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
             <div>
-              <p className="text-xs uppercase tracking-[0.12em] text-slate-300">Cart</p>
-              <p className="text-sm font-semibold text-white">{totalItemCount} items</p>
+              <p className="text-xs uppercase tracking-[0.12em] text-gray-500">Cart</p>
+              <p className="text-sm font-semibold text-gray-900">{totalItemCount} items</p>
             </div>
             <button className="customer-cta-btn" onClick={openCheckout}>
               View Cart {formatCurrencyINR(total)}

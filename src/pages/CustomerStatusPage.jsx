@@ -7,11 +7,11 @@ import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl } from '../utils/customerUrl'
 
 const statusTone = {
-  Pending: 'border-amber-300/45 bg-amber-200/15 text-amber-100',
-  Preparing: 'border-sky-300/45 bg-sky-200/15 text-sky-100',
-  Ready: 'border-violet-300/45 bg-violet-200/15 text-violet-100',
-  Served: 'border-emerald-300/45 bg-emerald-200/15 text-emerald-100',
-  Completed: 'border-slate-300/45 bg-slate-200/15 text-slate-100',
+  Pending: 'border-amber-200 bg-amber-50 text-amber-700',
+  Preparing: 'border-sky-200 bg-sky-50 text-sky-700',
+  Ready: 'border-violet-200 bg-violet-50 text-violet-700',
+  Served: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  Completed: 'border-gray-200 bg-gray-50 text-gray-600',
 }
 
 export default function CustomerStatusPage() {
@@ -59,7 +59,7 @@ export default function CustomerStatusPage() {
       <header className="mb-4 flex items-center justify-between">
         <div>
           <p className="customer-page-title text-xs font-semibold uppercase">Order Status Board</p>
-          <h1 className="text-2xl font-bold text-white">Your Orders</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Your Orders</h1>
           <p className="text-sm royal-muted">Table {tableNumber} • Live updates every 8s</p>
         </div>
         <Button
@@ -71,12 +71,12 @@ export default function CustomerStatusPage() {
         </Button>
       </header>
 
-      {error && <p className="mb-3 text-sm text-amber-200">{error}</p>}
+      {error && <p className="mb-3 text-sm text-red-500">{error}</p>}
 
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="customer-kpi p-3">
           <p className="text-xs uppercase tracking-wider royal-muted">Total Orders</p>
-          <p className="mt-1 text-2xl font-bold text-amber-50">{orders.length}</p>
+          <p className="mt-1 text-2xl font-bold text-gray-900">{orders.length}</p>
         </div>
         <div className="customer-kpi p-3">
           <p className="text-xs uppercase tracking-wider royal-muted">Active Orders</p>
@@ -92,19 +92,19 @@ export default function CustomerStatusPage() {
             <div key={order._id} className="lux-card royal-reveal royal-reveal-delay-1 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-semibold text-amber-50">Order #{order._id.slice(-6).toUpperCase()}</p>
+                  <p className="text-sm font-semibold text-gray-900">Order #{order._id.slice(-6).toUpperCase()}</p>
                   <p className="text-xs royal-muted">{new Date(order.createdAt).toLocaleString()}</p>
                 </div>
                 <span
                   className={`rounded-full border px-3 py-1 text-xs font-semibold ${
-                    statusTone[order.orderStatus] || 'border-slate-300/45 bg-slate-200/15 text-slate-100'
+                    statusTone[order.orderStatus] || 'border-gray-200 bg-gray-50 text-gray-600'
                   }`}
                 >
                   {order.orderStatus}
                 </span>
               </div>
 
-              <div className="mt-3 rounded-lg border border-amber-200/20 bg-white/8 p-2 text-sm text-amber-50">
+              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-2 text-sm text-gray-800">
                 {order.items.map((item) => (
                   <p key={`${order._id}-${item.menuItemId}`}>{item.name} x{item.quantity}</p>
                 ))}
@@ -113,11 +113,11 @@ export default function CustomerStatusPage() {
               <div className="mt-3 flex items-center justify-between">
                 <div>
                   {order.discountTotal > 0 ? (
-                    <p className="text-xs text-emerald-300">
+                    <p className="text-xs text-emerald-600">
                       Saved {formatCurrencyINR(order.discountTotal)}{order.couponCode ? ` using ${order.couponCode}` : ''}
                     </p>
                   ) : null}
-                  <p className="text-sm font-semibold text-amber-50">Total: {formatCurrencyINR(order.totalAmount)}</p>
+                  <p className="text-sm font-semibold text-gray-900">Total: {formatCurrencyINR(order.totalAmount)}</p>
                 </div>
                 <Button
                   variant="secondary"

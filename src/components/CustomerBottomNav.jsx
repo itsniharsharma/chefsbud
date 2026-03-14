@@ -11,7 +11,7 @@ function navClassName({ isActive }) {
   return `${baseItemClass} ${
     isActive
       ? 'customer-nav-item-active border'
-      : 'border border-transparent text-slate-400 hover:bg-white/10 hover:text-white'
+      : 'border border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-900'
   }`
 }
 
@@ -21,7 +21,7 @@ export default function CustomerBottomNav({ restaurantSlug, tableNumber }) {
   const statusPath = buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber })
 
   return (
-    <footer className="customer-nav-shell safe-bottom fixed bottom-0 left-0 right-0 z-40 px-3 pt-2">
+    <footer className="customer-nav-shell safe-bottom fixed bottom-0 left-0 right-0 z-50 px-3 pt-2">
       <nav className="mx-auto grid max-w-md grid-cols-3 gap-2">
         <NavLink to={menuPath} end className={navClassName}>
           <span className="text-sm">◉</span>
