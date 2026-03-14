@@ -195,6 +195,7 @@ export async function updateOrderStatus(req, res, next) {
 
     invalidateCacheByTags([
       `analytics:${String(restaurant._id)}`,
+      `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(order._id)}`,
     ])
@@ -232,6 +233,7 @@ export async function deleteOrder(req, res, next) {
 
     invalidateCacheByTags([
       `analytics:${String(restaurant._id)}`,
+      `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(req.params.orderId)}`,
     ])
@@ -294,6 +296,7 @@ export async function createOrder(req, res, next) {
 
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
     invalidateCacheByTags([
+      `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurantSlug}:${tableNumber}`,
       `orders:order:${String(order._id)}`,
     ])

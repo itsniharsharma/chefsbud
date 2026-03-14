@@ -124,6 +124,7 @@ export async function getDashboard(req, res, next) {
   }
 }
 
+/* Analytics aggregation endpoint — disabled until AWS data pipeline is ready
 export async function getAnalytics(req, res, next) {
   try {
     const ownerRestaurant = await ensureOwnerRestaurant(req.user._id, req.params.restaurantId)
@@ -139,3 +140,4 @@ export async function getAnalytics(req, res, next) {
     next(error)
   }
 }
+*/

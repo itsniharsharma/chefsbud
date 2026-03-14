@@ -51,7 +51,18 @@ router.get(
 	}),
 	getPublicOrderStatus,
 )
-router.get('/:restaurantId', requireAuth, requireActiveBilling, getOrders)
+router.get(
+	'/:restaurantId',
+	requireAuth,
+	requireActiveBilling,
+	cacheResponse({
+		ttlSeconds: 10,
+		keyBuilder: (req) =>
+			`orders:board:${req.user._id}:${req.params.restaurantId}:v:${req.query.view || 'active'}:s:${req.query.status || 'All'}:sc:${req.query.scope || 'all'}`,
+		tagsBuilder: (req) => [`orders:board:${req.params.restaurantId}`],
+	}),
+	getOrders,
+)
 router.patch(
 	'/:orderId/status',
 	requireAuth,

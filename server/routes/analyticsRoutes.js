@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { getAnalytics, getDashboard } from '../controllers/analyticsController.js'
+import { getDashboard } from '../controllers/analyticsController.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireActiveBilling } from '../middleware/billing.js'
 import { cacheResponse } from '../services/responseCache.js'
@@ -17,6 +17,7 @@ router.get(
 	}),
 	getDashboard,
 )
+/* Analytics detail route — disabled until AWS data pipeline is ready
 router.get(
 	'/:restaurantId',
 	requireAuth,
@@ -28,5 +29,6 @@ router.get(
 	}),
 	getAnalytics,
 )
+*/
 
 export default router

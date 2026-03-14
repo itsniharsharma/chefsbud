@@ -3,8 +3,18 @@ import app from './app.js'
 import { connectDB } from './config/db.js'
 import { startOrderArchiveScheduler } from './services/orderArchiveService.js'
 import { initSocketServer } from './realtime/socketServer.js'
+import { logger } from './utils/logger.js'
 
 const PORT = process.env.PORT || 5000
+
+process.on('uncaughtException', (error) => {
+  logger.error('uncaught_exception', { errorMessage: error?.message, stack: error?.stack })
+  process.exit(1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandled_rejection', { reason: String(reason?.message || reason) })
+})
 
 async function start() {
   await connectDB()

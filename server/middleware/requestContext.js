@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { logger } from '../utils/logger.js'
 
+const SLOW_REQUEST_THRESHOLD_MS = Number(process.env.SLOW_REQUEST_THRESHOLD_MS || 3000)
+
 function buildRequestId() {
   const fn = crypto.randomUUID
   if (typeof fn === 'function') {
@@ -18,12 +20,14 @@ export function requestContext(req, res, next) {
 
   res.on('finish', () => {
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000
-    logger.info('http_request', {
+    const rounded = Math.round(elapsedMs * 100) / 100
+    const isSlow = rounded > SLOW_REQUEST_THRESHOLD_MS
+    logger[isSlow ? 'warn' : 'info'](isSlow ? 'slow_request' : 'http_request', {
       requestId,
       method: req.method,
       path: req.originalUrl || req.url,
       statusCode: res.statusCode,
-      durationMs: Math.round(elapsedMs * 100) / 100,
+      durationMs: rounded,
       ip: req.ip,
       userId: req.user?._id || null,
     })
