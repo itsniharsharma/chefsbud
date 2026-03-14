@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { menuService } from '../services/menuService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
@@ -9,6 +9,7 @@ import { buildCustomerCheckoutUrl } from '../utils/customerUrl'
 export default function CustomerMenuPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber } = useParams()
+  const [searchParams] = useSearchParams()
   const { getSession, addItem, removeItem } = useCustomerCart()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -67,7 +68,9 @@ export default function CustomerMenuPage() {
 
   const selectedCategoryName = menu.categories.find((c) => c._id === activeCategory)?.name || ''
 
-  const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber }))
+  const floorNumber = Number(searchParams.get('floor') || 1)
+
+  const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
 
   if (loading) {
     return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-gray-500">Loading menu…</div>
@@ -224,7 +227,7 @@ export default function CustomerMenuPage() {
         </div>
       )}
 
-      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} />
+      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} floorNumber={floorNumber} />
     </div>
   )
 }

@@ -20,6 +20,7 @@ router.post(
 	[
 		body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
 		body('tableNumber').isInt({ min: 1, max: 500 }),
+		body('floorNumber').optional().isInt({ min: 1, max: 500 }),
 		body('items').isArray({ min: 1, max: 50 }),
 		body('items.*.menuItemId').isString().trim().notEmpty(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),

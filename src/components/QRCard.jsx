@@ -11,6 +11,7 @@ export default function QRCard({ tableNumber, floorNumber = 1, slug }) {
       baseUrl: import.meta.env.VITE_FRONTEND_BASE_URL || window.location.origin,
       slug,
       tableNumber,
+      floorNumber,
     })
     : ''
 

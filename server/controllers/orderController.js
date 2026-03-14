@@ -54,6 +54,44 @@ async function listOrdersByQuery(query, pagination) {
     .lean()
 }
 
+async function enrichOrdersWithFloorNumbers(restaurantId, orders = []) {
+  if (!Array.isArray(orders) || !orders.length) {
+    return orders
+  }
+
+  const missingFloorOrders = orders.filter((order) => !Number.isFinite(Number(order.floorNumber)) || Number(order.floorNumber) < 1)
+  if (!missingFloorOrders.length) {
+    return orders
+  }
+
+  const uniqueTableNumbers = [...new Set(missingFloorOrders.map((order) => Number(order.tableNumber)).filter((num) => Number.isFinite(num) && num > 0))]
+
+  if (!uniqueTableNumbers.length) {
+    return orders.map((order) => ({ ...order, floorNumber: Number(order.floorNumber || 1) }))
+  }
+
+  const tables = await Table.find({
+    restaurantId,
+    tableNumber: { $in: uniqueTableNumbers },
+  })
+    .select('tableNumber floorNumber')
+    .lean()
+
+  const floorByTableNumber = new Map(tables.map((table) => [Number(table.tableNumber), Number(table.floorNumber || 1)]))
+
+  return orders.map((order) => {
+    const currentFloor = Number(order.floorNumber)
+    if (Number.isFinite(currentFloor) && currentFloor >= 1) {
+      return order
+    }
+
+    return {
+      ...order,
+      floorNumber: Number(floorByTableNumber.get(Number(order.tableNumber)) || 1),
+    }
+  })
+}
+
 async function buildOrderItems(restaurantId, items) {
   if (!Array.isArray(items) || !items.length) {
     const error = new Error('Order items are required')
@@ -112,7 +150,7 @@ export async function getOrders(req, res, next) {
     const scope = req.query.scope === 'today' ? 'today' : 'all'
 
     if (req.query.includeRecent === 'true') {
-      const [activeOrders, recentOrders] = await Promise.all([
+      const [rawActiveOrders, rawRecentOrders] = await Promise.all([
         listOrdersByQuery(
           buildOrderQuery({
             restaurantId: req.params.restaurantId,
@@ -132,11 +170,16 @@ export async function getOrders(req, res, next) {
         ),
       ])
 
+      const [activeOrders, recentOrders] = await Promise.all([
+        enrichOrdersWithFloorNumbers(restaurant._id, rawActiveOrders),
+        enrichOrdersWithFloorNumbers(restaurant._id, rawRecentOrders),
+      ])
+
       return res.json({ activeOrders, recentOrders })
     }
 
     const view = req.query.view === 'recent' ? 'recent' : 'active'
-    const orders = await listOrdersByQuery(
+    const rawOrders = await listOrdersByQuery(
       buildOrderQuery({
         restaurantId: req.params.restaurantId,
         view,
@@ -145,6 +188,8 @@ export async function getOrders(req, res, next) {
       }),
       pagination,
     )
+
+    const orders = await enrichOrdersWithFloorNumbers(restaurant._id, rawOrders)
 
     return res.json(orders)
   } catch (error) {
@@ -240,7 +285,7 @@ export async function deleteOrder(req, res, next) {
 
 export async function createOrder(req, res, next) {
   try {
-    const { restaurantSlug, tableNumber, items, paymentStatus = 'Unpaid' } = req.body
+    const { restaurantSlug, tableNumber, floorNumber, items, paymentStatus = 'Unpaid' } = req.body
 
     const restaurant = await Restaurant.findOne({ slug: restaurantSlug }).lean()
     if (!restaurant) {
@@ -257,16 +302,23 @@ export async function createOrder(req, res, next) {
     }
 
     const normalizedTableNumber = Number(tableNumber)
+    const parsedRequestFloorNumber = Number(floorNumber)
+    const requestedFloorNumber =
+      Number.isFinite(parsedRequestFloorNumber) && parsedRequestFloorNumber >= 1
+        ? Math.floor(parsedRequestFloorNumber)
+        : null
+
     const table = await Table.findOne({
       restaurantId: restaurant._id,
       tableNumber: normalizedTableNumber,
+      ...(requestedFloorNumber ? { floorNumber: requestedFloorNumber } : {}),
     })
       .select('floorNumber')
       .lean()
 
     const order = await Order.create({
       restaurantId: restaurant._id,
-      floorNumber: Number(table?.floorNumber || 1),
+      floorNumber: Number(table?.floorNumber || requestedFloorNumber || 1),
       tableNumber: normalizedTableNumber,
       items: orderItems,
       subtotalAmount: pricing.subtotalAmount,

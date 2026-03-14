@@ -15,10 +15,10 @@ function navClassName({ isActive }) {
   }`
 }
 
-export default function CustomerBottomNav({ restaurantSlug, tableNumber }) {
-  const menuPath = buildCustomerMenuUrl({ slug: restaurantSlug, tableNumber })
-  const ordersPath = buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber })
-  const statusPath = buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber })
+export default function CustomerBottomNav({ restaurantSlug, tableNumber, floorNumber }) {
+  const menuPath = buildCustomerMenuUrl({ slug: restaurantSlug, tableNumber, floorNumber })
+  const ordersPath = buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber })
+  const statusPath = buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber })
 
   return (
     <footer className="customer-nav-shell safe-bottom fixed bottom-0 left-0 right-0 z-50 px-3 pt-2">

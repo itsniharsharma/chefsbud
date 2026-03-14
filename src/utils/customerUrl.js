@@ -6,22 +6,36 @@ function toSafeSegment(value) {
   return encodeURIComponent(String(value ?? '').trim())
 }
 
-export function buildCustomerMenuUrl({ baseUrl, slug, tableNumber }) {
+function appendFloorQuery(url, floorNumber) {
+  const parsedFloor = Number(floorNumber)
+  if (!Number.isFinite(parsedFloor) || parsedFloor < 1) {
+    return url
+  }
+
+  const safeFloor = encodeURIComponent(String(Math.floor(parsedFloor)))
+  return `${url}?floor=${safeFloor}`
+}
+
+export function buildCustomerMenuUrl({ baseUrl, slug, tableNumber, floorNumber }) {
   const normalizedBase = normalizeBaseUrl(baseUrl)
   const safeSlug = toSafeSegment(slug)
   const safeTableNumber = toSafeSegment(tableNumber)
-  return `${normalizedBase}/r/${safeSlug}/t/${safeTableNumber}`
+  const basePath = `${normalizedBase}/r/${safeSlug}/t/${safeTableNumber}`
+  return appendFloorQuery(basePath, floorNumber)
 }
 
-export function buildCustomerCheckoutUrl({ baseUrl, slug, tableNumber }) {
-  return `${buildCustomerMenuUrl({ baseUrl, slug, tableNumber })}/checkout`
+export function buildCustomerCheckoutUrl({ baseUrl, slug, tableNumber, floorNumber }) {
+  const basePath = `${normalizeBaseUrl(baseUrl)}/r/${toSafeSegment(slug)}/t/${toSafeSegment(tableNumber)}/checkout`
+  return appendFloorQuery(basePath, floorNumber)
 }
 
-export function buildCustomerStatusUrl({ baseUrl, slug, tableNumber }) {
-  return `${buildCustomerMenuUrl({ baseUrl, slug, tableNumber })}/status`
+export function buildCustomerStatusUrl({ baseUrl, slug, tableNumber, floorNumber }) {
+  const basePath = `${normalizeBaseUrl(baseUrl)}/r/${toSafeSegment(slug)}/t/${toSafeSegment(tableNumber)}/status`
+  return appendFloorQuery(basePath, floorNumber)
 }
 
-export function buildCustomerOrderTrackingUrl({ baseUrl, slug, tableNumber, orderId }) {
+export function buildCustomerOrderTrackingUrl({ baseUrl, slug, tableNumber, orderId, floorNumber }) {
   const safeOrderId = toSafeSegment(orderId)
-  return `${buildCustomerMenuUrl({ baseUrl, slug, tableNumber })}/order/${safeOrderId}`
+  const basePath = `${normalizeBaseUrl(baseUrl)}/r/${toSafeSegment(slug)}/t/${toSafeSegment(tableNumber)}/order/${safeOrderId}`
+  return appendFloorQuery(basePath, floorNumber)
 }

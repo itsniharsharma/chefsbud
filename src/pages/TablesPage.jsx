@@ -33,7 +33,23 @@ export default function TablesPage() {
   })
 
   const generateTables = () => {
-    createTablesMutation.mutate({ count: Number(count), floorNumber: Number(floorNumber || 1) })
+    const nextFloorNumber = Number(floorNumber)
+    const nextCount = Number(count)
+
+    if (!Number.isFinite(nextFloorNumber) || nextFloorNumber < 1) {
+      setError('Floor number must be at least 1')
+      return
+    }
+
+    if (!Number.isFinite(nextCount) || nextCount < 1) {
+      setError('Table count must be at least 1')
+      return
+    }
+
+    createTablesMutation.mutate({
+      count: Math.floor(nextCount),
+      floorNumber: Math.floor(nextFloorNumber),
+    })
   }
 
   const downloadAllQRCodes = async () => {
@@ -54,6 +70,7 @@ export default function TablesPage() {
           baseUrl: frontendBaseUrl,
           slug: restaurant.slug,
           tableNumber,
+          floorNumber: floor,
         })
         const dataUrl = await QRCode.toDataURL(qrValue, {
           width: 720,
@@ -81,6 +98,7 @@ export default function TablesPage() {
             baseUrl: frontendBaseUrl,
             slug: restaurant.slug,
             tableNumber: '<tableNumber>',
+            floorNumber: '<floorNumber>',
           }),
         ].join('\n'),
       )
@@ -110,22 +128,28 @@ export default function TablesPage() {
         </div>
         {error && <p className="mb-3 text-sm text-[var(--primary)]">{error}</p>}
         <div className="flex flex-col gap-3 md:flex-row">
-          <input
-            className="input max-w-xs"
-            type="number"
-            min="1"
-            value={floorNumber}
-            onChange={(e) => setFloorNumber(e.target.value)}
-            placeholder="Floor number"
-          />
-          <input
-            className="input max-w-xs"
-            type="number"
-            min="1"
-            value={count}
-            onChange={(e) => setCount(e.target.value)}
-          />
-          <Button onClick={generateTables}>Auto Generate Table Numbers</Button>
+          <label className="flex flex-col gap-1 text-sm text-slate-700">
+            <span className="font-medium">Floor number</span>
+            <input
+              className="input max-w-xs"
+              type="number"
+              min="1"
+              value={floorNumber}
+              onChange={(e) => setFloorNumber(e.target.value)}
+              placeholder="Floor number"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-slate-700">
+            <span className="font-medium">How many tables</span>
+            <input
+              className="input max-w-xs"
+              type="number"
+              min="1"
+              value={count}
+              onChange={(e) => setCount(e.target.value)}
+            />
+          </label>
+          <Button onClick={generateTables}>Generate QRs For This Floor</Button>
         </div>
       </div>
 

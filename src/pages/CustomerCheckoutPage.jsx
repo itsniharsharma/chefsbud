@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerCart } from '../hooks/useCustomerCart'
@@ -11,6 +11,7 @@ import { buildCustomerMenuUrl, buildCustomerStatusUrl } from '../utils/customerU
 export default function CustomerCheckoutPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber } = useParams()
+  const [searchParams] = useSearchParams()
   const { getSession, removeItem, addItem, setPaid, clearSession } = useCustomerCart()
   const [placing, setPlacing] = useState(false)
   const [message, setMessage] = useState('')
@@ -20,6 +21,7 @@ export default function CustomerCheckoutPage() {
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
   const paid = session.paid
+  const floorNumber = Number(searchParams.get('floor') || 1)
 
   const subtotal = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.price * item.quantity, 0)
@@ -61,6 +63,7 @@ export default function CustomerCheckoutPage() {
       await orderService.create({
         restaurantSlug,
         tableNumber: Number(tableNumber),
+        floorNumber,
         paymentStatus: 'Paid',
         couponCode,
         items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
@@ -69,7 +72,7 @@ export default function CustomerCheckoutPage() {
       clearSession(restaurantSlug, tableNumber)
       setMessage('Order placed successfully')
       setTimeout(() => {
-        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber }))
+        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
       }, 900)
     } catch (requestError) {
       setMessage(requestError?.response?.data?.message || 'Failed to place order')
@@ -88,7 +91,7 @@ export default function CustomerCheckoutPage() {
         <Button
           variant="secondary"
           className="royal-button-secondary"
-          onClick={() => navigate(buildCustomerMenuUrl({ slug: restaurantSlug, tableNumber }))}
+          onClick={() => navigate(buildCustomerMenuUrl({ slug: restaurantSlug, tableNumber, floorNumber }))}
         >
           Back
         </Button>
@@ -175,7 +178,7 @@ export default function CustomerCheckoutPage() {
         </div>
       </div>
 
-      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} />
+      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} floorNumber={floorNumber} />
     </div>
   )
 }

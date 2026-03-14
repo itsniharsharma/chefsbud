@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { orderService } from '../services/orderService'
@@ -11,6 +11,8 @@ const steps = ['Pending', 'Preparing', 'Ready', 'Served', 'Completed']
 export default function CustomerOrderTrackingPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber, orderId } = useParams()
+  const [searchParams] = useSearchParams()
+  const floorNumber = Number(searchParams.get('floor') || 1)
   const [order, setOrder] = useState(null)
   const [error, setError] = useState('')
 
@@ -55,7 +57,7 @@ export default function CustomerOrderTrackingPage() {
         <Button
           variant="secondary"
           className="royal-button-secondary"
-          onClick={() => navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber }))}
+          onClick={() => navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))}
         >
           Back to Status
         </Button>
@@ -94,7 +96,7 @@ export default function CustomerOrderTrackingPage() {
         )}
       </div>
 
-      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} />
+      <CustomerBottomNav restaurantSlug={restaurantSlug} tableNumber={tableNumber} floorNumber={floorNumber} />
     </div>
   )
 }
