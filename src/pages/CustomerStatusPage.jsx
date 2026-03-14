@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
-import { orderService } from '../services/orderService'
+import { useCustomerTableOrdersQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl } from '../utils/customerUrl'
 
@@ -19,42 +19,23 @@ export default function CustomerStatusPage() {
   const { restaurantSlug, tableNumber } = useParams()
   const [searchParams] = useSearchParams()
   const floorNumber = Number(searchParams.get('floor') || 1)
-  const [orders, setOrders] = useState([])
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let active = true
-    const fetchOrders = () => {
-      orderService
-        .trackTable(restaurantSlug, tableNumber)
-        .then((data) => {
-          if (!active) return
-          setOrders(data)
-          setError('')
-        })
-        .catch((requestError) => {
-          if (!active) return
-          setError(requestError?.response?.data?.message || 'Unable to load order statuses')
-        })
-    }
-
-    fetchOrders()
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchOrders()
-      }
-    }, 8000)
-
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [restaurantSlug, tableNumber])
+  const {
+    data: orders = [],
+    error,
+    isLoading,
+    isFetching,
+  } = useCustomerTableOrdersQuery({ restaurantSlug, tableNumber })
 
   const activeOrders = useMemo(
     () => orders.filter((order) => !['Served', 'Completed'].includes(order.orderStatus)),
     [orders],
   )
+
+  const errorMessage = error?.response?.data?.message || error?.message || ''
+
+  if (isLoading && !orders.length) {
+    return <div className="customer-shell p-4 pb-32 text-sm royal-muted">Loading your orders...</div>
+  }
 
   return (
     <div className="customer-shell p-4 pb-32">
@@ -73,7 +54,8 @@ export default function CustomerStatusPage() {
         </Button>
       </header>
 
-      {error && <p className="mb-3 text-sm text-red-500">{error}</p>}
+      {isFetching ? <p className="mb-3 text-xs royal-muted">Refreshing order status...</p> : null}
+      {errorMessage ? <p className="mb-3 text-sm text-red-500">{errorMessage}</p> : null}
 
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="customer-kpi p-3">

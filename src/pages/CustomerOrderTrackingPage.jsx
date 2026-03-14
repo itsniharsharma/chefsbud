@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
-import { orderService } from '../services/orderService'
+import { useCustomerOrderStatusQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerStatusUrl } from '../utils/customerUrl'
 
@@ -13,39 +13,23 @@ export default function CustomerOrderTrackingPage() {
   const { restaurantSlug, tableNumber, orderId } = useParams()
   const [searchParams] = useSearchParams()
   const floorNumber = Number(searchParams.get('floor') || 1)
-  const [order, setOrder] = useState(null)
-  const [error, setError] = useState('')
+  const {
+    data: order,
+    error,
+    isLoading,
+    isFetching,
+  } = useCustomerOrderStatusQuery({ restaurantSlug, tableNumber, orderId })
 
-  useEffect(() => {
-    let active = true
-    const fetchStatus = () => {
-      orderService
-        .track(restaurantSlug, tableNumber, orderId)
-        .then((data) => {
-          if (!active) return
-          setOrder(data)
-          setError('')
-        })
-        .catch((requestError) => {
-          if (!active) return
-          setError(requestError?.response?.data?.message || 'Unable to fetch order status')
-        })
-    }
+  const currentIndex = useMemo(
+    () => (order?.orderStatus ? Math.max(0, steps.indexOf(order.orderStatus)) : 0),
+    [order?.orderStatus],
+  )
 
-    fetchStatus()
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchStatus()
-      }
-    }, 8000)
+  const errorMessage = error?.response?.data?.message || error?.message || ''
 
-    return () => {
-      active = false
-      clearInterval(interval)
-    }
-  }, [restaurantSlug, tableNumber, orderId])
-
-  const currentIndex = order?.orderStatus ? Math.max(0, steps.indexOf(order.orderStatus)) : 0
+  if (isLoading && !order) {
+    return <div className="customer-shell p-4 pb-32 text-sm royal-muted">Loading order status...</div>
+  }
 
   return (
     <div className="customer-shell p-4 pb-32">
@@ -67,7 +51,8 @@ export default function CustomerOrderTrackingPage() {
         <p className="text-sm royal-muted">Order ID: {orderId}</p>
         <p className="text-sm royal-muted">Table {tableNumber}</p>
 
-        {error && <p className="mt-2 text-sm text-amber-200">{error}</p>}
+        {isFetching ? <p className="mt-2 text-xs royal-muted">Refreshing status...</p> : null}
+        {errorMessage ? <p className="mt-2 text-sm text-amber-200">{errorMessage}</p> : null}
 
         <div className="mt-4 grid gap-2">
           {steps.map((step, index) => {

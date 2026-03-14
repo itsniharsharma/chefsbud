@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
+import { queryKeys } from '../lib/queryKeys'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { orderService } from '../services/orderService'
 import { offerService } from '../services/offerService'
@@ -10,6 +12,7 @@ import { buildCustomerMenuUrl, buildCustomerStatusUrl } from '../utils/customerU
 
 export default function CustomerCheckoutPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { restaurantSlug, tableNumber } = useParams()
   const [searchParams] = useSearchParams()
   const { getSession, removeItem, addItem, setPaid, clearSession } = useCustomerCart()
@@ -60,7 +63,7 @@ export default function CustomerCheckoutPage() {
     setMessage('')
 
     try {
-      await orderService.create({
+      const createdOrder = await orderService.create({
         restaurantSlug,
         tableNumber: Number(tableNumber),
         floorNumber,
@@ -68,6 +71,16 @@ export default function CustomerCheckoutPage() {
         couponCode,
         items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
       })
+
+      const tableOrdersKey = queryKeys.customer.tableOrders(restaurantSlug, tableNumber)
+      const orderStatusKey = queryKeys.customer.orderStatus(restaurantSlug, tableNumber, createdOrder._id)
+
+      queryClient.setQueryData(tableOrdersKey, (existingOrders) => {
+        const normalizedOrders = Array.isArray(existingOrders) ? existingOrders : []
+        const withoutCreated = normalizedOrders.filter((order) => String(order?._id) !== String(createdOrder._id))
+        return [createdOrder, ...withoutCreated]
+      })
+      queryClient.setQueryData(orderStatusKey, createdOrder)
 
       clearSession(restaurantSlug, tableNumber)
       setMessage('Order placed successfully')
