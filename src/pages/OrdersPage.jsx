@@ -100,43 +100,9 @@ export default function OrdersPage() {
     },
   })
 
-  const deleteOrderMutation = useMutation({
-    mutationFn: (id) => orderService.delete(id),
-    onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
-      const previousBoards = queryClient.getQueriesData({
-        queryKey: ['dashboard', 'orders-board', restaurant?._id],
-      })
-
-      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
-        applyOrderUpdateToBoard(boardData, id, null, true),
-      )
-
-      return { previousBoards }
-    },
-    onSuccess: () => {
-      setError('')
-      refreshBoard()
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
-    },
-    onError: (requestError, _variables, context) => {
-      if (context?.previousBoards) {
-        for (const [key, value] of context.previousBoards) {
-          queryClient.setQueryData(key, value)
-        }
-      }
-      setError(requestError?.response?.data?.message || 'Failed to delete order')
-    },
-  })
-
   const onStatusChange = (id, status) => {
     if (!restaurant?._id) return
     updateStatusMutation.mutate({ id, status })
-  }
-
-  const onDeleteOrder = (id) => {
-    if (!restaurant?._id) return
-    deleteOrderMutation.mutate(id)
   }
 
   return (
@@ -183,8 +149,6 @@ export default function OrdersPage() {
                 key={order._id || order.id}
                 order={order}
                 onStatusChange={onStatusChange}
-                onDelete={onDeleteOrder}
-                deleteLabel="Hide"
                 showStatusActions={false}
               />
             ))}

@@ -4,12 +4,11 @@ import { formatCurrencyINR } from '../utils/currency'
 
 const statuses = ['Pending', 'Preparing', 'Ready', 'Served', 'Completed']
 
-function OrderCard({ order, onStatusChange, onDelete, deleteLabel = 'Delete', showStatusActions = true }) {
+function OrderCard({ order, onStatusChange, showStatusActions = true }) {
   const orderId = order._id || order.id
   const label = order.orderStatus || order.status
   const total = order.totalAmount ?? order.total ?? 0
   const floorNumber = Number(order.floorNumber || 1)
-  const canDelete = (label === 'Served' || label === 'Completed') && !order.hiddenFromActive
   const itemText = Array.isArray(order.items)
     ? order.items
         .map((item) => {
@@ -47,11 +46,6 @@ function OrderCard({ order, onStatusChange, onDelete, deleteLabel = 'Delete', sh
               {status}
             </Button>
           ))}
-          {canDelete && (
-            <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => onDelete(orderId)}>
-              {deleteLabel}
-            </Button>
-          )}
         </div>
       ) : null}
     </div>
