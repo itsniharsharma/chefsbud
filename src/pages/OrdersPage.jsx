@@ -7,7 +7,7 @@ import { useAuth } from '../hooks/useAuth'
 import { queryKeys } from '../lib/queryKeys'
 import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
 
-const statusFilters = ['All', 'Pending', 'Preparing', 'Ready', 'Served', 'Completed']
+const statusFilters = ['All', 'Pending', 'Preparing', 'Ready', 'Served']
 
 export default function OrdersPage() {
   const { restaurant } = useAuth()
@@ -23,44 +23,22 @@ export default function OrdersPage() {
   })
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
-  const recentOrders = useMemo(() => data?.recentOrders || [], [data])
 
-  const applyOrderUpdateToBoard = (boardData, orderId, nextStatus, hideFromActive = false) => {
+  const applyOrderUpdateToBoard = (boardData, orderId, nextStatus) => {
     if (!boardData) return boardData
 
-    const normalize = (orders = []) => orders.map((order) => ({ ...order }))
-    const active = normalize(boardData.activeOrders)
-    const recent = normalize(boardData.recentOrders)
-
+    const active = (boardData.activeOrders || []).map((order) => ({ ...order }))
     const activeIndex = active.findIndex((order) => String(order._id || order.id) === String(orderId))
-    const recentIndex = recent.findIndex((order) => String(order._id || order.id) === String(orderId))
 
     if (activeIndex >= 0) {
-      const updated = {
-        ...active[activeIndex],
-        orderStatus: nextStatus || active[activeIndex].orderStatus,
-      }
-
-      if (hideFromActive) {
+      if (nextStatus === 'Completed') {
         active.splice(activeIndex, 1)
-        recent.unshift({ ...updated, hiddenFromActive: true })
       } else {
-        active[activeIndex] = updated
+        active[activeIndex] = { ...active[activeIndex], orderStatus: nextStatus }
       }
     }
 
-    if (recentIndex >= 0 && nextStatus) {
-      recent[recentIndex] = {
-        ...recent[recentIndex],
-        orderStatus: nextStatus,
-      }
-    }
-
-    return {
-      ...boardData,
-      activeOrders: active,
-      recentOrders: recent,
-    }
+    return { ...boardData, activeOrders: active }
   }
 
   const refreshBoard = () => {
@@ -78,9 +56,8 @@ export default function OrdersPage() {
         queryKey: ['dashboard', 'orders-board', restaurant?._id],
       })
 
-      const shouldMoveToRecent = status === 'Completed'
       queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
-        applyOrderUpdateToBoard(boardData, id, status, shouldMoveToRecent),
+        applyOrderUpdateToBoard(boardData, id, status),
       )
 
       return { previousBoards }
@@ -126,7 +103,7 @@ export default function OrdersPage() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4">
         <section className="space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
           <h2 className="text-base font-semibold text-slate-800">Active Orders</h2>
           <div className="grid grid-cols-1 gap-4">
@@ -138,21 +115,6 @@ export default function OrdersPage() {
               />
             ))}
             {!activeOrders.length && <p className="text-sm text-slate-500">No active orders in this view.</p>}
-          </div>
-        </section>
-
-        <section className="space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-800">Recent Orders</h2>
-          <div className="grid grid-cols-1 gap-4">
-            {recentOrders.map((order) => (
-              <OrderCard
-                key={order._id || order.id}
-                order={order}
-                onStatusChange={onStatusChange}
-                showStatusActions={false}
-              />
-            ))}
-            {!recentOrders.length && <p className="text-sm text-slate-500">No recent orders in this view.</p>}
           </div>
         </section>
       </div>

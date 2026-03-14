@@ -207,7 +207,7 @@ export default function BillingPage() {
     if (!restaurant?._id) return
     setLoading(true)
     orderService
-      .list(restaurant._id, { scope: 'all', limit: 200, view: 'recent' })
+      .list(restaurant._id, { scope: 'all', limit: 200, view: 'completed' })
       .then((data) => {
         setOrders(data)
         setError('')

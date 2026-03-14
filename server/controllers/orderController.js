@@ -15,8 +15,7 @@ async function getOwnerRestaurant(ownerId) {
 function buildOrderQuery({ restaurantId, view, status, scope }) {
   const query = { restaurantId, isArchived: false }
 
-  if (view === 'recent') {
-    query.hiddenFromActive = true
+  if (view === 'completed') {
     query.orderStatus = 'Completed'
   } else {
     query.hiddenFromActive = { $ne: true }
@@ -149,36 +148,7 @@ export async function getOrders(req, res, next) {
     const pagination = buildPagination(req.query)
     const scope = req.query.scope === 'today' ? 'today' : 'all'
 
-    if (req.query.includeRecent === 'true') {
-      const [rawActiveOrders, rawRecentOrders] = await Promise.all([
-        listOrdersByQuery(
-          buildOrderQuery({
-            restaurantId: req.params.restaurantId,
-            view: 'active',
-            status: req.query.status,
-            scope,
-          }),
-          pagination,
-        ),
-        listOrdersByQuery(
-          buildOrderQuery({
-            restaurantId: req.params.restaurantId,
-            view: 'recent',
-            scope,
-          }),
-          pagination,
-        ),
-      ])
-
-      const [activeOrders, recentOrders] = await Promise.all([
-        enrichOrdersWithFloorNumbers(restaurant._id, rawActiveOrders),
-        enrichOrdersWithFloorNumbers(restaurant._id, rawRecentOrders),
-      ])
-
-      return res.json({ activeOrders, recentOrders })
-    }
-
-    const view = req.query.view === 'recent' ? 'recent' : 'active'
+    const view = req.query.view === 'completed' ? 'completed' : 'active'
     const rawOrders = await listOrdersByQuery(
       buildOrderQuery({
         restaurantId: req.params.restaurantId,

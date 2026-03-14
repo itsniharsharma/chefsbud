@@ -6,19 +6,9 @@ export const orderService = {
   },
   listBoard(restaurantId, params = {}) {
     return api
-      .get(`/orders/${restaurantId}`, { params: { ...params, includeRecent: true } })
+      .get(`/orders/${restaurantId}`, { params: { ...params, view: 'active' } })
       .then((response) => response.data)
-      .then((data) => {
-        if (data && !Array.isArray(data) && Array.isArray(data.activeOrders) && Array.isArray(data.recentOrders)) {
-          return data
-        }
-
-        // Backward-compatible fallback when backend hasn't restarted with includeRecent support.
-        return Promise.all([
-          api.get(`/orders/${restaurantId}`, { params: { ...params, view: 'active' } }).then((response) => response.data),
-          api.get(`/orders/${restaurantId}`, { params: { ...params, view: 'recent', status: 'Completed' } }).then((response) => response.data),
-        ]).then(([activeOrders, recentOrders]) => ({ activeOrders, recentOrders }))
-      })
+      .then((activeOrders) => ({ activeOrders: Array.isArray(activeOrders) ? activeOrders : [] }))
   },
   updateStatus(orderId, orderStatus) {
     return api.patch(`/orders/${orderId}/status`, { orderStatus }).then((response) => response.data)
