@@ -141,8 +141,7 @@ export default function LandingPage() {
             <div className="lg:col-span-8">
               <p className="text-xs font-semibold uppercase tracking-[0.3em] text-red-200">Premium Restaurant Growth Platform</p>
               <h1 className="mt-3 text-4xl font-bold leading-tight md:text-6xl">
-                {/* Build a Restaurant */}
-                Anmol Randi
+                Build a Restaurant 
                 <span className="block text-red-300">People Remember for Service</span>
               </h1>
               <p className="mt-5 max-w-2xl text-sm text-slate-200 md:text-base">
