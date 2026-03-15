@@ -43,7 +43,7 @@ function OrderCard({ order, onStatusChange, onPrintKot, printingKotOrderId, show
           variant={isKotPrinted ? 'secondary' : 'primary'}
           className={isKotPrinted ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400' : ''}
           onClick={() => onPrintKot?.(order)}
-          disabled={isPrintingKot}
+          disabled={isPrintingKot || isKotPrinted}
         >
           {isPrintingKot ? 'Printing KOT...' : isKotPrinted ? 'KOT Printed' : 'Print KOT'}
         </Button>

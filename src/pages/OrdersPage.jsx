@@ -140,11 +140,14 @@ export default function OrdersPage() {
   const printKotForOrder = async (order) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
+    if (order?.kotPrinted) return
 
     setPrintingKotOrderId(orderId)
     setError('')
 
     try {
+      await markKotPrintedMutation.mutateAsync({ id: orderId })
+
       const printableItems = Array.isArray(order.items)
         ? order.items
             .map((item) => {
@@ -189,8 +192,6 @@ export default function OrdersPage() {
       opened.document.close()
       opened.focus()
       opened.print()
-
-      await markKotPrintedMutation.mutateAsync({ id: orderId })
     } catch (requestError) {
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
     } finally {
