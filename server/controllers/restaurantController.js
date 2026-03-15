@@ -1,6 +1,11 @@
 import Restaurant from '../models/Restaurant.js'
 import StaffAccount from '../models/StaffAccount.js'
 import bcrypt from 'bcrypt'
+import {
+  applyRestaurantPaymentConfig,
+  isRestaurantPaymentConfigComplete,
+  serializeRestaurantPaymentConfig,
+} from '../services/restaurantPaymentService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
 function normalizeUsername(value) {
@@ -27,7 +32,10 @@ export async function getMyRestaurant(req, res, next) {
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
-    return res.json(restaurant)
+    return res.json({
+      ...restaurant,
+      paymentConfig: serializeRestaurantPaymentConfig(restaurant.paymentConfig),
+    })
   } catch (error) {
     next(error)
   }
@@ -60,13 +68,57 @@ export async function updateMyRestaurant(req, res, next) {
 export async function getRestaurantBySlug(req, res, next) {
   try {
     const restaurant = await Restaurant.findOne({ slug: req.params.restaurantSlug })
-      .select('_id name slug address phone')
+      .select('name slug address phone paymentConfig')
       .lean()
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    return res.json(restaurant)
+    return res.json({
+      _id: restaurant._id,
+      name: restaurant.name,
+      slug: restaurant.slug,
+      address: restaurant.address,
+      phone: restaurant.phone,
+      acceptsOnlinePayments: isRestaurantPaymentConfigComplete(restaurant.paymentConfig),
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function getMyRestaurantPaymentConfig(req, res, next) {
+  try {
+    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
+      .select('paymentConfig +paymentConfig.keySecretEncrypted +paymentConfig.webhookSecretEncrypted')
+      .lean()
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    return res.json(serializeRestaurantPaymentConfig(restaurant.paymentConfig))
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function updateMyRestaurantPaymentConfig(req, res, next) {
+  try {
+    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
+      .select('paymentConfig +paymentConfig.keySecretEncrypted +paymentConfig.webhookSecretEncrypted')
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    applyRestaurantPaymentConfig(restaurant, {
+      enabled: req.body?.enabled,
+      keyId: req.body?.keyId,
+      keySecret: req.body?.keySecret,
+      webhookSecret: req.body?.webhookSecret,
+    })
+
+    await restaurant.save()
+    return res.json(serializeRestaurantPaymentConfig(restaurant.paymentConfig))
   } catch (error) {
     next(error)
   }

@@ -3,9 +3,12 @@ import { body } from 'express-validator'
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
 import {
+  confirmRestaurantRazorpayCheckout,
   createCheckout,
   createHybridSubscription,
+  createRestaurantRazorpayPaymentIntent,
   handleRazorpayWebhook,
+  handleRestaurantRazorpayWebhook,
   verifyHybridSubscription,
   verifyOrder,
 } from '../controllers/paymentController.js'
@@ -27,7 +30,40 @@ const paymentLimiter = createRateLimiter({
   keyFn: (req) => req.user?._id || req.ip,
 })
 
+const publicPaymentLimiter = createRateLimiter({
+  id: 'payments-public',
+  capacity: Number(process.env.RATE_LIMIT_PUBLIC_PAYMENTS_CAPACITY || 40),
+  windowMs: Number(process.env.RATE_LIMIT_PUBLIC_PAYMENTS_WINDOW_MS || 60_000),
+  keyFn: (req) => req.ip,
+})
+
 router.post('/webhook', webhookLimiter, handleRazorpayWebhook)
+router.post('/razorpay/webhook', webhookLimiter, handleRestaurantRazorpayWebhook)
+router.post(
+  '/razorpay/order-intent',
+  publicPaymentLimiter,
+  [
+    body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
+    body('tableNumber').isInt({ min: 1, max: 500 }),
+    body('floorNumber').optional().isInt({ min: 1, max: 500 }),
+    body('items').isArray({ min: 1, max: 50 }),
+    body('items.*.menuItemId').isString().trim().notEmpty(),
+    body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
+    body('couponCode').optional().isString().trim().isLength({ max: 40 }),
+  ],
+  createRestaurantRazorpayPaymentIntent,
+)
+router.post(
+  '/razorpay/checkout/confirm',
+  publicPaymentLimiter,
+  [
+    body('orderId').isString().trim().notEmpty(),
+    body('razorpay_order_id').isString().trim().notEmpty(),
+    body('razorpay_payment_id').isString().trim().notEmpty(),
+    body('razorpay_signature').isString().trim().notEmpty(),
+  ],
+  confirmRestaurantRazorpayCheckout,
+)
 
 router.post(
   '/checkout',

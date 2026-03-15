@@ -7,7 +7,7 @@ import { useAuth } from '../hooks/useAuth'
 import { queryKeys } from '../lib/queryKeys'
 import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
 
-const statusFilters = ['All', 'Pending', 'Preparing', 'Ready', 'Served']
+const statusFilters = ['All', 'Confirmed', 'Preparing', 'Ready', 'Served']
 
 export default function OrdersPage() {
   const { restaurant } = useAuth()

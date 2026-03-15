@@ -13,6 +13,7 @@ const orderItemSchema = new mongoose.Schema(
 const orderSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
+    restaurantSlug: { type: String, required: true, trim: true, index: true },
     floorNumber: { type: Number, required: true, min: 1, default: 1 },
     tableNumber: { type: Number, required: true },
     items: { type: [orderItemSchema], required: true },
@@ -37,10 +38,15 @@ const orderSchema = new mongoose.Schema(
     },
     couponCode: { type: String, default: '' },
     totalAmount: { type: Number, required: true, min: 0 },
-    paymentStatus: { type: String, enum: ['Unpaid', 'Paid'], default: 'Unpaid' },
+    paymentProvider: { type: String, enum: ['', 'razorpay'], default: '' },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Unpaid'], default: 'Unpaid' },
+    providerOrderId: { type: String, default: '', index: true },
+    providerPaymentId: { type: String, default: '', index: true },
+    paymentCapturedAt: { type: Date, default: null },
+    paymentFailureReason: { type: String, default: '' },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'Preparing', 'Ready', 'Served', 'Completed'],
+      enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],
       default: 'Pending',
     },
     completedAt: { type: Date, default: null },
@@ -63,5 +69,7 @@ orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
 orderSchema.index({ hiddenFromActive: 1, deletedByOwnerAt: 1, isArchived: 1 })
+orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
+orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })
 
 export default mongoose.model('Order', orderSchema)

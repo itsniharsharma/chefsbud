@@ -12,6 +12,16 @@ export default function SettingsPage() {
     phone: '',
   })
   const [message, setMessage] = useState('')
+  const [paymentMessage, setPaymentMessage] = useState('')
+  const [paymentForm, setPaymentForm] = useState({
+    enabled: false,
+    keyId: '',
+    keySecret: '',
+    webhookSecret: '',
+    hasKeySecret: false,
+    hasWebhookSecret: false,
+    isReady: false,
+  })
   const [staffMessage, setStaffMessage] = useState('')
   const [staffAccounts, setStaffAccounts] = useState([])
   const [staffForm, setStaffForm] = useState({
@@ -30,10 +40,26 @@ export default function SettingsPage() {
   }, [restaurant])
 
   useEffect(() => {
-    restaurantService
-      .listStaff()
-      .then((data) => {
-        setStaffAccounts(Array.isArray(data) ? data : [])
+    Promise.allSettled([restaurantService.listStaff(), restaurantService.getPaymentConfig()])
+      .then(([staffResult, paymentResult]) => {
+        if (staffResult.status === 'fulfilled') {
+          setStaffAccounts(Array.isArray(staffResult.value) ? staffResult.value : [])
+        } else {
+          setStaffAccounts([])
+        }
+
+        if (paymentResult.status === 'fulfilled') {
+          setPaymentForm((prev) => ({
+            ...prev,
+            enabled: Boolean(paymentResult.value?.enabled),
+            keyId: paymentResult.value?.keyId || '',
+            keySecret: '',
+            webhookSecret: '',
+            hasKeySecret: Boolean(paymentResult.value?.hasKeySecret),
+            hasWebhookSecret: Boolean(paymentResult.value?.hasWebhookSecret),
+            isReady: Boolean(paymentResult.value?.isReady),
+          }))
+        }
       })
       .catch(() => {
         setStaffAccounts([])
@@ -56,6 +82,35 @@ export default function SettingsPage() {
       })
       .catch((requestError) => {
         setMessage(requestError?.response?.data?.message || 'Failed to save settings')
+      })
+  }
+
+  const onSavePaymentConfig = (event) => {
+    event.preventDefault()
+    setPaymentMessage('')
+
+    restaurantService
+      .updatePaymentConfig({
+        enabled: paymentForm.enabled,
+        keyId: paymentForm.keyId,
+        keySecret: paymentForm.keySecret,
+        webhookSecret: paymentForm.webhookSecret,
+      })
+      .then((saved) => {
+        setPaymentForm((prev) => ({
+          ...prev,
+          enabled: Boolean(saved?.enabled),
+          keyId: saved?.keyId || '',
+          keySecret: '',
+          webhookSecret: '',
+          hasKeySecret: Boolean(saved?.hasKeySecret),
+          hasWebhookSecret: Boolean(saved?.hasWebhookSecret),
+          isReady: Boolean(saved?.isReady),
+        }))
+        setPaymentMessage(saved?.isReady ? 'Payment configuration saved and ready.' : 'Payment configuration saved.')
+      })
+      .catch((requestError) => {
+        setPaymentMessage(requestError?.response?.data?.message || 'Failed to save payment settings')
       })
   }
 
@@ -100,6 +155,43 @@ export default function SettingsPage() {
         <FormInput label="Address" value={form.address} onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))} />
         <FormInput label="Phone" value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} />
         <Button type="submit">Save Changes</Button>
+      </form>
+
+      <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSavePaymentConfig}>
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Payment Settings</h2>
+          <p className="text-xs text-slate-500">Connect this restaurant's Razorpay account. Secret fields are write-only and stay encrypted at rest.</p>
+        </div>
+        {paymentMessage && <p className="text-sm text-[var(--primary)]">{paymentMessage}</p>}
+        <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
+          <input
+            type="checkbox"
+            checked={paymentForm.enabled}
+            onChange={(e) => setPaymentForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+          />
+          Enable online payments for this restaurant
+        </label>
+        <FormInput
+          label="Razorpay Key ID"
+          value={paymentForm.keyId}
+          onChange={(e) => setPaymentForm((prev) => ({ ...prev, keyId: e.target.value }))}
+        />
+        <FormInput
+          label={`Razorpay Key Secret${paymentForm.hasKeySecret ? ' (leave blank to keep current)' : ''}`}
+          type="password"
+          value={paymentForm.keySecret}
+          onChange={(e) => setPaymentForm((prev) => ({ ...prev, keySecret: e.target.value }))}
+        />
+        <FormInput
+          label={`Razorpay Webhook Secret${paymentForm.hasWebhookSecret ? ' (leave blank to keep current)' : ''}`}
+          type="password"
+          value={paymentForm.webhookSecret}
+          onChange={(e) => setPaymentForm((prev) => ({ ...prev, webhookSecret: e.target.value }))}
+        />
+        <p className="text-xs text-slate-500">
+          Status: {paymentForm.isReady ? 'Ready for live checkout' : 'Incomplete configuration'}
+        </p>
+        <Button type="submit">Save Payment Settings</Button>
       </form>
 
       <form className="card max-w-3xl space-y-3 p-4" onSubmit={onCreateStaff}>

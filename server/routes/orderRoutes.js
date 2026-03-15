@@ -24,7 +24,7 @@ router.post(
 		body('items').isArray({ min: 1, max: 50 }),
 		body('items.*.menuItemId').isString().trim().notEmpty(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
-		body('paymentStatus').optional().isIn(['Paid', 'Unpaid']),
+		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
 	],
 	validateRequest,
 	createOrder,
@@ -68,7 +68,7 @@ router.patch(
 	requireAuth,
 	requireActiveBilling,
 	[
-		body('orderStatus').isIn(['Pending', 'Preparing', 'Ready', 'Served', 'Completed']),
+		body('orderStatus').isIn(['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']),
 	],
 	validateRequest,
 	updateOrderStatus,

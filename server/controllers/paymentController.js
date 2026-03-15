@@ -1,5 +1,7 @@
 import User from '../models/User.js'
+import Order from '../models/Order.js'
 import BillingEvent from '../models/BillingEvent.js'
+import RestaurantPaymentEvent from '../models/RestaurantPaymentEvent.js'
 import { validationResult } from 'express-validator'
 import {
   createCustomer,
@@ -10,7 +12,16 @@ import {
   verifySignature,
   verifyWebhookSignature,
 } from '../services/razorpayService.js'
+import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import { sendBillingStatusEmail } from '../services/emailService.js'
+import { emitOrderChanged } from '../realtime/orderEvents.js'
+import {
+  createRazorpayOrderForRestaurant,
+  isRestaurantPaymentConfigComplete,
+  verifyRestaurantCheckoutSignature,
+  verifyRestaurantWebhookSignature,
+} from '../services/restaurantPaymentService.js'
+import { invalidateCacheByTags } from '../services/responseCache.js'
 import {
   acquireWebhookLock,
   isWebhookProcessed,
@@ -399,6 +410,324 @@ export async function verifyHybridSubscription(req, res, next) {
     })
   } catch (error) {
     next(error)
+  }
+}
+
+function buildRestaurantOrderReceipt(orderId) {
+  return `rest_order_${String(orderId).slice(-8)}_${Date.now()}`
+}
+
+async function markRestaurantOrderPaid({ order, providerPaymentId = '', paymentFailureReason = '' }) {
+  if (!order) return null
+
+  const update = {
+    paymentStatus: 'Paid',
+    orderStatus: order.orderStatus === 'Completed' ? 'Completed' : 'Confirmed',
+    hiddenFromActive: false,
+    deletedByOwnerAt: null,
+    paymentProvider: 'razorpay',
+    paymentFailureReason: paymentFailureReason ? String(paymentFailureReason) : '',
+    paymentCapturedAt: new Date(),
+  }
+
+  if (providerPaymentId) {
+    update.providerPaymentId = String(providerPaymentId)
+  }
+
+  const updatedOrder = await Order.findOneAndUpdate(
+    { _id: order._id, restaurantId: order.restaurantId },
+    { $set: update },
+    { new: true, runValidators: true },
+  )
+
+  if (!updatedOrder) return null
+
+  invalidateCacheByTags([
+    `analytics:${String(updatedOrder.restaurantId)}`,
+    `orders:board:${String(updatedOrder.restaurantId)}`,
+    `orders:table:${order.restaurantSlug}:${updatedOrder.tableNumber}`,
+    `orders:order:${String(updatedOrder._id)}`,
+  ])
+  emitOrderChanged(updatedOrder.restaurantId, {
+    type: 'paid',
+    orderId: String(updatedOrder._id),
+    orderStatus: updatedOrder.orderStatus,
+    paymentStatus: updatedOrder.paymentStatus,
+  })
+
+  return updatedOrder
+}
+
+async function markRestaurantOrderFailed({ order, paymentFailureReason = '' }) {
+  if (!order || order.paymentStatus === 'Paid') return order
+
+  await Order.updateOne(
+    { _id: order._id, restaurantId: order.restaurantId },
+    {
+      $set: {
+        paymentStatus: 'Failed',
+        paymentFailureReason: String(paymentFailureReason || 'Payment failed'),
+        hiddenFromActive: true,
+        paymentProvider: 'razorpay',
+      },
+    },
+  )
+
+  return null
+}
+
+export async function createRestaurantRazorpayPaymentIntent(req, res, next) {
+  let pendingOrder = null
+
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
+    }
+
+    const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '' } = req.body
+    const draft = await buildCustomerOrderDraft({
+      restaurantSlug,
+      tableNumber,
+      floorNumber,
+      items,
+      couponCode,
+    })
+
+    if (!isRestaurantPaymentConfigComplete(draft.restaurant.paymentConfig)) {
+      return res.status(409).json({ message: 'This restaurant has not enabled online payments yet' })
+    }
+
+    pendingOrder = await Order.create({
+      restaurantId: draft.restaurant._id,
+      restaurantSlug: draft.restaurantSlug,
+      floorNumber: draft.floorNumber,
+      tableNumber: draft.tableNumber,
+      items: draft.orderItems,
+      subtotalAmount: draft.pricing.subtotalAmount,
+      discountTotal: draft.pricing.discountTotal,
+      appliedOffers: draft.pricing.appliedOffers,
+      couponCode: draft.pricing.couponCodeApplied,
+      totalAmount: draft.pricing.totalAmount,
+      paymentProvider: 'razorpay',
+      paymentStatus: 'Pending',
+      orderStatus: 'Pending',
+      hiddenFromActive: true,
+    })
+
+    const providerOrder = await createRazorpayOrderForRestaurant({
+      restaurantId: draft.restaurant._id,
+      amount: Math.round(Number(draft.pricing.totalAmount || 0) * 100),
+      receipt: buildRestaurantOrderReceipt(pendingOrder._id),
+      notes: {
+        appOrderId: String(pendingOrder._id),
+        restaurantId: String(draft.restaurant._id),
+        restaurantSlug: draft.restaurant.slug,
+        tableNumber: String(draft.tableNumber),
+      },
+    })
+
+    pendingOrder.providerOrderId = providerOrder.order.id
+    await pendingOrder.save()
+
+    return res.status(201).json({
+      orderId: pendingOrder._id,
+      keyId: providerOrder.keyId,
+      razorpayOrderId: providerOrder.order.id,
+      amount: providerOrder.order.amount,
+      currency: providerOrder.order.currency || 'INR',
+      restaurantName: draft.restaurant.name,
+      tableNumber: draft.tableNumber,
+      floorNumber: draft.floorNumber,
+    })
+  } catch (error) {
+    if (pendingOrder?._id) {
+      await markRestaurantOrderFailed({
+        order: pendingOrder,
+        paymentFailureReason: error.message || 'Unable to initialize payment',
+      })
+    }
+    next(error)
+  }
+}
+
+export async function confirmRestaurantRazorpayCheckout(req, res, next) {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
+    }
+
+    const {
+      orderId,
+      razorpay_order_id: razorpayOrderId,
+      razorpay_payment_id: razorpayPaymentId,
+      razorpay_signature: razorpaySignature,
+    } = req.body
+
+    const order = await Order.findOne({
+      _id: orderId,
+      providerOrderId: razorpayOrderId,
+      paymentProvider: 'razorpay',
+    }).lean()
+    if (!order || order.isArchived) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    if (order.paymentStatus === 'Paid') {
+      return res.json({ success: true, duplicate: true, order })
+    }
+
+    const valid = await verifyRestaurantCheckoutSignature({
+      restaurantId: order.restaurantId,
+      body: `${razorpayOrderId}|${razorpayPaymentId}`,
+      signature: razorpaySignature,
+    })
+
+    if (!valid) {
+      return res.status(400).json({ message: 'Invalid payment signature' })
+    }
+
+    const updatedOrder = await markRestaurantOrderPaid({
+      order,
+      providerPaymentId: razorpayPaymentId,
+    })
+
+    return res.json({ success: true, order: updatedOrder })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function handleRestaurantRazorpayWebhook(req, res, next) {
+  let providerEventId = ''
+  let hasDistributedLock = false
+
+  try {
+    const signature = req.get('x-razorpay-signature')
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}))
+    const webhook = JSON.parse(rawBody.toString('utf8'))
+    const eventType = String(webhook?.event || '').trim()
+    const payload = webhook?.payload || {}
+    const paymentNotes = payload?.payment?.entity?.notes || {}
+    const orderNotes = payload?.order?.entity?.notes || {}
+    const notes = { ...orderNotes, ...paymentNotes }
+    const notedRestaurantId = String(notes?.restaurantId || '').trim()
+    const notedOrderId = String(notes?.appOrderId || '').trim()
+    const providerOrderId =
+      String(payload?.payment?.entity?.order_id || payload?.order?.entity?.id || payload?.payment_link?.entity?.order_id || '').trim()
+    const providerPaymentId = String(payload?.payment?.entity?.id || '').trim()
+    const paymentFailureReason =
+      payload?.payment?.entity?.error_description || payload?.payment?.entity?.description || payload?.payment?.entity?.status || ''
+
+    const verificationRestaurantId = notedRestaurantId
+
+    if (!verificationRestaurantId || !notedOrderId || !providerOrderId) {
+      return res.status(200).json({ received: true, ignored: true })
+    }
+
+    const isSignatureValid = await verifyRestaurantWebhookSignature({
+      restaurantId: verificationRestaurantId,
+      rawBody,
+      signature,
+    })
+
+    if (!isSignatureValid) {
+      return res.status(401).json({ message: 'Invalid webhook signature' })
+    }
+
+    const order = await Order.findOne({
+      _id: notedOrderId,
+      restaurantId: verificationRestaurantId,
+      providerOrderId,
+      paymentProvider: 'razorpay',
+    })
+      .select('_id restaurantId restaurantSlug tableNumber paymentStatus orderStatus providerOrderId')
+      .lean()
+
+    if (!order) {
+      return res.status(200).json({ received: true, ignored: true })
+    }
+
+    providerEventId =
+      String(req.get('x-razorpay-event-id') || '').trim() ||
+      `${eventType}:${providerOrderId || 'unknown'}:${String(webhook?.created_at || Date.now())}`
+
+    if (await isWebhookProcessed(providerEventId)) {
+      return res.status(200).json({ received: true, duplicate: true })
+    }
+
+    hasDistributedLock = await acquireWebhookLock(providerEventId)
+    if (!hasDistributedLock) {
+      return res.status(200).json({ received: true, processing: true })
+    }
+
+    try {
+      await RestaurantPaymentEvent.create({
+        provider: 'razorpay',
+        providerEventId,
+        eventType,
+        restaurantId: order.restaurantId,
+        orderId: order._id,
+        providerOrderId,
+        providerPaymentId,
+      })
+    } catch (error) {
+      if (error?.code === 11000) {
+        await markWebhookProcessed(providerEventId)
+        return res.status(200).json({ received: true, duplicate: true })
+      }
+      throw error
+    }
+
+    if (['payment.captured', 'order.paid'].includes(eventType)) {
+      await markRestaurantOrderPaid({
+        order,
+        providerPaymentId,
+      })
+
+      await RestaurantPaymentEvent.updateOne(
+        { provider: 'razorpay', providerEventId },
+        { $set: { processingStatus: 'processed', processedAt: new Date(), failureReason: '' } },
+      )
+      await markWebhookProcessed(providerEventId)
+      return res.status(200).json({ received: true, processed: true })
+    }
+
+    if (eventType === 'payment.failed') {
+      await markRestaurantOrderFailed({ order, paymentFailureReason })
+      await RestaurantPaymentEvent.updateOne(
+        { provider: 'razorpay', providerEventId },
+        { $set: { processingStatus: 'processed', processedAt: new Date(), failureReason: String(paymentFailureReason || '') } },
+      )
+      await markWebhookProcessed(providerEventId)
+      return res.status(200).json({ received: true, processed: true })
+    }
+
+    await RestaurantPaymentEvent.updateOne(
+      { provider: 'razorpay', providerEventId },
+      { $set: { processingStatus: 'ignored', processedAt: new Date(), failureReason: '' } },
+    )
+    await markWebhookProcessed(providerEventId)
+    return res.status(200).json({ received: true, ignored: true })
+  } catch (error) {
+    if (providerEventId) {
+      await RestaurantPaymentEvent.updateOne(
+        { provider: 'razorpay', providerEventId },
+        {
+          $set: {
+            processingStatus: 'failed',
+            processedAt: new Date(),
+            failureReason: error.message || 'webhook processing failed',
+          },
+        },
+      )
+    }
+    next(error)
+  } finally {
+    if (hasDistributedLock && providerEventId) {
+      await releaseWebhookLock(providerEventId)
+    }
   }
 }
 

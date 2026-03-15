@@ -2,7 +2,7 @@ import { memo } from 'react'
 import Button from './Button'
 import { formatCurrencyINR } from '../utils/currency'
 
-const statuses = ['Pending', 'Preparing', 'Ready', 'Served', 'Completed']
+const statuses = ['Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
 
 function OrderCard({ order, onStatusChange, showStatusActions = true }) {
   const orderId = order._id || order.id

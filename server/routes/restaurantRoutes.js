@@ -3,9 +3,11 @@ import {
   createMyStaffAccount,
   deleteMyStaffAccount,
   getMyRestaurant,
+  getMyRestaurantPaymentConfig,
   getRestaurantBySlug,
   listMyStaffAccounts,
   updateMyRestaurant,
+  updateMyRestaurantPaymentConfig,
 } from '../controllers/restaurantController.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
@@ -15,6 +17,8 @@ const router = Router()
 
 router.get('/me', requireAuth, requireActiveBilling, requireOwner, getMyRestaurant)
 router.put('/me', requireAuth, requireActiveBilling, requireOwner, updateMyRestaurant)
+router.get('/me/payment-config', requireAuth, requireActiveBilling, requireOwner, getMyRestaurantPaymentConfig)
+router.put('/me/payment-config', requireAuth, requireActiveBilling, requireOwner, updateMyRestaurantPaymentConfig)
 router.get('/me/staff', requireAuth, requireActiveBilling, requireOwner, listMyStaffAccounts)
 router.post('/me/staff', requireAuth, requireActiveBilling, requireOwner, createMyStaffAccount)
 router.delete('/me/staff/:staffId', requireAuth, requireActiveBilling, requireOwner, deleteMyStaffAccount)

@@ -7,6 +7,12 @@ export const restaurantService = {
   updateMine(payload) {
     return api.put('/restaurants/me', payload).then((response) => response.data)
   },
+  getPaymentConfig() {
+    return api.get('/restaurants/me/payment-config').then((response) => response.data)
+  },
+  updatePaymentConfig(payload) {
+    return api.put('/restaurants/me/payment-config', payload).then((response) => response.data)
+  },
   listStaff() {
     return api.get('/restaurants/me/staff').then((response) => response.data)
   },
