@@ -101,9 +101,6 @@ export default function CustomerCheckoutPage() {
     setMessage('')
     setPendingPaymentUrl('')
 
-    // Pre-open a tab in direct click context to avoid popup blockers.
-    const checkoutWindow = window.open('', '_blank', 'noopener,noreferrer')
-
     try {
       const intent = await paymentService.createRazorpayMeIntent({
         restaurantSlug,
@@ -117,22 +114,17 @@ export default function CustomerCheckoutPage() {
         throw new Error('Unable to start payment session')
       }
 
-      if (checkoutWindow && !checkoutWindow.closed) {
-        checkoutWindow.location.href = intent.paymentUrl
-      } else {
-        setPendingPaymentUrl(intent.paymentUrl)
-      }
+      setPendingPaymentUrl(intent.paymentUrl)
+
+      const openedWindow = window.open(intent.paymentUrl, '_blank', 'noopener,noreferrer')
 
       setPendingCheckoutToken(intent.checkoutToken)
       setMessage(
-        checkoutWindow && !checkoutWindow.closed
+        openedWindow
           ? 'Payment page opened in a new tab. Complete payment, then click Confirm Payment below.'
-          : 'Payment link is ready. Click Open Payment Link, complete payment, then click Confirm Payment below.',
+          : 'Payment link is ready below. Click Open Payment Link, complete payment, then click Confirm Payment below.',
       )
     } catch (requestError) {
-      if (checkoutWindow && !checkoutWindow.closed) {
-        checkoutWindow.close()
-      }
       const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Payment failed'
       setMessage(errorMessage)
     } finally {
