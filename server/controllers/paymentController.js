@@ -513,8 +513,6 @@ export async function createRestaurantRazorpayMeIntent(req, res, next) {
     const paymentUrl = buildRazorpayMeCheckoutUrl({
       razorpayMeLink: draft.restaurant?.paymentConfig?.razorpayMeLink,
       amountPaise: Math.round(Number(draft.pricing.totalAmount || 0) * 100),
-      referenceId: String(checkoutToken).slice(-24),
-      description: `${draft.restaurant.name} - Table ${draft.tableNumber}`,
     })
 
     return res.status(201).json({
