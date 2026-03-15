@@ -15,11 +15,7 @@ export default function SettingsPage() {
   const [paymentMessage, setPaymentMessage] = useState('')
   const [paymentForm, setPaymentForm] = useState({
     enabled: false,
-    keyId: '',
-    keySecret: '',
-    webhookSecret: '',
-    hasKeySecret: false,
-    hasWebhookSecret: false,
+    razorpayMeLink: '',
     isReady: false,
   })
   const [staffMessage, setStaffMessage] = useState('')
@@ -52,11 +48,7 @@ export default function SettingsPage() {
           setPaymentForm((prev) => ({
             ...prev,
             enabled: Boolean(paymentResult.value?.enabled),
-            keyId: paymentResult.value?.keyId || '',
-            keySecret: '',
-            webhookSecret: '',
-            hasKeySecret: Boolean(paymentResult.value?.hasKeySecret),
-            hasWebhookSecret: Boolean(paymentResult.value?.hasWebhookSecret),
+            razorpayMeLink: paymentResult.value?.razorpayMeLink || '',
             isReady: Boolean(paymentResult.value?.isReady),
           }))
         }
@@ -92,19 +84,13 @@ export default function SettingsPage() {
     restaurantService
       .updatePaymentConfig({
         enabled: paymentForm.enabled,
-        keyId: paymentForm.keyId,
-        keySecret: paymentForm.keySecret,
-        webhookSecret: paymentForm.webhookSecret,
+        razorpayMeLink: paymentForm.razorpayMeLink,
       })
       .then((saved) => {
         setPaymentForm((prev) => ({
           ...prev,
           enabled: Boolean(saved?.enabled),
-          keyId: saved?.keyId || '',
-          keySecret: '',
-          webhookSecret: '',
-          hasKeySecret: Boolean(saved?.hasKeySecret),
-          hasWebhookSecret: Boolean(saved?.hasWebhookSecret),
+          razorpayMeLink: saved?.razorpayMeLink || '',
           isReady: Boolean(saved?.isReady),
         }))
         setPaymentMessage(saved?.isReady ? 'Payment configuration saved and ready.' : 'Payment configuration saved.')
@@ -160,7 +146,7 @@ export default function SettingsPage() {
       <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSavePaymentConfig}>
         <div>
           <h2 className="text-base font-semibold text-slate-900">Payment Settings</h2>
-          <p className="text-xs text-slate-500">Connect this restaurant's Razorpay account. Secret fields are write-only and stay encrypted at rest.</p>
+          <p className="text-xs text-slate-500">Add your razorpay.me payment link to enable customer checkout.</p>
         </div>
         {paymentMessage && <p className="text-sm text-[var(--primary)]">{paymentMessage}</p>}
         <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
@@ -172,21 +158,10 @@ export default function SettingsPage() {
           Enable online payments for this restaurant
         </label>
         <FormInput
-          label="Razorpay Key ID"
-          value={paymentForm.keyId}
-          onChange={(e) => setPaymentForm((prev) => ({ ...prev, keyId: e.target.value }))}
-        />
-        <FormInput
-          label={`Razorpay Key Secret${paymentForm.hasKeySecret ? ' (leave blank to keep current)' : ''}`}
-          type="password"
-          value={paymentForm.keySecret}
-          onChange={(e) => setPaymentForm((prev) => ({ ...prev, keySecret: e.target.value }))}
-        />
-        <FormInput
-          label={`Razorpay Webhook Secret${paymentForm.hasWebhookSecret ? ' (leave blank to keep current)' : ''}`}
-          type="password"
-          value={paymentForm.webhookSecret}
-          onChange={(e) => setPaymentForm((prev) => ({ ...prev, webhookSecret: e.target.value }))}
+          label="Razorpay.me Link"
+          value={paymentForm.razorpayMeLink}
+          onChange={(e) => setPaymentForm((prev) => ({ ...prev, razorpayMeLink: e.target.value }))}
+          placeholder="https://razorpay.me/@your-link"
         />
         <p className="text-xs text-slate-500">
           Status: {paymentForm.isReady ? 'Ready for live checkout' : 'Incomplete configuration'}

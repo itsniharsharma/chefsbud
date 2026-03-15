@@ -6,44 +6,9 @@ import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { queryKeys } from '../lib/queryKeys'
 import { offerService } from '../services/offerService'
-import { loadRazorpayCheckoutScript, paymentService } from '../services/paymentService'
+import { paymentService } from '../services/paymentService'
 import { formatCurrencyINR } from '../utils/currency'
-import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl, buildCustomerStatusUrl } from '../utils/customerUrl'
-
-function openRazorpayCheckout(intent, restaurantSlug, tableNumber) {
-  return new Promise((resolve, reject) => {
-    if (!window.Razorpay) {
-      reject(new Error('Razorpay checkout is unavailable'))
-      return
-    }
-
-    const instance = new window.Razorpay({
-      key: intent.keyId,
-      amount: intent.amount,
-      currency: intent.currency,
-      name: intent.restaurantName,
-      description: `Table ${tableNumber} order`,
-      order_id: intent.razorpayOrderId,
-      notes: {
-        restaurantSlug,
-        tableNumber: String(tableNumber),
-      },
-      theme: {
-        color: '#b91c1c',
-      },
-      modal: {
-        ondismiss: () => reject(new Error('Payment was cancelled')),
-      },
-      handler: (response) => resolve(response),
-    })
-
-    instance.on('payment.failed', (event) => {
-      reject(new Error(event?.error?.description || 'Payment failed'))
-    })
-
-    instance.open()
-  })
-}
+import { buildCustomerMenuUrl, buildCustomerStatusUrl } from '../utils/customerUrl'
 
 export default function CustomerCheckoutPage() {
   const navigate = useNavigate()
@@ -52,8 +17,10 @@ export default function CustomerCheckoutPage() {
   const [searchParams] = useSearchParams()
   const { getSession, removeItem, addItem, clearSession } = useCustomerCart()
   const [processingPayment, setProcessingPayment] = useState(false)
+  const [confirmingPayment, setConfirmingPayment] = useState(false)
   const [message, setMessage] = useState('')
   const [couponCode, setCouponCode] = useState('')
+  const [pendingCheckoutToken, setPendingCheckoutToken] = useState('')
   const [pricing, setPricing] = useState({ subtotalAmount: 0, discountTotal: 0, totalAmount: 0, appliedOffers: [] })
 
   const session = getSession(restaurantSlug, tableNumber)
@@ -95,21 +62,45 @@ export default function CustomerCheckoutPage() {
     queryClient.setQueryData(orderStatusKey, order)
   }
 
+  const confirmPayment = async (tokenFromParam) => {
+    const token = String(tokenFromParam || pendingCheckoutToken || '').trim()
+    if (!token) {
+      setMessage('Payment session expired. Please start checkout again.')
+      return
+    }
+
+    setConfirmingPayment(true)
+    setMessage('Confirming your payment...')
+
+    try {
+      const confirmation = await paymentService.confirmRazorpayMePayment({ checkoutToken: token })
+
+      if (confirmation?.order) {
+        seedCustomerOrderCaches(confirmation.order)
+      }
+
+      clearSession(restaurantSlug, tableNumber)
+      setPendingCheckoutToken('')
+      setMessage('Payment confirmed. Redirecting to your order...')
+      setTimeout(() => {
+        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
+      }, 900)
+    } catch (requestError) {
+      const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Unable to confirm payment'
+      setMessage(errorMessage)
+    } finally {
+      setConfirmingPayment(false)
+    }
+  }
+
   const payAndPlaceOrder = async () => {
     if (!cart.length) return
 
-    let intent = null
-    let checkoutSucceeded = false
     setProcessingPayment(true)
     setMessage('')
 
     try {
-      const checkoutLoaded = await loadRazorpayCheckoutScript()
-      if (!checkoutLoaded) {
-        throw new Error('Unable to load Razorpay checkout')
-      }
-
-      intent = await paymentService.createRestaurantOrderIntent({
+      const intent = await paymentService.createRazorpayMeIntent({
         restaurantSlug,
         tableNumber: Number(tableNumber),
         floorNumber,
@@ -117,41 +108,20 @@ export default function CustomerCheckoutPage() {
         items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
       })
 
-      const paymentResult = await openRazorpayCheckout(intent, restaurantSlug, tableNumber)
-      checkoutSucceeded = true
-      const confirmation = await paymentService.confirmRestaurantCheckout({
-        orderId: intent.orderId,
-        ...paymentResult,
-      })
-
-      if (confirmation?.order) {
-        seedCustomerOrderCaches(confirmation.order)
+      if (!intent?.paymentUrl || !intent?.checkoutToken) {
+        throw new Error('Unable to start payment session')
       }
 
-      clearSession(restaurantSlug, tableNumber)
-      setMessage('Payment successful. Redirecting to your order...')
-      setTimeout(() => {
-        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
-      }, 900)
+      const openedWindow = window.open(intent.paymentUrl, '_blank', 'noopener,noreferrer')
+      if (!openedWindow) {
+        throw new Error('Popup blocked. Please allow popups and try again.')
+      }
+
+      setPendingCheckoutToken(intent.checkoutToken)
+      setMessage('Payment page opened in a new tab. Complete payment, then click Confirm Payment below.')
     } catch (requestError) {
       const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Payment failed'
-
-      if (intent?.orderId && checkoutSucceeded) {
-        clearSession(restaurantSlug, tableNumber)
-        setMessage('Payment received. Final confirmation is syncing now...')
-        setTimeout(() => {
-          navigate(
-            buildCustomerOrderTrackingUrl({
-              slug: restaurantSlug,
-              tableNumber,
-              orderId: intent.orderId,
-              floorNumber,
-            }),
-          )
-        }, 900)
-      } else {
-        setMessage(errorMessage)
-      }
+      setMessage(errorMessage)
     } finally {
       setProcessingPayment(false)
     }
@@ -244,9 +214,23 @@ export default function CustomerCheckoutPage() {
         {message && <p className="mt-3 text-sm royal-highlight">{message}</p>}
 
         <div className="mt-4 space-y-2">
-          <Button className="royal-button-primary w-full" onClick={payAndPlaceOrder} disabled={!cart.length || processingPayment}>
-            {processingPayment ? 'Opening Secure Checkout...' : 'Pay & Place Order'}
+          <Button
+            className="royal-button-primary w-full"
+            onClick={payAndPlaceOrder}
+            disabled={!cart.length || processingPayment || confirmingPayment}
+          >
+            {processingPayment ? 'Opening Payment Link...' : 'Pay & Place Order'}
           </Button>
+          {pendingCheckoutToken ? (
+            <Button
+              className="w-full"
+              variant="secondary"
+              onClick={() => confirmPayment()}
+              disabled={confirmingPayment || processingPayment}
+            >
+              {confirmingPayment ? 'Confirming Payment...' : 'I Have Paid, Confirm Now'}
+            </Button>
+          ) : null}
           <p className="pt-1 text-center text-xs royal-muted">Secure Razorpay checkout for this restaurant</p>
         </div>
       </div>

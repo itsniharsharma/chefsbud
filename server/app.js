@@ -67,7 +67,6 @@ app.use(requestContext)
 app.use(securityHeaders)
 app.use(globalLimiter)
 app.use('/api/payments/webhook', express.raw({ type: 'application/json', limit: '1mb' }))
-app.use('/api/payments/razorpay/webhook', express.raw({ type: 'application/json', limit: '1mb' }))
 app.use(express.json({ limit: jsonLimit }))
 app.use(express.urlencoded({ extended: false, limit: urlEncodedLimit }))
 

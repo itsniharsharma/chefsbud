@@ -90,7 +90,7 @@ export async function getRestaurantBySlug(req, res, next) {
 export async function getMyRestaurantPaymentConfig(req, res, next) {
   try {
     const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('paymentConfig +paymentConfig.keySecretEncrypted +paymentConfig.webhookSecretEncrypted')
+      .select('paymentConfig')
       .lean()
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
@@ -105,16 +105,14 @@ export async function getMyRestaurantPaymentConfig(req, res, next) {
 export async function updateMyRestaurantPaymentConfig(req, res, next) {
   try {
     const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('paymentConfig +paymentConfig.keySecretEncrypted +paymentConfig.webhookSecretEncrypted')
+      .select('paymentConfig')
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
     applyRestaurantPaymentConfig(restaurant, {
       enabled: req.body?.enabled,
-      keyId: req.body?.keyId,
-      keySecret: req.body?.keySecret,
-      webhookSecret: req.body?.webhookSecret,
+      razorpayMeLink: req.body?.razorpayMeLink,
     })
 
     await restaurant.save()

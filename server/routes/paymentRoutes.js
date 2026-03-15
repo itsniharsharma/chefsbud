@@ -3,12 +3,11 @@ import { body } from 'express-validator'
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
 import {
-  confirmRestaurantRazorpayCheckout,
+  confirmRestaurantRazorpayMePayment,
   createCheckout,
   createHybridSubscription,
-  createRestaurantRazorpayPaymentIntent,
+  createRestaurantRazorpayMeIntent,
   handleRazorpayWebhook,
-  handleRestaurantRazorpayWebhook,
   verifyHybridSubscription,
   verifyOrder,
 } from '../controllers/paymentController.js'
@@ -38,9 +37,8 @@ const publicPaymentLimiter = createRateLimiter({
 })
 
 router.post('/webhook', webhookLimiter, handleRazorpayWebhook)
-router.post('/razorpay/webhook', webhookLimiter, handleRestaurantRazorpayWebhook)
 router.post(
-  '/razorpay/order-intent',
+  '/razorpay-me/intent',
   publicPaymentLimiter,
   [
     body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
@@ -51,18 +49,15 @@ router.post(
     body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
     body('couponCode').optional().isString().trim().isLength({ max: 40 }),
   ],
-  createRestaurantRazorpayPaymentIntent,
+  createRestaurantRazorpayMeIntent,
 )
 router.post(
-  '/razorpay/checkout/confirm',
+  '/razorpay-me/confirm',
   publicPaymentLimiter,
   [
-    body('orderId').isString().trim().notEmpty(),
-    body('razorpay_order_id').isString().trim().notEmpty(),
-    body('razorpay_payment_id').isString().trim().notEmpty(),
-    body('razorpay_signature').isString().trim().notEmpty(),
+    body('checkoutToken').isString().trim().notEmpty(),
   ],
-  confirmRestaurantRazorpayCheckout,
+  confirmRestaurantRazorpayMePayment,
 )
 
 router.post(

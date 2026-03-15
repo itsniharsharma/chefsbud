@@ -2,11 +2,9 @@ import mongoose from 'mongoose'
 
 const paymentConfigSchema = new mongoose.Schema(
   {
-    provider: { type: String, enum: ['razorpay'], default: 'razorpay' },
+    provider: { type: String, enum: ['razorpay_me'], default: 'razorpay_me' },
     enabled: { type: Boolean, default: false },
-    keyId: { type: String, default: '', trim: true },
-    keySecretEncrypted: { type: String, default: '', select: false },
-    webhookSecretEncrypted: { type: String, default: '', select: false },
+    razorpayMeLink: { type: String, default: '', trim: true },
     configuredAt: { type: Date, default: null },
   },
   { _id: false },
@@ -20,7 +18,7 @@ const restaurantSchema = new mongoose.Schema(
     address: { type: String, default: '' },
     phone: { type: String, default: '' },
     ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    paymentConfig: { type: paymentConfigSchema, default: () => ({ provider: 'razorpay', enabled: false }) },
+    paymentConfig: { type: paymentConfigSchema, default: () => ({ provider: 'razorpay_me', enabled: false }) },
   },
   { timestamps: true },
 )
