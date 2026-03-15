@@ -6,12 +6,42 @@ import { decryptSecret, encryptSecret } from './secretCrypto.js'
 const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1'
 const RAZORPAY_TIMEOUT_MS = Math.max(1000, Number(process.env.RAZORPAY_TIMEOUT_MS || 10000))
 
+function buildConfigError(message) {
+  const error = new Error(message)
+  error.statusCode = 409
+  return error
+}
+
 function normalizeKeyId(value) {
   return String(value || '').trim()
 }
 
 function hasEncryptedSecret(value) {
   return Boolean(String(value || '').trim())
+}
+
+function isEncryptedPayload(value) {
+  const encoded = String(value || '').trim()
+  if (!encoded) return false
+  const parts = encoded.split(':')
+  if (parts.length !== 3) return false
+  return parts.every((part) => /^[0-9a-f]+$/i.test(part))
+}
+
+function resolveSecretFromStorage(value) {
+  const encoded = String(value || '').trim()
+  if (!encoded) return ''
+
+  if (!isEncryptedPayload(encoded)) {
+    // Backward compatibility: allow pre-encryption plaintext values and migrate on save.
+    return encoded
+  }
+
+  try {
+    return decryptSecret(encoded)
+  } catch {
+    throw buildConfigError('Payment secrets are invalid. Please re-enter key secret and webhook secret.')
+  }
 }
 
 function maskKeyId(value) {
@@ -38,15 +68,13 @@ function ensurePaymentConfigReady(paymentConfig = {}) {
   const webhookSecretEncrypted = String(paymentConfig?.webhookSecretEncrypted || '').trim()
 
   if (!paymentConfig?.enabled || paymentConfig?.provider !== 'razorpay' || !keyId || !keySecretEncrypted || !webhookSecretEncrypted) {
-    const error = new Error('Restaurant online payments are not configured')
-    error.statusCode = 409
-    throw error
+    throw buildConfigError('Restaurant online payments are not configured')
   }
 
   return {
     keyId,
-    keySecret: decryptSecret(keySecretEncrypted),
-    webhookSecret: decryptSecret(webhookSecretEncrypted),
+    keySecret: resolveSecretFromStorage(keySecretEncrypted),
+    webhookSecret: resolveSecretFromStorage(webhookSecretEncrypted),
   }
 }
 
@@ -112,15 +140,22 @@ export function applyRestaurantPaymentConfig(restaurant, payload = {}) {
   const nextEnabled = typeof payload.enabled === 'boolean' ? payload.enabled : Boolean(current.enabled)
   const nextKeyId = 'keyId' in payload ? normalizeKeyId(payload.keyId) : normalizeKeyId(current.keyId)
 
+  const currentKeySecret = String(current.keySecretEncrypted || '').trim()
+  const currentWebhookSecret = String(current.webhookSecretEncrypted || '').trim()
+  const normalizedCurrentKeySecret =
+    currentKeySecret && !isEncryptedPayload(currentKeySecret) ? encryptSecret(currentKeySecret) : currentKeySecret
+  const normalizedCurrentWebhookSecret =
+    currentWebhookSecret && !isEncryptedPayload(currentWebhookSecret) ? encryptSecret(currentWebhookSecret) : currentWebhookSecret
+
   const nextKeySecretEncrypted =
     'keySecret' in payload && String(payload.keySecret || '').trim()
       ? encryptSecret(payload.keySecret)
-      : current.keySecretEncrypted || ''
+      : normalizedCurrentKeySecret || ''
 
   const nextWebhookSecretEncrypted =
     'webhookSecret' in payload && String(payload.webhookSecret || '').trim()
       ? encryptSecret(payload.webhookSecret)
-      : current.webhookSecretEncrypted || ''
+      : normalizedCurrentWebhookSecret || ''
 
   restaurant.paymentConfig = {
     provider: 'razorpay',
