@@ -83,13 +83,6 @@ export function applyRestaurantPaymentConfig(restaurant, payload = {}) {
 }
 
 export function buildRazorpayMeCheckoutUrl({ razorpayMeLink, amountPaise }) {
-  const normalizedLink = validateRazorpayMeLink(razorpayMeLink)
-  const parsed = new URL(normalizedLink)
-
-  const normalizedPaise = Math.max(0, Number(amountPaise || 0))
-  const amountRupees = normalizedPaise / 100
-  const serializedAmount = Number.isInteger(amountRupees) ? String(amountRupees) : String(amountRupees.toFixed(2)).replace(/\.00$/, '')
-  parsed.searchParams.set('amount', serializedAmount)
-
-  return parsed.toString()
+  void amountPaise
+  return validateRazorpayMeLink(razorpayMeLink)
 }
