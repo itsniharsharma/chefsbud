@@ -13,10 +13,4 @@ export const paymentService = {
   verifyHybridSubscription(payload) {
     return api.post('/payments/subscription/hybrid/verify', payload).then((response) => response.data)
   },
-  createRazorpayMeIntent(payload) {
-    return api.post('/payments/razorpay-me/intent', payload).then((response) => response.data)
-  },
-  confirmRazorpayMePayment(payload) {
-    return api.post('/payments/razorpay-me/confirm', payload).then((response) => response.data)
-  },
 }

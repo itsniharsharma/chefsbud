@@ -4,6 +4,7 @@ import {
 	createOrder,
 	deleteOrder,
 	getOrders,
+	markOrderKotPrinted,
 	getPublicTableOrders,
 	getPublicOrderStatus,
 	updateOrderStatus,
@@ -25,6 +26,7 @@ router.post(
 		body('items.*.menuItemId').isString().trim().notEmpty(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
 		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
+		body('customerNote').optional().isString().trim().isLength({ max: 500 }),
 	],
 	validateRequest,
 	createOrder,
@@ -73,6 +75,7 @@ router.patch(
 	validateRequest,
 	updateOrderStatus,
 )
+router.patch('/:orderId/kot-printed', requireAuth, requireActiveBilling, markOrderKotPrinted)
 router.delete('/:orderId', requireAuth, requireActiveBilling, deleteOrder)
 
 export default router

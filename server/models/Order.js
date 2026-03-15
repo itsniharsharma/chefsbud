@@ -37,6 +37,7 @@ const orderSchema = new mongoose.Schema(
       default: [],
     },
     couponCode: { type: String, default: '' },
+    customerNote: { type: String, default: '', trim: true, maxlength: 500 },
     totalAmount: { type: Number, required: true, min: 0 },
     paymentProvider: { type: String, enum: ['', 'razorpay', 'razorpay_me'], default: '' },
     paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Unpaid'], default: 'Unpaid' },
@@ -44,6 +45,8 @@ const orderSchema = new mongoose.Schema(
     providerPaymentId: { type: String, default: '', index: true },
     paymentCapturedAt: { type: Date, default: null },
     paymentFailureReason: { type: String, default: '' },
+    kotPrinted: { type: Boolean, default: false, index: true },
+    kotPrintedAt: { type: Date, default: null },
     orderStatus: {
       type: String,
       enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],

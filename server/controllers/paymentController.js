@@ -1,9 +1,6 @@
 import User from '../models/User.js'
-import Order from '../models/Order.js'
 import BillingEvent from '../models/BillingEvent.js'
 import { validationResult } from 'express-validator'
-import crypto from 'crypto'
-import jwt from 'jsonwebtoken'
 import {
   createCustomer,
   createOrder,
@@ -13,14 +10,7 @@ import {
   verifySignature,
   verifyWebhookSignature,
 } from '../services/razorpayService.js'
-import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import { sendBillingStatusEmail } from '../services/emailService.js'
-import { emitOrderChanged } from '../realtime/orderEvents.js'
-import {
-  buildRazorpayMeCheckoutUrl,
-  isRestaurantPaymentConfigComplete,
-} from '../services/restaurantPaymentService.js'
-import { invalidateCacheByTags } from '../services/responseCache.js'
 import {
   acquireWebhookLock,
   isWebhookProcessed,
@@ -33,7 +23,6 @@ const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 3)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const customerIdByEmailCache = new Map()
-const RAZORPAY_ME_INTENT_TTL_SECONDS = Math.max(60, Number(process.env.RAZORPAY_ME_INTENT_TTL_SECONDS || 20 * 60))
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase()
@@ -147,32 +136,6 @@ function shouldNotifyStatus(nextStatus) {
 
 function buildReceipt(userId, type) {
   return `${type}_${String(userId).slice(-8)}_${Date.now()}`
-}
-
-function getJwtSecretOrThrow() {
-  const secret = String(process.env.JWT_SECRET || '').trim()
-  if (!secret) {
-    const error = new Error('JWT_SECRET is not configured')
-    error.statusCode = 500
-    throw error
-  }
-  return secret
-}
-
-function buildRazorpayMeIntentToken(payload) {
-  return jwt.sign(payload, getJwtSecretOrThrow(), {
-    expiresIn: RAZORPAY_ME_INTENT_TTL_SECONDS,
-  })
-}
-
-function verifyRazorpayMeIntentToken(token) {
-  try {
-    return jwt.verify(String(token || ''), getJwtSecretOrThrow())
-  } catch {
-    const error = new Error('Payment session expired. Please start payment again.')
-    error.statusCode = 400
-    throw error
-  }
 }
 
 async function resolveExistingCustomerByEmail(email) {
@@ -434,158 +397,6 @@ export async function verifyHybridSubscription(req, res, next) {
       message: 'Subscription verified',
       billing: user.billing,
     })
-  } catch (error) {
-    next(error)
-  }
-}
-
-async function markRestaurantOrderPaid({ order, providerPaymentId = '', paymentFailureReason = '' }) {
-  if (!order) return null
-
-  const update = {
-    paymentStatus: 'Paid',
-    orderStatus: order.orderStatus === 'Completed' ? 'Completed' : 'Confirmed',
-    hiddenFromActive: false,
-    deletedByOwnerAt: null,
-    paymentProvider: 'razorpay_me',
-    paymentFailureReason: paymentFailureReason ? String(paymentFailureReason) : '',
-    paymentCapturedAt: new Date(),
-  }
-
-  if (providerPaymentId) {
-    update.providerPaymentId = String(providerPaymentId)
-  }
-
-  const updatedOrder = await Order.findOneAndUpdate(
-    { _id: order._id, restaurantId: order.restaurantId },
-    { $set: update },
-    { new: true, runValidators: true },
-  )
-
-  if (!updatedOrder) return null
-
-  invalidateCacheByTags([
-    `analytics:${String(updatedOrder.restaurantId)}`,
-    `orders:board:${String(updatedOrder.restaurantId)}`,
-    `orders:table:${order.restaurantSlug}:${updatedOrder.tableNumber}`,
-    `orders:order:${String(updatedOrder._id)}`,
-  ])
-  emitOrderChanged(updatedOrder.restaurantId, {
-    type: 'paid',
-    orderId: String(updatedOrder._id),
-    orderStatus: updatedOrder.orderStatus,
-    paymentStatus: updatedOrder.paymentStatus,
-  })
-
-  return updatedOrder
-}
-export async function createRestaurantRazorpayMeIntent(req, res, next) {
-  try {
-    const errors = validationResult(req)
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
-    }
-
-    const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '' } = req.body
-    const draft = await buildCustomerOrderDraft({
-      restaurantSlug,
-      tableNumber,
-      floorNumber,
-      items,
-      couponCode,
-    })
-
-    if (!isRestaurantPaymentConfigComplete(draft.restaurant.paymentConfig)) {
-      return res.status(409).json({ message: 'This restaurant has not enabled razorpay.me payments yet' })
-    }
-
-    const intentPayload = {
-      type: 'razorpay_me_intent',
-      nonce: crypto.randomBytes(12).toString('hex'),
-      restaurantSlug,
-      tableNumber: draft.tableNumber,
-      floorNumber: draft.floorNumber,
-      couponCode,
-      items: Array.isArray(items) ? items : [],
-    }
-
-    const checkoutToken = buildRazorpayMeIntentToken(intentPayload)
-    const paymentUrl = buildRazorpayMeCheckoutUrl({
-      razorpayMeLink: draft.restaurant?.paymentConfig?.razorpayMeLink,
-      amountPaise: Math.round(Number(draft.pricing.totalAmount || 0) * 100),
-    })
-
-    return res.status(201).json({
-      checkoutToken,
-      paymentUrl,
-      amount: Math.round(Number(draft.pricing.totalAmount || 0) * 100),
-      currency: 'INR',
-      restaurantName: draft.restaurant.name,
-      tableNumber: draft.tableNumber,
-      floorNumber: draft.floorNumber,
-    })
-  } catch (error) {
-    next(error)
-  }
-}
-
-export async function confirmRestaurantRazorpayMePayment(req, res, next) {
-  try {
-    const errors = validationResult(req)
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
-    }
-
-    const { checkoutToken } = req.body
-    const intent = verifyRazorpayMeIntentToken(checkoutToken)
-    if (intent?.type !== 'razorpay_me_intent') {
-      return res.status(400).json({ message: 'Invalid payment session' })
-    }
-
-    const existing = await Order.findOne({
-      paymentProvider: 'razorpay_me',
-      paymentStatus: 'Paid',
-      restaurantSlug: String(intent.restaurantSlug || ''),
-      tableNumber: Number(intent.tableNumber),
-      floorNumber: Number(intent.floorNumber),
-      createdAt: { $gte: new Date(Date.now() - RAZORPAY_ME_INTENT_TTL_SECONDS * 1000) },
-    })
-      .sort({ createdAt: -1 })
-      .lean()
-
-    if (existing) {
-      return res.json({ success: true, duplicate: true, order: existing })
-    }
-
-    const draft = await buildCustomerOrderDraft({
-      restaurantSlug: intent.restaurantSlug,
-      tableNumber: intent.tableNumber,
-      floorNumber: intent.floorNumber,
-      items: Array.isArray(intent.items) ? intent.items : [],
-      couponCode: intent.couponCode || '',
-    })
-
-    const createdOrder = await Order.create({
-      restaurantId: draft.restaurant._id,
-      restaurantSlug: draft.restaurantSlug,
-      floorNumber: draft.floorNumber,
-      tableNumber: draft.tableNumber,
-      items: draft.orderItems,
-      subtotalAmount: draft.pricing.subtotalAmount,
-      discountTotal: draft.pricing.discountTotal,
-      appliedOffers: draft.pricing.appliedOffers,
-      couponCode: draft.pricing.couponCodeApplied,
-      totalAmount: draft.pricing.totalAmount,
-      paymentProvider: 'razorpay_me',
-      paymentStatus: 'Paid',
-      orderStatus: 'Confirmed',
-      hiddenFromActive: false,
-      paymentCapturedAt: new Date(),
-    })
-
-    const updatedOrder = await markRestaurantOrderPaid({ order: createdOrder.toObject() })
-
-    return res.json({ success: true, order: updatedOrder })
   } catch (error) {
     next(error)
   }

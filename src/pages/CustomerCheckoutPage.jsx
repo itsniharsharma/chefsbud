@@ -6,7 +6,7 @@ import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { queryKeys } from '../lib/queryKeys'
 import { offerService } from '../services/offerService'
-import { paymentService } from '../services/paymentService'
+import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerMenuUrl, buildCustomerStatusUrl } from '../utils/customerUrl'
 
@@ -16,12 +16,10 @@ export default function CustomerCheckoutPage() {
   const { restaurantSlug, tableNumber } = useParams()
   const [searchParams] = useSearchParams()
   const { getSession, removeItem, addItem, clearSession } = useCustomerCart()
-  const [processingPayment, setProcessingPayment] = useState(false)
-  const [confirmingPayment, setConfirmingPayment] = useState(false)
+  const [placingOrder, setPlacingOrder] = useState(false)
   const [message, setMessage] = useState('')
   const [couponCode, setCouponCode] = useState('')
-  const [pendingCheckoutToken, setPendingCheckoutToken] = useState('')
-  const [pendingPaymentUrl, setPendingPaymentUrl] = useState('')
+  const [customerNote, setCustomerNote] = useState('')
   const [pricing, setPricing] = useState({ subtotalAmount: 0, discountTotal: 0, totalAmount: 0, appliedOffers: [] })
 
   const session = getSession(restaurantSlug, tableNumber)
@@ -63,72 +61,36 @@ export default function CustomerCheckoutPage() {
     queryClient.setQueryData(orderStatusKey, order)
   }
 
-  const confirmPayment = async (tokenFromParam) => {
-    const token = String(tokenFromParam || pendingCheckoutToken || '').trim()
-    if (!token) {
-      setMessage('Payment session expired. Please start checkout again.')
-      return
-    }
-
-    setConfirmingPayment(true)
-    setMessage('Confirming your payment...')
-
-    try {
-      const confirmation = await paymentService.confirmRazorpayMePayment({ checkoutToken: token })
-
-      if (confirmation?.order) {
-        seedCustomerOrderCaches(confirmation.order)
-      }
-
-      clearSession(restaurantSlug, tableNumber)
-      setPendingCheckoutToken('')
-      setMessage('Payment confirmed. Redirecting to your order...')
-      setTimeout(() => {
-        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
-      }, 900)
-    } catch (requestError) {
-      const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Unable to confirm payment'
-      setMessage(errorMessage)
-    } finally {
-      setConfirmingPayment(false)
-    }
-  }
-
-  const payAndPlaceOrder = async () => {
+  const placeOrder = async () => {
     if (!cart.length) return
 
-    setProcessingPayment(true)
+    setPlacingOrder(true)
     setMessage('')
-    setPendingPaymentUrl('')
 
     try {
-      const intent = await paymentService.createRazorpayMeIntent({
+      const order = await orderService.create({
         restaurantSlug,
         tableNumber: Number(tableNumber),
         floorNumber,
         couponCode,
+        customerNote,
         items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
       })
 
-      if (!intent?.paymentUrl || !intent?.checkoutToken) {
-        throw new Error('Unable to start payment session')
+      if (order?._id) {
+        seedCustomerOrderCaches(order)
       }
 
-      setPendingPaymentUrl(intent.paymentUrl)
-
-      const openedWindow = window.open(intent.paymentUrl, '_blank', 'noopener,noreferrer')
-
-      setPendingCheckoutToken(intent.checkoutToken)
-      setMessage(
-        openedWindow
-          ? 'Payment page opened in a new tab. Complete payment, then click Confirm Payment below.'
-          : 'Payment link is ready below. Click Open Payment Link, complete payment, then click Confirm Payment below.',
-      )
+      clearSession(restaurantSlug, tableNumber)
+      setMessage('Order placed successfully. Redirecting...')
+      setTimeout(() => {
+        navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
+      }, 900)
     } catch (requestError) {
-      const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Payment failed'
+      const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Unable to place order'
       setMessage(errorMessage)
     } finally {
-      setProcessingPayment(false)
+      setPlacingOrder(false)
     }
   }
 
@@ -136,8 +98,8 @@ export default function CustomerCheckoutPage() {
     <div className="customer-shell p-4 pb-32">
       <header className="mb-4 flex items-center justify-between">
         <div>
-          <p className="customer-page-title text-xs font-semibold uppercase">Secure Checkout</p>
-          <h1 className="text-2xl font-bold text-gray-900">Complete Your Order</h1>
+          <p className="customer-page-title text-xs font-semibold uppercase">Checkout</p>
+          <h1 className="text-2xl font-bold text-gray-900">Review and Place Order</h1>
         </div>
         <Button
           variant="secondary"
@@ -205,6 +167,17 @@ export default function CustomerCheckoutPage() {
           />
         </label>
 
+        <label className="mt-3 block">
+          <span className="mb-1 block text-sm font-medium text-gray-800">Note for Kitchen (optional)</span>
+          <textarea
+            className="input min-h-[88px] bg-white/95"
+            value={customerNote}
+            onChange={(event) => setCustomerNote(event.target.value.slice(0, 500))}
+            placeholder="Example: less spicy, no onion"
+          />
+          <p className="mt-1 text-xs royal-muted">{customerNote.length}/500</p>
+        </label>
+
         {Array.isArray(pricing.appliedOffers) && pricing.appliedOffers.length ? (
           <div className="mt-3 space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
             <p className="font-semibold text-gray-900">Applied Offers</p>
@@ -221,33 +194,12 @@ export default function CustomerCheckoutPage() {
         <div className="mt-4 space-y-2">
           <Button
             className="royal-button-primary w-full"
-            onClick={payAndPlaceOrder}
-            disabled={!cart.length || processingPayment || confirmingPayment}
+            onClick={placeOrder}
+            disabled={!cart.length || placingOrder}
           >
-            {processingPayment ? 'Opening Payment Link...' : 'Pay & Place Order'}
+            {placingOrder ? 'Placing Order...' : 'Place Order'}
           </Button>
-          {pendingCheckoutToken ? (
-            <Button
-              className="w-full"
-              variant="secondary"
-              onClick={() => confirmPayment()}
-              disabled={confirmingPayment || processingPayment}
-            >
-              {confirmingPayment ? 'Confirming Payment...' : 'I Have Paid, Confirm Now'}
-            </Button>
-          ) : null}
-          {pendingPaymentUrl ? (
-            <Button
-              className="w-full"
-              type="button"
-              variant="secondary"
-              onClick={() => window.open(pendingPaymentUrl, '_blank', 'noopener,noreferrer')}
-              disabled={processingPayment || confirmingPayment}
-            >
-              Open Payment Link
-            </Button>
-          ) : null}
-          <p className="pt-1 text-center text-xs royal-muted">Secure Razorpay checkout for this restaurant</p>
+          <p className="pt-1 text-center text-xs royal-muted">Pay directly at the restaurant counter</p>
         </div>
       </div>
 

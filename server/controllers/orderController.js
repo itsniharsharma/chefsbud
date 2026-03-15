@@ -8,7 +8,7 @@ import { emitOrderChanged } from '../realtime/orderEvents.js'
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
 
 async function getOwnerRestaurant(ownerId) {
   return Restaurant.findOne({ ownerId }).select('_id slug').lean()
@@ -208,7 +208,7 @@ export async function deleteOrder(req, res, next) {
 
 export async function createOrder(req, res, next) {
   try {
-    const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '' } = req.body
+    const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '', customerNote = '' } = req.body
 
     const draft = await buildCustomerOrderDraft({
       restaurantSlug,
@@ -228,6 +228,7 @@ export async function createOrder(req, res, next) {
       discountTotal: draft.pricing.discountTotal,
       appliedOffers: draft.pricing.appliedOffers,
       couponCode: draft.pricing.couponCodeApplied,
+      customerNote: String(customerNote || '').trim(),
       totalAmount: draft.pricing.totalAmount,
       paymentStatus: 'Unpaid',
       orderStatus: 'Pending',
@@ -268,7 +269,7 @@ export async function getPublicOrderStatus(req, res, next) {
       isArchived: false,
     })
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt',
       )
       .lean()
 
@@ -300,11 +301,52 @@ export async function getPublicTableOrders(req, res, next) {
       .sort({ createdAt: -1 })
       .limit(PUBLIC_TABLE_ORDER_LIMIT)
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt',
       )
       .lean()
 
     return res.json(orders)
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function markOrderKotPrinted(req, res, next) {
+  try {
+    const restaurant = await getOwnerRestaurant(req.user._id)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.orderId, restaurantId: restaurant._id },
+      {
+        $set: {
+          kotPrinted: true,
+          kotPrintedAt: new Date(),
+        },
+      },
+      { new: true, runValidators: true },
+    )
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    invalidateCacheByTags([
+      `analytics:${String(restaurant._id)}`,
+      `orders:board:${String(restaurant._id)}`,
+      `orders:table:${restaurant.slug}:${order.tableNumber}`,
+      `orders:order:${String(order._id)}`,
+    ])
+    emitOrderChanged(restaurant._id, {
+      type: 'kot-printed',
+      orderId: String(order._id),
+      kotPrinted: true,
+      kotPrintedAt: order.kotPrintedAt,
+    })
+
+    return res.json(order)
   } catch (error) {
     next(error)
   }
