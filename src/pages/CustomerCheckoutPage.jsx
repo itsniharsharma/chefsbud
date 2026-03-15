@@ -21,6 +21,7 @@ export default function CustomerCheckoutPage() {
   const [message, setMessage] = useState('')
   const [couponCode, setCouponCode] = useState('')
   const [pendingCheckoutToken, setPendingCheckoutToken] = useState('')
+  const [pendingPaymentUrl, setPendingPaymentUrl] = useState('')
   const [pricing, setPricing] = useState({ subtotalAmount: 0, discountTotal: 0, totalAmount: 0, appliedOffers: [] })
 
   const session = getSession(restaurantSlug, tableNumber)
@@ -98,6 +99,10 @@ export default function CustomerCheckoutPage() {
 
     setProcessingPayment(true)
     setMessage('')
+    setPendingPaymentUrl('')
+
+    // Pre-open a tab in direct click context to avoid popup blockers.
+    const checkoutWindow = window.open('', '_blank', 'noopener,noreferrer')
 
     try {
       const intent = await paymentService.createRazorpayMeIntent({
@@ -112,14 +117,22 @@ export default function CustomerCheckoutPage() {
         throw new Error('Unable to start payment session')
       }
 
-      const openedWindow = window.open(intent.paymentUrl, '_blank', 'noopener,noreferrer')
-      if (!openedWindow) {
-        throw new Error('Popup blocked. Please allow popups and try again.')
+      if (checkoutWindow && !checkoutWindow.closed) {
+        checkoutWindow.location.href = intent.paymentUrl
+      } else {
+        setPendingPaymentUrl(intent.paymentUrl)
       }
 
       setPendingCheckoutToken(intent.checkoutToken)
-      setMessage('Payment page opened in a new tab. Complete payment, then click Confirm Payment below.')
+      setMessage(
+        checkoutWindow && !checkoutWindow.closed
+          ? 'Payment page opened in a new tab. Complete payment, then click Confirm Payment below.'
+          : 'Payment link is ready. Click Open Payment Link, complete payment, then click Confirm Payment below.',
+      )
     } catch (requestError) {
+      if (checkoutWindow && !checkoutWindow.closed) {
+        checkoutWindow.close()
+      }
       const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Payment failed'
       setMessage(errorMessage)
     } finally {
@@ -229,6 +242,17 @@ export default function CustomerCheckoutPage() {
               disabled={confirmingPayment || processingPayment}
             >
               {confirmingPayment ? 'Confirming Payment...' : 'I Have Paid, Confirm Now'}
+            </Button>
+          ) : null}
+          {pendingPaymentUrl ? (
+            <Button
+              className="w-full"
+              type="button"
+              variant="secondary"
+              onClick={() => window.open(pendingPaymentUrl, '_blank', 'noopener,noreferrer')}
+              disabled={processingPayment || confirmingPayment}
+            >
+              Open Payment Link
             </Button>
           ) : null}
           <p className="pt-1 text-center text-xs royal-muted">Secure Razorpay checkout for this restaurant</p>
