@@ -133,7 +133,7 @@ export default function PricingPage() {
         key: subscriptionCheckout.keyId,
         subscription_id: subscriptionCheckout.subscriptionId,
         name: "Chef's Bud",
-        description: 'Business plan - Rs 399 monthly auto-payment',
+        description: 'Business plan - Rs 600 monthly auto-payment',
         prefill,
         retry: {
           enabled: true,
@@ -178,9 +178,9 @@ export default function PricingPage() {
               Required Auto-Pay
             </span>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Business Plan</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-900">Rs 10,000 + Rs 399/month</h2>
+            <h2 className="mt-2 text-2xl font-bold text-slate-900">Rs 10,000 + Rs 600/month</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Step 1: pay Rs 10,000 setup. Step 2: approve Rs 399 monthly autopay. Access is enabled only after both steps.
+              Step 1: pay Rs 10,000 setup. Step 2: approve Rs 600 monthly autopay. Access is enabled only after both steps.
             </p>
 
             <ul className="mt-5 space-y-2 text-sm text-slate-700">
@@ -195,8 +195,8 @@ export default function PricingPage() {
               {activePlan === 'hybrid'
                 ? 'Processing...'
                 : hasSetupPaid
-                  ? 'Continue Rs 399/month Autopay Setup'
-                  : 'Pay Rs 10,000 and Enable Rs 399/month Autopay'}
+                  ? 'Continue Rs 600/month Autopay Setup'
+                  : 'Pay Rs 10,000 and Enable Rs 600/month Autopay'}
             </Button>
           </section>
         </div>
