@@ -31,7 +31,7 @@ OPENAI_API_KEY=<your-openai-api-key>
 OPENAI_MODEL=gpt-4o-mini
 RAZORPAY_KEY_ID=<your-razorpay-key-id>
 RAZORPAY_KEY_SECRET=<your-razorpay-key-secret>
-RAZORPAY_HYBRID_MONTHLY_PLAN_ID=<your-razorpay-plan-id-for-rs-250>
+RAZORPAY_HYBRID_MONTHLY_PLAN_ID=<your-razorpay-plan-id-for-rs-999>
 KEEP_ALIVE_TIMEOUT_MS=65000
 HEADERS_TIMEOUT_MS=66000
 
