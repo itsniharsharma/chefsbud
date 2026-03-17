@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CustomerBottomNav from '../components/CustomerBottomNav'
+import Button from '../components/Button'
 import { menuService } from '../services/menuService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { formatCurrencyINR } from '../utils/currency'
@@ -155,6 +156,16 @@ export default function CustomerMenuPage() {
         {activeCategory && (
           <section className="mt-5">
             <div className="mb-3 flex items-center justify-between">
+              <Button
+                variant="secondary"
+                className="border-red-200 text-red-700 hover:border-red-300"
+                onClick={() => setActiveCategory(null)}
+              >
+                Back to Menu
+              </Button>
+            </div>
+
+            <div className="mb-3 flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-900">{selectedCategoryName}</h2>
               <p className="text-xs text-gray-500">{visibleItems.length} items</p>
             </div>
@@ -200,14 +211,6 @@ export default function CustomerMenuPage() {
                 })}
               </div>
             )}
-
-            {/* Back to categories link */}
-            <button
-              onClick={() => setActiveCategory(null)}
-              className="mt-6 flex items-center gap-1 text-sm font-semibold text-red-600 hover:underline"
-            >
-              ‹ All Categories
-            </button>
           </section>
         )}
       </main>
