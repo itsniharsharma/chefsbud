@@ -4,12 +4,14 @@ import { formatCurrencyINR } from '../utils/currency'
 
 const statuses = ['Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
 
-function OrderCard({ order, onStatusChange, onPrintKot, printingKotOrderId, showStatusActions = true }) {
+function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, printingBillOrderId, printingKotOrderId, showStatusActions = true }) {
   const orderId = order._id || order.id
   const label = order.orderStatus || order.status
   const total = order.totalAmount ?? order.total ?? 0
   const floorNumber = Number(order.floorNumber || 1)
   const isKotPrinted = Boolean(order.kotPrinted)
+  const isBillPrinted = Boolean(order.billPrinted)
+  const isPrintingBill = String(printingBillOrderId || '') === String(orderId)
   const isPrintingKot = String(printingKotOrderId || '') === String(orderId)
   const itemText = Array.isArray(order.items)
     ? order.items
@@ -40,12 +42,29 @@ function OrderCard({ order, onStatusChange, onPrintKot, printingKotOrderId, show
       <div className="mt-3">
         <Button
           type="button"
-          variant={isKotPrinted ? 'secondary' : 'primary'}
-          className={isKotPrinted ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400' : ''}
-          onClick={() => onPrintKot?.(order)}
-          disabled={isPrintingKot || isKotPrinted}
+          variant="secondary"
+          className={
+            isBillPrinted
+              ? 'mr-2 border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
+              : 'mr-2 border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100'
+          }
+          onClick={() => onPrintBill?.(order)}
+          disabled={isPrintingBill}
         >
-          {isPrintingKot ? 'Printing KOT...' : isKotPrinted ? 'KOT Printed' : 'Print KOT'}
+          {isPrintingBill ? 'Printing Bill...' : isBillPrinted ? 'Print Bill (Clicked)' : 'Print Bill'}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className={
+            isKotPrinted
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
+              : 'border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100'
+          }
+          onClick={() => onPrintKot?.(order)}
+          disabled={isPrintingKot}
+        >
+          {isPrintingKot ? 'Printing KOT...' : isKotPrinted ? 'Print KOT (Clicked)' : 'Print KOT'}
         </Button>
       </div>
       {showStatusActions ? (

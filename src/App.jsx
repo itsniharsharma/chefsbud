@@ -18,7 +18,7 @@ const MenuPage = lazy(importers.menu)
 const TablesPage = lazy(importers.tables)
 const OffersPage = lazy(importers.offers)
 const AnalyticsPage = lazy(importers.analytics)
-const BillingPage = lazy(importers.billing)
+const RecentOrdersPage = lazy(importers.billing)
 const SettingsPage = lazy(importers.settings)
 const CustomerMenuPage = lazy(importers.customerMenu)
 const CustomerCheckoutPage = lazy(importers.customerCheckout)
@@ -87,7 +87,8 @@ function App() {
             <Route path="tables" element={<TablesPage />} />
             <Route path="offers" element={<OffersPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
-            <Route path="billing" element={<BillingPage />} />
+            <Route path="recent-orders" element={<RecentOrdersPage />} />
+            <Route path="billing" element={<Navigate to="/dashboard/recent-orders" replace />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
 

@@ -45,6 +45,8 @@ const orderSchema = new mongoose.Schema(
     providerPaymentId: { type: String, default: '', index: true },
     paymentCapturedAt: { type: Date, default: null },
     paymentFailureReason: { type: String, default: '' },
+    billPrinted: { type: Boolean, default: false, index: true },
+    billPrintedAt: { type: Date, default: null },
     kotPrinted: { type: Boolean, default: false, index: true },
     kotPrintedAt: { type: Date, default: null },
     orderStatus: {

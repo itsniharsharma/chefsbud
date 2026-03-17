@@ -4,6 +4,7 @@ import {
 	createOrder,
 	deleteOrder,
 	getOrders,
+	markOrderBillPrinted,
 	markOrderKotPrinted,
 	getPublicTableOrders,
 	getPublicOrderStatus,
@@ -76,6 +77,7 @@ router.patch(
 	updateOrderStatus,
 )
 router.patch('/:orderId/kot-printed', requireAuth, requireActiveBilling, markOrderKotPrinted)
+router.patch('/:orderId/bill-printed', requireAuth, requireActiveBilling, markOrderBillPrinted)
 router.delete('/:orderId', requireAuth, requireActiveBilling, deleteOrder)
 
 export default router

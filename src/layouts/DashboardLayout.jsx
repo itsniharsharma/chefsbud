@@ -18,7 +18,7 @@ const titles = {
   '/dashboard/tables': 'Table Management',
   '/dashboard/offers': 'Offers (Under Development)',
   '/dashboard/analytics': 'Analytics (Under Development)',
-  '/dashboard/billing': 'Billing',
+  '/dashboard/recent-orders': 'Recent Orders',
   '/dashboard/settings': 'Settings',
 }
 
@@ -48,6 +48,15 @@ export default function DashboardLayout() {
     queryClient.prefetchQuery({
       queryKey: queryKeys.dashboard.menu(restaurant.slug),
       queryFn: () => menuService.getBySlug(restaurant.slug),
+    })
+    queryClient.prefetchQuery({
+      queryKey: queryKeys.dashboard.recentOrders(restaurant._id, 'All'),
+      queryFn: () =>
+        orderService.list(restaurant._id, {
+          view: 'completed',
+          scope: 'all',
+          limit: 200,
+        }),
     })
 
     if (isOwner) {

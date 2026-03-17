@@ -24,6 +24,9 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
         queryKey: ['dashboard', 'orders-board', restaurantId],
       })
       queryClient.invalidateQueries({
+        queryKey: ['dashboard', 'recent-orders', restaurantId],
+      })
+      queryClient.invalidateQueries({
         queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
       })
     }

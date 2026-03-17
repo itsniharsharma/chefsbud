@@ -28,7 +28,7 @@ const dashboardPathImporters = {
   '/dashboard/tables': importers.tables,
   '/dashboard/offers': importers.offers,
   '/dashboard/analytics': importers.analytics,
-  '/dashboard/billing': importers.billing,
+  '/dashboard/recent-orders': importers.billing,
   '/dashboard/settings': importers.settings,
 }
 

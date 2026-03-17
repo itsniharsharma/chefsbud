@@ -8,7 +8,7 @@ import { emitOrderChanged } from '../realtime/orderEvents.js'
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
 
 async function getOwnerRestaurant(ownerId) {
   return Restaurant.findOne({ ownerId }).select('_id slug').lean()
@@ -344,6 +344,47 @@ export async function markOrderKotPrinted(req, res, next) {
       orderId: String(order._id),
       kotPrinted: true,
       kotPrintedAt: order.kotPrintedAt,
+    })
+
+    return res.json(order)
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function markOrderBillPrinted(req, res, next) {
+  try {
+    const restaurant = await getOwnerRestaurant(req.user._id)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.orderId, restaurantId: restaurant._id },
+      {
+        $set: {
+          billPrinted: true,
+          billPrintedAt: new Date(),
+        },
+      },
+      { new: true, runValidators: true },
+    )
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    invalidateCacheByTags([
+      `analytics:${String(restaurant._id)}`,
+      `orders:board:${String(restaurant._id)}`,
+      `orders:table:${restaurant.slug}:${order.tableNumber}`,
+      `orders:order:${String(order._id)}`,
+    ])
+    emitOrderChanged(restaurant._id, {
+      type: 'bill-printed',
+      orderId: String(order._id),
+      billPrinted: true,
+      billPrintedAt: order.billPrintedAt,
     })
 
     return res.json(order)

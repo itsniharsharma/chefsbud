@@ -6,6 +6,7 @@ import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
 import { queryKeys } from '../lib/queryKeys'
 import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
+import { formatCurrencyINR } from '../utils/currency'
 
 const statusFilters = ['All', 'Confirmed', 'Preparing', 'Ready', 'Served']
 
@@ -23,6 +24,7 @@ export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState('All')
   const [scope, setScope] = useState('All')
   const [error, setError] = useState('')
+  const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
   const queryClient = useQueryClient()
 
@@ -68,10 +70,30 @@ export default function OrdersPage() {
     return { ...boardData, activeOrders: active }
   }
 
+  const applyBillPrintedUpdateToBoard = (boardData, orderId) => {
+    if (!boardData) return boardData
+
+    const active = (boardData.activeOrders || []).map((order) => ({ ...order }))
+    const activeIndex = active.findIndex((order) => String(order._id || order.id) === String(orderId))
+
+    if (activeIndex >= 0) {
+      active[activeIndex] = {
+        ...active[activeIndex],
+        billPrinted: true,
+        billPrintedAt: new Date().toISOString(),
+      }
+    }
+
+    return { ...boardData, activeOrders: active }
+  }
+
   const refreshBoard = () => {
     if (!restaurant?._id) return Promise.resolve()
-    return queryClient.invalidateQueries({
+    queryClient.invalidateQueries({
       queryKey: ['dashboard', 'orders-board', restaurant._id],
+    })
+    return queryClient.invalidateQueries({
+      queryKey: ['dashboard', 'recent-orders', restaurant._id],
     })
   }
 
@@ -132,15 +154,117 @@ export default function OrdersPage() {
     },
   })
 
+  const markBillPrintedMutation = useMutation({
+    mutationFn: ({ id }) => orderService.markBillPrinted(id),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
+      const previousBoards = queryClient.getQueriesData({
+        queryKey: ['dashboard', 'orders-board', restaurant?._id],
+      })
+
+      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+        applyBillPrintedUpdateToBoard(boardData, id),
+      )
+
+      return { previousBoards }
+    },
+    onSuccess: () => {
+      setError('')
+      refreshBoard()
+    },
+    onError: (requestError, _variables, context) => {
+      if (context?.previousBoards) {
+        for (const [key, value] of context.previousBoards) {
+          queryClient.setQueryData(key, value)
+        }
+      }
+      setError(requestError?.response?.data?.message || 'Failed to update bill print status')
+    },
+  })
+
   const onStatusChange = (id, status) => {
     if (!restaurant?._id) return
     updateStatusMutation.mutate({ id, status })
   }
 
+  const buildBillHtml = (order) => {
+    const rows = (order.items || [])
+      .map((item) => {
+        const qty = Number(item.quantity || 0)
+        const price = Number(item.price || 0)
+        const subtotal = qty * price
+        return `
+          <tr>
+            <td>${escapeHtml(item.name)}</td>
+            <td style="text-align:center;">${qty}</td>
+            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(price))}</td>
+            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(subtotal))}</td>
+          </tr>
+        `
+      })
+      .join('')
+
+    return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Bill ${escapeHtml(order._id || order.id)}</title>
+  </head>
+  <body style="font-family:Arial,sans-serif;padding:16px;color:#0f172a;">
+    <h2 style="margin:0 0 8px 0;">${escapeHtml(restaurant?.name || "Chef's Bud")}</h2>
+    <div style="font-size:12px;line-height:1.6;">
+      <div><strong>Order:</strong> ${escapeHtml(order._id || order.id)}</div>
+      <div><strong>Table:</strong> ${escapeHtml(order.tableNumber)} | <strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</div>
+      <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
+      <div><strong>Status:</strong> ${escapeHtml(order.orderStatus || '-')}</div>
+    </div>
+    <hr style="margin:10px 0;"/>
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:4px 0;">Item</th>
+          <th style="text-align:center;padding:4px 0;">Qty</th>
+          <th style="text-align:right;padding:4px 0;">Price</th>
+          <th style="text-align:right;padding:4px 0;">Subtotal</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <hr style="margin:10px 0;"/>
+    <div style="text-align:right;font-weight:700;">Total: ${escapeHtml(formatCurrencyINR(order.totalAmount || 0))}</div>
+  </body>
+</html>`
+  }
+
+  const printBillForOrder = async (order) => {
+    const orderId = String(order?._id || order?.id || '')
+    if (!orderId || !restaurant?._id) return
+
+    setPrintingBillOrderId(orderId)
+    setError('')
+
+    try {
+      await markBillPrintedMutation.mutateAsync({ id: orderId })
+
+      const opened = window.open('', '_blank', 'width=860,height=700')
+      if (!opened) {
+        throw new Error('Popup blocked. Please allow popups to print bill.')
+      }
+
+      opened.document.write(buildBillHtml(order))
+      opened.document.close()
+      opened.focus()
+      opened.print()
+    } catch (requestError) {
+      setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill')
+    } finally {
+      setPrintingBillOrderId('')
+    }
+  }
+
   const printKotForOrder = async (order) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
-    if (order?.kotPrinted) return
 
     setPrintingKotOrderId(orderId)
     setError('')
@@ -229,7 +353,9 @@ export default function OrdersPage() {
                 key={order._id || order.id}
                 order={order}
                 onStatusChange={onStatusChange}
+                onPrintBill={printBillForOrder}
                 onPrintKot={printKotForOrder}
+                printingBillOrderId={printingBillOrderId}
                 printingKotOrderId={printingKotOrderId}
               />
             ))}

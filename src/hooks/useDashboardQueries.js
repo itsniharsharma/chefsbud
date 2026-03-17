@@ -20,6 +20,22 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope }) {
   })
 }
 
+export function useRecentOrdersQuery({ restaurantId, scope }) {
+  return useQuery({
+    queryKey: queryKeys.dashboard.recentOrders(restaurantId, scope),
+    enabled: Boolean(restaurantId),
+    queryFn: () =>
+      orderService.list(restaurantId, {
+        view: 'completed',
+        scope: scope === 'Today' ? 'today' : 'all',
+        limit: 200,
+      }),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    placeholderData: (previousData) => previousData,
+  })
+}
+
 export function useTablesQuery({ restaurantId }) {
   return useQuery({
     queryKey: queryKeys.dashboard.tables(restaurantId),
