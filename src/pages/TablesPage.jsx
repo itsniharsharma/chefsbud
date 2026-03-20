@@ -7,6 +7,7 @@ import { tableService } from '../services/tableService'
 import { buildCustomerMenuUrl } from '../utils/customerUrl'
 import { useTablesQuery } from '../hooks/useDashboardQueries'
 import { queryKeys } from '../lib/queryKeys'
+import { createLabeledQrDataUrl } from '../utils/qrDownload'
 
 export default function TablesPage() {
   const [count, setCount] = useState('12')
@@ -72,10 +73,12 @@ export default function TablesPage() {
           tableNumber,
           floorNumber: floor,
         })
-        const dataUrl = await QRCode.toDataURL(qrValue, {
-          width: 720,
-          margin: 2,
-          errorCorrectionLevel: 'H',
+        const dataUrl = await createLabeledQrDataUrl({
+          QRCode,
+          value: qrValue,
+          tableNumber,
+          floorNumber: floor,
+          qrSize: 720,
         })
 
         const base64Png = dataUrl.split(',')[1]

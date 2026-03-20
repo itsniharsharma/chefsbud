@@ -1,10 +1,9 @@
-import { useRef } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import Button from './Button'
 import { buildCustomerMenuUrl } from '../utils/customerUrl'
+import { createLabeledQrDataUrl } from '../utils/qrDownload'
 
 export default function QRCard({ tableNumber, floorNumber = 1, slug }) {
-  const qrRef = useRef(null)
   const hasValidSlug = Boolean(String(slug || '').trim())
   const value = hasValidSlug
     ? buildCustomerMenuUrl({
@@ -15,15 +14,26 @@ export default function QRCard({ tableNumber, floorNumber = 1, slug }) {
     })
     : ''
 
-  const download = () => {
-    const canvas = qrRef.current?.querySelector('canvas')
-    if (!canvas) return
+  const download = async () => {
+    if (!value) return
 
-    const url = canvas.toDataURL('image/png')
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `floor-${Number(floorNumber || 1)}-table-${tableNumber}-qr.png`
-    link.click()
+    try {
+      const { default: QRCode } = await import('qrcode')
+      const url = await createLabeledQrDataUrl({
+        QRCode,
+        value,
+        tableNumber,
+        floorNumber,
+        qrSize: 720,
+      })
+
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `floor-${Number(floorNumber || 1)}-table-${tableNumber}-qr.png`
+      link.click()
+    } catch (error) {
+      console.error('Failed to download labeled QR code', error)
+    }
   }
 
   return (
@@ -32,7 +42,7 @@ export default function QRCard({ tableNumber, floorNumber = 1, slug }) {
       {hasValidSlug ? (
         <>
           <p className="mb-3 mt-1 text-sm text-slate-500">QR: {value}</p>
-          <div ref={qrRef} className="mb-3 inline-block rounded-lg border border-slate-200 p-2">
+          <div className="mb-3 inline-block rounded-lg border border-slate-200 p-2">
             <QRCodeCanvas value={value} size={150} />
           </div>
           <Button onClick={download}>Download QR</Button>
