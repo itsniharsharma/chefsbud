@@ -6,6 +6,7 @@ import { initSocketServer } from './realtime/socketServer.js'
 import { logger } from './utils/logger.js'
 
 const PORT = process.env.PORT || 5000
+const PROCESS_ROLE = String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase()
 
 process.on('uncaughtException', (error) => {
   logger.error('uncaught_exception', { errorMessage: error?.message, stack: error?.stack })
@@ -18,13 +19,22 @@ process.on('unhandledRejection', (reason) => {
 
 async function start() {
   await connectDB()
+
+  if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
+    startOrderArchiveScheduler()
+    logger.info('Jobs process started', { processRole: PROCESS_ROLE })
+    return
+  }
+
   const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT} [${process.env.NODE_ENV || 'development'}]`)
   })
 
   initSocketServer(server)
 
-  startOrderArchiveScheduler()
+  if (PROCESS_ROLE === 'all') {
+    startOrderArchiveScheduler()
+  }
 
   server.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000)
   server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 66000)

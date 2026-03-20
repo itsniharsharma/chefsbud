@@ -134,6 +134,12 @@ export function startOrderArchiveScheduler() {
     return
   }
 
+  const processRole = String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase()
+  if (!['all', 'worker', 'jobs'].includes(processRole)) {
+    logger.info('Order archive scheduler skipped for process role', { processRole })
+    return
+  }
+
   const intervalMinutes = Number(process.env.ORDER_ARCHIVE_INTERVAL_MINUTES || 60)
   const safeMinutes = Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? intervalMinutes : 60
   const intervalMs = safeMinutes * 60 * 1000
@@ -161,7 +167,7 @@ export function startOrderArchiveScheduler() {
     void tick()
   }, 5000).unref?.()
 
-  logger.info('Order archive scheduler started', { intervalMinutes: safeMinutes })
+  logger.info('Order archive scheduler started', { intervalMinutes: safeMinutes, processRole })
 }
 
 export function stopOrderArchiveScheduler() {

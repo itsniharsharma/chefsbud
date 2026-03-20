@@ -35,7 +35,7 @@ router.post(
 router.get(
 	'/track/:restaurantSlug/:tableNumber',
 	cacheResponse({
-		ttlSeconds: 8,
+		ttlSeconds: 20,
 		keyBuilder: (req) => `orders:table:${req.params.restaurantSlug}:${req.params.tableNumber}`,
 		tagsBuilder: (req) => [`orders:table:${req.params.restaurantSlug}:${req.params.tableNumber}`],
 	}),
@@ -44,7 +44,7 @@ router.get(
 router.get(
 	'/track/:restaurantSlug/:tableNumber/:orderId',
 	cacheResponse({
-		ttlSeconds: 6,
+		ttlSeconds: 15,
 		keyBuilder: (req) =>
 			`orders:status:${req.params.restaurantSlug}:${req.params.tableNumber}:${req.params.orderId}`,
 		tagsBuilder: (req) => [
@@ -59,7 +59,7 @@ router.get(
 	requireAuth,
 	requireActiveBilling,
 	cacheResponse({
-		ttlSeconds: 10,
+		ttlSeconds: 20,
 		keyBuilder: (req) =>
 			`orders:board:${req.user._id}:${req.params.restaurantId}:v:${req.query.view || 'active'}:s:${req.query.status || 'All'}:sc:${req.query.scope || 'all'}`,
 		tagsBuilder: (req) => [`orders:board:${req.params.restaurantId}`],

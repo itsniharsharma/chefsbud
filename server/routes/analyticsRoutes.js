@@ -13,7 +13,7 @@ router.get(
 	requireActiveBilling,
 	requireOwner,
 	cacheResponse({
-		ttlSeconds: 60,
+		ttlSeconds: 120,
 		keyBuilder: (req) => `analytics:dashboard:${req.user._id}:${req.params.restaurantId}`,
 		tagsBuilder: (req) => [`analytics:${req.params.restaurantId}`],
 	}),

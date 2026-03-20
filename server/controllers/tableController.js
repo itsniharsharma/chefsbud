@@ -1,5 +1,6 @@
 import Table from '../models/Table.js'
 import Restaurant from '../models/Restaurant.js'
+import { invalidateCacheByTags } from '../services/responseCache.js'
 
 async function getOwnerRestaurant(ownerId) {
   return Restaurant.findOne({ ownerId }).lean()
@@ -39,6 +40,7 @@ export async function createTables(req, res, next) {
       }))
 
       await Table.insertMany(docs, { ordered: false })
+      invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
       const tables = await Table.find({ restaurantId: restaurant._id }).sort({ floorNumber: 1, tableNumber: 1 }).lean()
       return res.status(201).json(tables)
     }
@@ -53,6 +55,8 @@ export async function createTables(req, res, next) {
       tableNumber: Number(tableNumber),
       active: Boolean(active),
     })
+
+    invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
 
     return res.status(201).json(table)
   } catch (error) {

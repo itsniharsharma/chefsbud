@@ -2,15 +2,29 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queryKeys'
 import { orderService } from '../services/orderService'
 
-const CUSTOMER_STATUS_STALE_MS = 10_000
-const CUSTOMER_STATUS_REFETCH_MS = 8_000
+const CUSTOMER_STATUS_STALE_MS = 12_000
+const CUSTOMER_TABLE_REFETCH_MS = 12_000
+const CUSTOMER_ORDER_REFETCH_MS = 12_000
+const CUSTOMER_TERMINAL_ORDER_REFETCH_MS = 25_000
 
-function getVisibleRefetchInterval() {
+function getVisibleRefetchInterval(intervalMs) {
   if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
     return false
   }
 
-  return CUSTOMER_STATUS_REFETCH_MS
+  return intervalMs
+}
+
+function getTableOrdersRefetchInterval() {
+  return getVisibleRefetchInterval(CUSTOMER_TABLE_REFETCH_MS)
+}
+
+function getOrderStatusRefetchInterval(query) {
+  const orderStatus = String(query.state.data?.orderStatus || '').trim()
+  const isTerminal = orderStatus === 'Completed'
+  return getVisibleRefetchInterval(
+    isTerminal ? CUSTOMER_TERMINAL_ORDER_REFETCH_MS : CUSTOMER_ORDER_REFETCH_MS,
+  )
 }
 
 export function useCustomerTableOrdersQuery({ restaurantSlug, tableNumber }) {
@@ -20,7 +34,7 @@ export function useCustomerTableOrdersQuery({ restaurantSlug, tableNumber }) {
     queryFn: () => orderService.trackTable(restaurantSlug, tableNumber),
     staleTime: CUSTOMER_STATUS_STALE_MS,
     gcTime: 10 * 60_000,
-    refetchInterval: getVisibleRefetchInterval,
+    refetchInterval: getTableOrdersRefetchInterval,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,
@@ -40,7 +54,7 @@ export function useCustomerOrderStatusQuery({ restaurantSlug, tableNumber, order
     queryFn: () => orderService.track(restaurantSlug, tableNumber, orderId),
     staleTime: CUSTOMER_STATUS_STALE_MS,
     gcTime: 10 * 60_000,
-    refetchInterval: getVisibleRefetchInterval,
+    refetchInterval: getOrderStatusRefetchInterval,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: true,

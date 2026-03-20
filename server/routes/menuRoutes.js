@@ -19,7 +19,7 @@ const router = Router()
 router.get(
   '/:restaurantSlug',
   cacheResponse({
-    ttlSeconds: 45,
+    ttlSeconds: 120,
     keyBuilder: (req) => `menu:${req.params.restaurantSlug}`,
     tagsBuilder: (req) => [`menu:${req.params.restaurantSlug}`],
   }),

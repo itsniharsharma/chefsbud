@@ -2,6 +2,7 @@ import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
+import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
 
@@ -153,7 +154,6 @@ export async function updateOrderStatus(req, res, next) {
     }
 
     invalidateCacheByTags([
-      `analytics:${String(restaurant._id)}`,
       `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(order._id)}`,
@@ -177,7 +177,7 @@ export async function deleteOrder(req, res, next) {
     }
 
     const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
-      .select('_id orderStatus tableNumber')
+      .select('_id orderStatus tableNumber createdAt')
       .lean()
 
     if (!order) {
@@ -189,6 +189,10 @@ export async function deleteOrder(req, res, next) {
     }
 
     await Order.deleteOne({ _id: req.params.orderId, restaurantId: restaurant._id })
+    await rebuildOrderMetricsForDate({
+      restaurantId: restaurant._id,
+      date: order.createdAt || new Date(),
+    })
 
     invalidateCacheByTags([
       `analytics:${String(restaurant._id)}`,
@@ -233,6 +237,11 @@ export async function createOrder(req, res, next) {
       paymentStatus: 'Unpaid',
       orderStatus: 'Pending',
       hiddenFromActive: false,
+    })
+
+    await rebuildOrderMetricsForDate({
+      restaurantId: draft.restaurant._id,
+      date: order.createdAt || new Date(),
     })
 
     invalidateCacheByTags([`analytics:${String(draft.restaurant._id)}`])
@@ -324,7 +333,6 @@ export async function markOrderKotPrinted(req, res, next) {
     }
 
     invalidateCacheByTags([
-      `analytics:${String(restaurant._id)}`,
       `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(order._id)}`,
@@ -365,7 +373,6 @@ export async function markOrderBillPrinted(req, res, next) {
     }
 
     invalidateCacheByTags([
-      `analytics:${String(restaurant._id)}`,
       `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(order._id)}`,

@@ -1,6 +1,6 @@
-import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
+import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
 
 async function ensureOwnerRestaurant(ownerId, restaurantId) {
   if (!restaurantId) return null
@@ -38,56 +38,41 @@ export async function getDashboard(req, res, next) {
     const trendStart = new Date(startDay)
     trendStart.setDate(trendStart.getDate() - 6)
 
-    const [todayStats, trend, activeTables] = await Promise.all([
-      Order.aggregate([
-        { $match: { restaurantId: ownerRestaurant._id, createdAt: { $gte: startDay } } },
-        {
-          $group: {
-            _id: null,
-            todayRevenue: { $sum: '$totalAmount' },
-            totalOrdersToday: { $sum: 1 },
-          },
-        },
-      ]),
-      Order.aggregate([
-        {
-          $match: {
-            restaurantId: ownerRestaurant._id,
-            createdAt: { $gte: trendStart },
-          },
-        },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' },
-              day: { $dayOfMonth: '$createdAt' },
-            },
-            revenue: { $sum: '$totalAmount' },
-            date: { $first: '$createdAt' },
-          },
-        },
-        { $sort: { date: -1 } },
-        { $sort: { date: 1 } },
-      ]),
+    const [metricsDocs, activeTables] = await Promise.all([
+      ensureOrderMetricsRange({
+        restaurantId: ownerRestaurant._id,
+        startDate: trendStart,
+        endDate: startDay,
+      }),
       Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
     ])
 
-    const stats = todayStats[0] || { todayRevenue: 0, totalOrdersToday: 0 }
-    const avgOrderValue = stats.totalOrdersToday ? stats.todayRevenue / stats.totalOrdersToday : 0
-    const trendRevenueByDate = new Map(
-      trend.map((entry) => [new Date(entry.date).toISOString().slice(0, 10), entry.revenue]),
+    const metricsByDateKey = new Map(
+      metricsDocs.map((entry) => [
+        entry.dateKey,
+        {
+          totalRevenue: Number(entry.totalRevenue || 0),
+          totalOrders: Number(entry.totalOrders || 0),
+          averageOrderValue: Number(entry.averageOrderValue || 0),
+        },
+      ]),
     )
+    const todayKey = startDay.toISOString().slice(0, 10)
+    const todayMetrics = metricsByDateKey.get(todayKey) || {
+      totalRevenue: 0,
+      totalOrders: 0,
+      averageOrderValue: 0,
+    }
     const revenueTrend = buildDateKeys(trendStart, startDay).map((isoDate) => ({
       day: formatShortDate(isoDate),
-      revenue: Number(trendRevenueByDate.get(isoDate) || 0),
+      revenue: Number(metricsByDateKey.get(isoDate)?.totalRevenue || 0),
     }))
 
     return res.json({
       cards: {
-        todayRevenue: stats.todayRevenue,
-        totalOrdersToday: stats.totalOrdersToday,
-        averageOrderValue: avgOrderValue,
+        todayRevenue: todayMetrics.totalRevenue,
+        totalOrdersToday: todayMetrics.totalOrders,
+        averageOrderValue: todayMetrics.averageOrderValue,
         activeTables,
       },
       recentOrders: [],

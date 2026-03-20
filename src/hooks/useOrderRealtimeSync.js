@@ -19,24 +19,28 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
       restaurantId,
     }
 
-    const invalidateOrders = () => {
+    const invalidateOrders = (payload = {}) => {
+      const eventType = String(payload?.type || '').trim()
       queryClient.invalidateQueries({
         queryKey: ['dashboard', 'orders-board', restaurantId],
       })
       queryClient.invalidateQueries({
         queryKey: ['dashboard', 'recent-orders', restaurantId],
       })
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
-      })
+
+      if (eventType === 'created' || eventType === 'deleted') {
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
+        })
+      }
     }
 
     const onConnected = () => {
       socket.emit('dashboard:join-restaurant', roomPayload)
     }
 
-    const onOrderChanged = () => {
-      invalidateOrders()
+    const onOrderChanged = (payload) => {
+      invalidateOrders(payload)
     }
 
     socket.on('connect', onConnected)
