@@ -419,12 +419,54 @@ function percentage(numerator, denominator) {
   return round2((Number(numerator || 0) / Number(denominator || 0)) * 100)
 }
 
+function buildDropoff(previousStageValue, nextStageValue) {
+  const prev = clampNonNegative(previousStageValue)
+  const next = clampNonNegative(nextStageValue)
+  const dropCount = Math.max(0, prev - next)
+
+  return {
+    count: dropCount,
+    rate: percentage(dropCount, prev),
+  }
+}
+
+function classifyPerformance(item) {
+  const views = clampNonNegative(item?.views)
+  const orders = clampNonNegative(item?.orders)
+  const revenue = round2(item?.revenue)
+  const viewToOrderRate = Number(item?.viewToOrderRate || 0)
+
+  if (views >= 20 && viewToOrderRate < 10) return 'attention_leak'
+  if (orders >= 8 || revenue >= 2500) return 'star'
+  if (views <= 8 && orders >= 3) return 'hidden_gem'
+  if (views >= 10 && orders >= 2) return 'steady'
+  return 'low_signal'
+}
+
+function sumRevenue(items = []) {
+  return round2(items.reduce((sum, item) => sum + round2(item?.revenue), 0))
+}
+
+function buildRevenueShare(items = [], totalRevenue = 0) {
+  return items.map((item) => ({
+    ...item,
+    revenueShare: percentage(item.revenue, totalRevenue),
+  }))
+}
+
+function normalizeHourLabel(hour) {
+  const safeHour = Math.max(0, Math.min(23, Number(hour || 0)))
+  const suffix = safeHour >= 12 ? 'PM' : 'AM'
+  const displayHour = safeHour % 12 || 12
+  return `${displayHour}${suffix}`
+}
+
 export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
   const safeRangeDays = Math.max(1, Math.min(Number(rangeDays || 14), 90))
   const endDate = normalizeDate(new Date())
   const startDate = normalizeDate(addDays(endDate, -(safeRangeDays - 1)))
 
-  const [dailyMetrics, itemRollups] = await Promise.all([
+  const [dailyMetrics, itemRollups, hourlyOrders] = await Promise.all([
     AnalyticsDailyMetrics.find({
       restaurantId,
       date: { $gte: startDate, $lte: endDate },
@@ -470,6 +512,30 @@ export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
         },
       },
     ]),
+    Order.aggregate([
+      {
+        $match: {
+          restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+          orderStatus: 'Completed',
+          completedAt: {
+            $gte: startDate,
+            $lt: addDays(endDate, 1),
+          },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            hour: { $hour: '$completedAt' },
+          },
+          orders: { $sum: 1 },
+          revenue: { $sum: '$totalAmount' },
+        },
+      },
+      {
+        $sort: { '_id.hour': 1 },
+      },
+    ]),
   ])
 
   const dailyByKey = new Map(
@@ -506,10 +572,18 @@ export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
     .map((item) => ({
       ...item,
       menuItemId: String(item.menuItemId),
+      views: clampNonNegative(item.views),
+      addToCart: clampNonNegative(item.addToCart),
+      orders: clampNonNegative(item.orders),
+      quantitySold: clampNonNegative(item.quantitySold),
       revenue: round2(item.revenue),
       viewToCartRate: percentage(item.addToCart, item.views),
       cartToOrderRate: percentage(item.orders, item.addToCart),
       viewToOrderRate: percentage(item.orders, item.views),
+    }))
+    .map((item) => ({
+      ...item,
+      performanceBand: classifyPerformance(item),
     }))
 
   const byViews = [...topItems].sort((a, b) => b.views - a.views || b.orders - a.orders).slice(0, 5)
@@ -524,6 +598,35 @@ export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
       return b.views - a.views
     })
     .slice(0, 5)
+  const viewsVsOrders = [...topItems]
+    .filter((item) => item.views > 0 || item.orders > 0)
+    .sort((a, b) => b.views - a.views || b.orders - a.orders)
+    .slice(0, 8)
+  const revenueContribution = buildRevenueShare(byRevenue, totals.revenue)
+  const topRevenueConcentration = percentage(sumRevenue(byRevenue.slice(0, 3)), totals.revenue)
+  const hourlyTrend = Array.from({ length: 24 }, (_, hour) => {
+    const match = (Array.isArray(hourlyOrders) ? hourlyOrders : []).find((entry) => Number(entry?._id?.hour) === hour)
+    return {
+      hour: normalizeHourLabel(hour),
+      hour24: hour,
+      orders: clampNonNegative(match?.orders),
+      revenue: round2(match?.revenue),
+    }
+  })
+  const peakHour = [...hourlyTrend].sort((a, b) => b.orders - a.orders || b.revenue - a.revenue)[0] || {
+    hour: '-',
+    orders: 0,
+    revenue: 0,
+  }
+  const heatmap = [...topItems]
+    .filter((item) => item.views > 0 || item.orders > 0 || item.revenue > 0)
+    .sort((a, b) => {
+      const priorityA = ['attention_leak', 'star', 'hidden_gem', 'steady', 'low_signal'].indexOf(a.performanceBand)
+      const priorityB = ['attention_leak', 'star', 'hidden_gem', 'steady', 'low_signal'].indexOf(b.performanceBand)
+      if (priorityA !== priorityB) return priorityA - priorityB
+      return b.views - a.views || b.revenue - a.revenue
+    })
+    .slice(0, 16)
 
   return {
     rangeDays: safeRangeDays,
@@ -535,14 +638,37 @@ export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
       viewToCartRate: percentage(totals.addToCart, totals.views),
       cartToOrderRate: percentage(totals.orders, totals.addToCart),
       viewToOrderRate: percentage(totals.orders, totals.views),
+      topRevenueConcentration,
+      peakHourLabel: peakHour.hour,
+      peakHourOrders: peakHour.orders,
+    },
+    funnel: {
+      stages: [
+        { key: 'views', label: 'Views', value: totals.views },
+        { key: 'add_to_cart', label: 'Add to Cart', value: totals.addToCart },
+        { key: 'orders', label: 'Completed Orders', value: totals.orders },
+      ],
+      dropoffs: {
+        viewToCart: buildDropoff(totals.views, totals.addToCart),
+        cartToOrder: buildDropoff(totals.addToCart, totals.orders),
+      },
     },
     trends,
+    orderDemand: {
+      hourlyTrend,
+      peakHour,
+    },
     topItems: {
       byViews,
       byOrders,
       byRevenue,
       opportunities,
     },
+    comparisons: {
+      viewsVsOrders,
+    },
+    revenueContribution,
+    heatmap,
     itemFunnel: [...topItems]
       .sort((a, b) => b.revenue - a.revenue || b.orders - a.orders)
       .slice(0, 12),
