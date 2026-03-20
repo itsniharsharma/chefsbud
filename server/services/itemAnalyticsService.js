@@ -419,39 +419,39 @@ function percentage(numerator, denominator) {
   return round2((Number(numerator || 0) / Number(denominator || 0)) * 100)
 }
 
-function buildDropoff(previousStageValue, nextStageValue) {
-  const prev = clampNonNegative(previousStageValue)
-  const next = clampNonNegative(nextStageValue)
-  const dropCount = Math.max(0, prev - next)
+function buildGrowth(currentValue, previousValue, formatter = 'number') {
+  const current = Number(currentValue || 0)
+  const previous = Number(previousValue || 0)
+  const absoluteChange = round2(current - previous)
+  const growthRate = previous > 0 ? round2(((current - previous) / previous) * 100) : current > 0 ? 100 : 0
 
   return {
-    count: dropCount,
-    rate: percentage(dropCount, prev),
+    current: formatter === 'currency' ? round2(current) : current,
+    previous: formatter === 'currency' ? round2(previous) : previous,
+    absoluteChange,
+    growthRate,
   }
 }
 
-function classifyPerformance(item) {
-  const views = clampNonNegative(item?.views)
-  const orders = clampNonNegative(item?.orders)
-  const revenue = round2(item?.revenue)
-  const viewToOrderRate = Number(item?.viewToOrderRate || 0)
-
-  if (views >= 20 && viewToOrderRate < 10) return 'attention_leak'
-  if (orders >= 8 || revenue >= 2500) return 'star'
-  if (views <= 8 && orders >= 3) return 'hidden_gem'
-  if (views >= 10 && orders >= 2) return 'steady'
-  return 'low_signal'
+function buildDropoff(views, orders) {
+  const viewCount = clampNonNegative(views)
+  const orderCount = clampNonNegative(orders)
+  return Math.max(0, viewCount - orderCount)
 }
 
-function sumRevenue(items = []) {
-  return round2(items.reduce((sum, item) => sum + round2(item?.revenue), 0))
+function computeAov(revenue, orders) {
+  const safeOrders = clampNonNegative(orders)
+  if (!safeOrders) return 0
+  return round2(clampNonNegative(revenue) / safeOrders)
 }
 
-function buildRevenueShare(items = [], totalRevenue = 0) {
-  return items.map((item) => ({
-    ...item,
-    revenueShare: percentage(item.revenue, totalRevenue),
-  }))
+function createEmptyTotals() {
+  return {
+    views: 0,
+    addToCart: 0,
+    orders: 0,
+    revenue: 0,
+  }
 }
 
 function normalizeHourLabel(hour) {
@@ -461,216 +461,251 @@ function normalizeHourLabel(hour) {
   return `${displayHour}${suffix}`
 }
 
-export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
-  const safeRangeDays = Math.max(1, Math.min(Number(rangeDays || 14), 90))
-  const endDate = normalizeDate(new Date())
-  const startDate = normalizeDate(addDays(endDate, -(safeRangeDays - 1)))
-
-  const [dailyMetrics, itemRollups, hourlyOrders] = await Promise.all([
-    AnalyticsDailyMetrics.find({
-      restaurantId,
-      date: { $gte: startDate, $lte: endDate },
-    })
-      .sort({ date: 1 })
-      .select('date dateKey views addToCart completedOrders revenue')
-      .lean(),
-    AnalyticsItemDailyMetrics.aggregate([
-      {
-        $match: {
-          restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
-          date: { $gte: startDate, $lte: endDate },
-        },
+async function aggregateItemMetrics({ restaurantId, startDate, endDate }) {
+  return AnalyticsItemDailyMetrics.aggregate([
+    {
+      $match: {
+        restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+        date: { $gte: startDate, $lte: endDate },
       },
-      {
-        $group: {
-          _id: '$menuItemId',
-          views: { $sum: '$views' },
-          addToCart: { $sum: '$addToCart' },
-          orders: { $sum: '$orders' },
-          quantitySold: { $sum: '$quantitySold' },
-          revenue: { $sum: '$revenue' },
-        },
+    },
+    {
+      $group: {
+        _id: '$menuItemId',
+        views: { $sum: '$views' },
+        orders: { $sum: '$orders' },
+        revenue: { $sum: '$revenue' },
       },
-      {
-        $lookup: {
-          from: 'menuitems',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'menuItem',
-        },
+    },
+    {
+      $lookup: {
+        from: 'menuitems',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'menuItem',
       },
-      {
-        $project: {
-          _id: 0,
-          menuItemId: '$_id',
-          name: { $ifNull: [{ $arrayElemAt: ['$menuItem.name', 0] }, 'Deleted item'] },
-          views: 1,
-          addToCart: 1,
-          orders: 1,
-          quantitySold: 1,
-          revenue: 1,
-        },
+    },
+    {
+      $project: {
+        _id: 0,
+        menuItemId: '$_id',
+        name: { $ifNull: [{ $arrayElemAt: ['$menuItem.name', 0] }, 'Deleted item'] },
+        views: 1,
+        orders: 1,
+        revenue: 1,
       },
-    ]),
-    Order.aggregate([
-      {
-        $match: {
-          restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
-          orderStatus: 'Completed',
-          completedAt: {
-            $gte: startDate,
-            $lt: addDays(endDate, 1),
-          },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            hour: { $hour: '$completedAt' },
-          },
-          orders: { $sum: 1 },
-          revenue: { $sum: '$totalAmount' },
-        },
-      },
-      {
-        $sort: { '_id.hour': 1 },
-      },
-    ]),
+    },
   ])
+}
 
+async function aggregateHourlyOrders({ restaurantId, startDate, endDate }) {
+  return Order.aggregate([
+    {
+      $match: {
+        restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+        orderStatus: 'Completed',
+        completedAt: {
+          $gte: startDate,
+          $lt: addDays(endDate, 1),
+        },
+      },
+    },
+    {
+      $group: {
+        _id: { hour: { $hour: '$completedAt' } },
+        orders: { $sum: 1 },
+      },
+    },
+    { $sort: { '_id.hour': 1 } },
+  ])
+}
+
+function sumTotalsFromDailyMetrics(dailyMetrics = []) {
+  return (Array.isArray(dailyMetrics) ? dailyMetrics : []).reduce(
+    (acc, entry) => ({
+      views: acc.views + clampNonNegative(entry.views),
+      addToCart: acc.addToCart + clampNonNegative(entry.addToCart),
+      orders: acc.orders + clampNonNegative(entry.completedOrders),
+      revenue: round2(acc.revenue + round2(entry.revenue)),
+    }),
+    createEmptyTotals(),
+  )
+}
+
+function buildTrendSeries({ dailyMetrics, startDate, endDate }) {
   const dailyByKey = new Map(
-    dailyMetrics.map((entry) => [
+    (Array.isArray(dailyMetrics) ? dailyMetrics : []).map((entry) => [
       entry.dateKey,
       {
-        views: clampNonNegative(entry.views),
-        addToCart: clampNonNegative(entry.addToCart),
-        orders: clampNonNegative(entry.completedOrders),
         revenue: round2(entry.revenue),
+        orders: clampNonNegative(entry.completedOrders),
+        views: clampNonNegative(entry.views),
       },
     ]),
   )
 
-  const trends = buildTrendBuckets(startDate, endDate).map((bucket) => ({
+  return buildTrendBuckets(startDate, endDate).map((bucket) => ({
     day: bucket.label,
-    views: clampNonNegative(dailyByKey.get(bucket.dateKey)?.views),
-    addToCart: clampNonNegative(dailyByKey.get(bucket.dateKey)?.addToCart),
-    orders: clampNonNegative(dailyByKey.get(bucket.dateKey)?.orders),
     revenue: round2(dailyByKey.get(bucket.dateKey)?.revenue),
+    orders: clampNonNegative(dailyByKey.get(bucket.dateKey)?.orders),
+    views: clampNonNegative(dailyByKey.get(bucket.dateKey)?.views),
   }))
+}
 
-  const totals = trends.reduce(
-    (acc, entry) => ({
-      views: acc.views + entry.views,
-      addToCart: acc.addToCart + entry.addToCart,
-      orders: acc.orders + entry.orders,
-      revenue: round2(acc.revenue + entry.revenue),
-    }),
-    { views: 0, addToCart: 0, orders: 0, revenue: 0 },
-  )
-
-  const topItems = (Array.isArray(itemRollups) ? itemRollups : [])
-    .map((item) => ({
-      ...item,
-      menuItemId: String(item.menuItemId),
-      views: clampNonNegative(item.views),
-      addToCart: clampNonNegative(item.addToCart),
-      orders: clampNonNegative(item.orders),
-      quantitySold: clampNonNegative(item.quantitySold),
-      revenue: round2(item.revenue),
-      viewToCartRate: percentage(item.addToCart, item.views),
-      cartToOrderRate: percentage(item.orders, item.addToCart),
-      viewToOrderRate: percentage(item.orders, item.views),
-    }))
-    .map((item) => ({
-      ...item,
-      performanceBand: classifyPerformance(item),
-    }))
-
-  const byViews = [...topItems].sort((a, b) => b.views - a.views || b.orders - a.orders).slice(0, 5)
-  const byOrders = [...topItems].sort((a, b) => b.orders - a.orders || b.revenue - a.revenue).slice(0, 5)
-  const byRevenue = [...topItems].sort((a, b) => b.revenue - a.revenue || b.orders - a.orders).slice(0, 5)
-  const opportunities = [...topItems]
-    .filter((item) => item.views > 0)
-    .sort((a, b) => {
-      const gapA = a.views - a.orders
-      const gapB = b.views - b.orders
-      if (gapA !== gapB) return gapB - gapA
-      return b.views - a.views
-    })
-    .slice(0, 5)
-  const viewsVsOrders = [...topItems]
-    .filter((item) => item.views > 0 || item.orders > 0)
-    .sort((a, b) => b.views - a.views || b.orders - a.orders)
-    .slice(0, 8)
-  const revenueContribution = buildRevenueShare(byRevenue, totals.revenue)
-  const topRevenueConcentration = percentage(sumRevenue(byRevenue.slice(0, 3)), totals.revenue)
-  const hourlyTrend = Array.from({ length: 24 }, (_, hour) => {
-    const match = (Array.isArray(hourlyOrders) ? hourlyOrders : []).find((entry) => Number(entry?._id?.hour) === hour)
+function buildHourlySeries(hourlyRows = []) {
+  return Array.from({ length: 24 }, (_, hour) => {
+    const match = (Array.isArray(hourlyRows) ? hourlyRows : []).find((entry) => Number(entry?._id?.hour) === hour)
     return {
       hour: normalizeHourLabel(hour),
       hour24: hour,
       orders: clampNonNegative(match?.orders),
-      revenue: round2(match?.revenue),
     }
   })
-  const peakHour = [...hourlyTrend].sort((a, b) => b.orders - a.orders || b.revenue - a.revenue)[0] || {
-    hour: '-',
-    orders: 0,
-    revenue: 0,
-  }
-  const heatmap = [...topItems]
-    .filter((item) => item.views > 0 || item.orders > 0 || item.revenue > 0)
-    .sort((a, b) => {
-      const priorityA = ['attention_leak', 'star', 'hidden_gem', 'steady', 'low_signal'].indexOf(a.performanceBand)
-      const priorityB = ['attention_leak', 'star', 'hidden_gem', 'steady', 'low_signal'].indexOf(b.performanceBand)
-      if (priorityA !== priorityB) return priorityA - priorityB
-      return b.views - a.views || b.revenue - a.revenue
+}
+
+function buildItemGrowthList({ currentItems, previousItems, sortFn, limit = 5 }) {
+  const previousById = new Map(
+    (Array.isArray(previousItems) ? previousItems : []).map((item) => [String(item.menuItemId), item]),
+  )
+
+  return [...(Array.isArray(currentItems) ? currentItems : [])]
+    .map((item) => {
+      const previous = previousById.get(String(item.menuItemId)) || {}
+      return {
+        menuItemId: String(item.menuItemId),
+        name: item.name,
+        views: clampNonNegative(item.views),
+        orders: clampNonNegative(item.orders),
+        revenue: round2(item.revenue),
+        conversionRate: percentage(item.orders, item.views),
+        orderGrowth: buildGrowth(item.orders, previous.orders),
+        revenueGrowth: buildGrowth(item.revenue, previous.revenue, 'currency'),
+      }
     })
-    .slice(0, 16)
+    .sort(sortFn)
+    .slice(0, limit)
+}
+
+export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
+  const safeRangeDays = Math.max(1, Math.min(Number(rangeDays || 14), 90))
+  const currentEndDate = normalizeDate(new Date())
+  const currentStartDate = normalizeDate(addDays(currentEndDate, -(safeRangeDays - 1)))
+  const previousEndDate = normalizeDate(addDays(currentStartDate, -1))
+  const previousStartDate = normalizeDate(addDays(previousEndDate, -(safeRangeDays - 1)))
+
+  const [currentDailyMetrics, previousDailyMetrics, currentItems, previousItems, currentHourly, previousHourly] = await Promise.all([
+    AnalyticsDailyMetrics.find({
+      restaurantId,
+      date: { $gte: currentStartDate, $lte: currentEndDate },
+    })
+      .sort({ date: 1 })
+      .select('date dateKey views addToCart completedOrders revenue')
+      .lean(),
+    AnalyticsDailyMetrics.find({
+      restaurantId,
+      date: { $gte: previousStartDate, $lte: previousEndDate },
+    })
+      .sort({ date: 1 })
+      .select('date dateKey views addToCart completedOrders revenue')
+      .lean(),
+    aggregateItemMetrics({ restaurantId, startDate: currentStartDate, endDate: currentEndDate }),
+    aggregateItemMetrics({ restaurantId, startDate: previousStartDate, endDate: previousEndDate }),
+    aggregateHourlyOrders({ restaurantId, startDate: currentStartDate, endDate: currentEndDate }),
+    aggregateHourlyOrders({ restaurantId, startDate: previousStartDate, endDate: previousEndDate }),
+  ])
+
+  const currentTotals = sumTotalsFromDailyMetrics(currentDailyMetrics)
+  const previousTotals = sumTotalsFromDailyMetrics(previousDailyMetrics)
+
+  const currentAov = computeAov(currentTotals.revenue, currentTotals.orders)
+  const previousAov = computeAov(previousTotals.revenue, previousTotals.orders)
+  const currentConversion = percentage(currentTotals.orders, currentTotals.views)
+  const previousConversion = percentage(previousTotals.orders, previousTotals.views)
+
+  const revenueGrowth = buildGrowth(currentTotals.revenue, previousTotals.revenue, 'currency')
+  const ordersGrowth = buildGrowth(currentTotals.orders, previousTotals.orders)
+  const aovGrowth = buildGrowth(currentAov, previousAov, 'currency')
+  const conversionGrowth = buildGrowth(currentConversion, previousConversion)
+  const viewsGrowth = buildGrowth(currentTotals.views, previousTotals.views)
+  const dropoffCurrent = buildDropoff(currentTotals.views, currentTotals.orders)
+  const dropoffPrevious = buildDropoff(previousTotals.views, previousTotals.orders)
+  const dropoffGrowth = buildGrowth(dropoffCurrent, dropoffPrevious)
+
+  const revenueTrend = buildTrendSeries({
+    dailyMetrics: currentDailyMetrics,
+    startDate: currentStartDate,
+    endDate: currentEndDate,
+  })
+
+  const currentPeakHours = buildHourlySeries(currentHourly)
+  const previousPeakHours = buildHourlySeries(previousHourly)
+  const currentPeakHour = [...currentPeakHours].sort((a, b) => b.orders - a.orders)[0] || { hour: '-', orders: 0 }
+  const previousPeakHour = [...previousPeakHours].sort((a, b) => b.orders - a.orders)[0] || { hour: '-', orders: 0 }
+
+  const topItems = buildItemGrowthList({
+    currentItems,
+    previousItems,
+    sortFn: (a, b) => b.revenue - a.revenue || b.orders - a.orders,
+    limit: 5,
+  })
+  const bottomItems = buildItemGrowthList({
+    currentItems: (Array.isArray(currentItems) ? currentItems : []).filter((item) => item.views > 0 || item.orders > 0 || item.revenue > 0),
+    previousItems,
+    sortFn: (a, b) => a.revenue - b.revenue || a.orders - b.orders || b.views - a.views,
+    limit: 5,
+  })
 
   return {
     rangeDays: safeRangeDays,
-    cards: {
-      totalViews: totals.views,
-      totalAddToCart: totals.addToCart,
-      totalOrders: totals.orders,
-      totalRevenue: totals.revenue,
-      viewToCartRate: percentage(totals.addToCart, totals.views),
-      cartToOrderRate: percentage(totals.orders, totals.addToCart),
-      viewToOrderRate: percentage(totals.orders, totals.views),
-      topRevenueConcentration,
-      peakHourLabel: peakHour.hour,
-      peakHourOrders: peakHour.orders,
-    },
-    funnel: {
-      stages: [
-        { key: 'views', label: 'Views', value: totals.views },
-        { key: 'add_to_cart', label: 'Add to Cart', value: totals.addToCart },
-        { key: 'orders', label: 'Completed Orders', value: totals.orders },
-      ],
-      dropoffs: {
-        viewToCart: buildDropoff(totals.views, totals.addToCart),
-        cartToOrder: buildDropoff(totals.addToCart, totals.orders),
+    period: {
+      current: {
+        startDate: currentStartDate.toISOString(),
+        endDate: currentEndDate.toISOString(),
+      },
+      previous: {
+        startDate: previousStartDate.toISOString(),
+        endDate: previousEndDate.toISOString(),
       },
     },
-    trends,
-    orderDemand: {
-      hourlyTrend,
-      peakHour,
+    summary: {
+      revenue: revenueGrowth,
+      orders: ordersGrowth,
+      aov: aovGrowth,
+      conversionRate: conversionGrowth,
     },
-    topItems: {
-      byViews,
-      byOrders,
-      byRevenue,
-      opportunities,
+    overview: {
+      totalRevenue: currentTotals.revenue,
+      totalOrders: currentTotals.orders,
+      totalViews: currentTotals.views,
+      aov: currentAov,
+      conversionRate: currentConversion,
     },
-    comparisons: {
-      viewsVsOrders,
+    charts: {
+      revenueTrend,
+      peakHours: currentPeakHours,
     },
-    revenueContribution,
-    heatmap,
-    itemFunnel: [...topItems]
-      .sort((a, b) => b.revenue - a.revenue || b.orders - a.orders)
-      .slice(0, 12),
+    viewsVsOrders: {
+      views: viewsGrowth,
+      orders: ordersGrowth,
+      conversionRate: conversionGrowth,
+      comparison: revenueTrend.map((entry) => ({
+        day: entry.day,
+        views: entry.views,
+        orders: entry.orders,
+      })),
+    },
+    items: {
+      top: topItems,
+      bottom: bottomItems,
+    },
+    peakHours: {
+      current: currentPeakHour,
+      previous: previousPeakHour,
+      growth: buildGrowth(currentPeakHour.orders, previousPeakHour.orders),
+    },
+    dropoffInsight: {
+      lostUsers: dropoffGrowth,
+      message: `${dropoffCurrent} users viewed but did not order`,
+    },
   }
 }
