@@ -15,6 +15,7 @@ export default function CustomerMenuPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [menu, setMenu] = useState({ restaurant: null, categories: [], items: [], offers: [] })
+  const [dietFilter, setDietFilter] = useState('all')
   // null = category grid view; a category._id = items view for that category
   const [activeCategory, setActiveCategory] = useState(null)
 
@@ -45,17 +46,34 @@ export default function CustomerMenuPage() {
 
   const availableItems = useMemo(() => menu.items.filter((item) => item.available), [menu.items])
 
+  const filteredItems = useMemo(() => {
+    if (dietFilter === 'veg') {
+      return availableItems.filter((item) => item.isVeg !== false)
+    }
+
+    if (dietFilter === 'nonveg') {
+      return availableItems.filter((item) => item.isVeg === false)
+    }
+
+    return availableItems
+  }, [availableItems, dietFilter])
+
   const itemCountByCategory = useMemo(() => {
     const counts = new Map()
-    for (const item of availableItems) {
+    for (const item of filteredItems) {
       counts.set(item.categoryId, (counts.get(item.categoryId) || 0) + 1)
     }
     return counts
-  }, [availableItems])
+  }, [filteredItems])
+
+  const visibleCategories = useMemo(
+    () => menu.categories.filter((category) => (itemCountByCategory.get(category._id) || 0) > 0),
+    [menu.categories, itemCountByCategory],
+  )
 
   const visibleItems = useMemo(
-    () => (activeCategory ? availableItems.filter((item) => item.categoryId === activeCategory) : []),
-    [activeCategory, availableItems],
+    () => (activeCategory ? filteredItems.filter((item) => item.categoryId === activeCategory) : []),
+    [activeCategory, filteredItems],
   )
 
   const cartQuantityByItemId = useMemo(() => {
@@ -72,6 +90,7 @@ export default function CustomerMenuPage() {
   const floorNumber = Number(searchParams.get('floor') || 1)
 
   const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
+  const dietFilterLabel = dietFilter === 'veg' ? 'Veg' : dietFilter === 'nonveg' ? 'Non-Veg' : 'All'
 
   if (loading) {
     return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-gray-500">Loading menu…</div>
@@ -127,12 +146,25 @@ export default function CustomerMenuPage() {
         {/* ── CATEGORY GRID (initial view) ── */}
         {!activeCategory && (
           <section className="mt-5">
-            <h2 className="mb-3 text-lg font-bold text-gray-900">Categories</h2>
-            {!menu.categories.length ? (
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-lg font-bold text-gray-900">Categories</h2>
+              <div className="customer-diet-toggle" role="tablist" aria-label="Diet filter">
+                <button type="button" className={dietFilter === 'all' ? 'active' : ''} onClick={() => setDietFilter('all')}>
+                  All
+                </button>
+                <button type="button" className={dietFilter === 'veg' ? 'active' : ''} onClick={() => setDietFilter('veg')}>
+                  Veg
+                </button>
+                <button type="button" className={dietFilter === 'nonveg' ? 'active' : ''} onClick={() => setDietFilter('nonveg')}>
+                  NonVeg
+                </button>
+              </div>
+            </div>
+            {!visibleCategories.length ? (
               <div className="customer-empty-card">No categories available yet.</div>
             ) : (
               <div className="customer-category-grid">
-                {menu.categories.map((category) => {
+                {visibleCategories.map((category) => {
                   const count = itemCountByCategory.get(category._id) || 0
                   const letter = category.name?.charAt(0)?.toUpperCase() || '?'
                   return (
@@ -165,9 +197,22 @@ export default function CustomerMenuPage() {
               </Button>
             </div>
 
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <h2 className="text-2xl font-bold text-gray-900">{selectedCategoryName}</h2>
-              <p className="text-xs text-gray-500">{visibleItems.length} items</p>
+              <div className="flex items-center gap-3">
+                <p className="text-xs text-gray-500">{dietFilterLabel}: {visibleItems.length} items</p>
+                <div className="customer-diet-toggle" role="tablist" aria-label="Diet filter">
+                  <button type="button" className={dietFilter === 'all' ? 'active' : ''} onClick={() => setDietFilter('all')}>
+                    All
+                  </button>
+                  <button type="button" className={dietFilter === 'veg' ? 'active' : ''} onClick={() => setDietFilter('veg')}>
+                    Veg
+                  </button>
+                  <button type="button" className={dietFilter === 'nonveg' ? 'active' : ''} onClick={() => setDietFilter('nonveg')}>
+                    NonVeg
+                  </button>
+                </div>
+              </div>
             </div>
 
             {!visibleItems.length ? (
