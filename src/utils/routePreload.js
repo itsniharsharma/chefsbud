@@ -13,7 +13,7 @@ export const importers = {
   tables: () => import('../pages/TablesPage'),
   offers: () => import('../pages/OffersPage'),
   analytics: () => import('../pages/AnalyticsPage'),
-  billing: () => import('../pages/BillingPage'),
+  recentOrders: () => import('../pages/RecentOrdersPage'),
   settings: () => import('../pages/SettingsPage'),
   customerMenu: () => import('../pages/CustomerMenuPage'),
   customerCheckout: () => import('../pages/CustomerCheckoutPage'),
@@ -28,7 +28,7 @@ const dashboardPathImporters = {
   '/dashboard/tables': importers.tables,
   '/dashboard/offers': importers.offers,
   '/dashboard/analytics': importers.analytics,
-  '/dashboard/recent-orders': importers.billing,
+  '/dashboard/recent-orders': importers.recentOrders,
   '/dashboard/settings': importers.settings,
 }
 

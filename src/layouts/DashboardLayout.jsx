@@ -38,7 +38,7 @@ export default function DashboardLayout() {
     if (!restaurant?._id || !restaurant?.slug) return
 
     queryClient.prefetchQuery({
-      queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, 'All', 'All'),
+      queryKey: queryKeys.dashboard.ordersBoard(restaurant._id, 'All', 'All', 'all'),
       queryFn: () =>
         orderService.listBoard(restaurant._id, {
           status: 'All',

@@ -36,6 +36,15 @@ function buildOrderQuery({ restaurantId, view, status, scope }) {
   return query
 }
 
+function parseFloorNumberFilter(value) {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return null
+  }
+
+  return parsed
+}
+
 function buildPagination({ page, limit }) {
   const safePage = Math.max(1, Number(page || 1))
   const safeLimit = Math.min(100, Math.max(1, Number(limit || 50)))
@@ -107,17 +116,21 @@ export async function getOrders(req, res, next) {
 
     const pagination = buildPagination(req.query)
     const scope = req.query.scope === 'today' ? 'today' : 'all'
+    const floorNumber = parseFloorNumberFilter(req.query.floorNumber)
 
     const view = req.query.view === 'completed' ? 'completed' : 'active'
-    const rawOrders = await listOrdersByQuery(
-      buildOrderQuery({
-        restaurantId: req.params.restaurantId,
-        view,
-        status: req.query.status,
-        scope,
-      }),
-      pagination,
-    )
+    const query = buildOrderQuery({
+      restaurantId: req.params.restaurantId,
+      view,
+      status: req.query.status,
+      scope,
+    })
+
+    if (floorNumber !== null) {
+      query.floorNumber = floorNumber
+    }
+
+    const rawOrders = await listOrdersByQuery(query, pagination)
 
     const orders = await enrichOrdersWithFloorNumbers(restaurant._id, rawOrders)
 

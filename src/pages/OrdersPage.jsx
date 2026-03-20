@@ -13,6 +13,8 @@ export default function OrdersPage() {
   const { restaurant } = useAuth()
   const [statusFilter, setStatusFilter] = useState('All')
   const [scope, setScope] = useState('All')
+  const [floorSearch, setFloorSearch] = useState('')
+  const [appliedFloor, setAppliedFloor] = useState('')
   const [error, setError] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
@@ -22,6 +24,7 @@ export default function OrdersPage() {
     restaurantId: restaurant?._id,
     statusFilter,
     scope,
+    floorNumber: appliedFloor,
   })
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
@@ -176,6 +179,32 @@ export default function OrdersPage() {
     updateStatusMutation.mutate({ id, status })
   }
 
+  const applyFloorSearch = (event) => {
+    event.preventDefault()
+
+    const nextValue = String(floorSearch || '').trim()
+    if (!nextValue) {
+      setAppliedFloor('')
+      setError('')
+      return
+    }
+
+    const parsedFloor = Number(nextValue)
+    if (!Number.isInteger(parsedFloor) || parsedFloor < 1) {
+      setError('Enter a valid floor number')
+      return
+    }
+
+    setAppliedFloor(String(parsedFloor))
+    setError('')
+  }
+
+  const clearFloorSearch = () => {
+    setFloorSearch('')
+    setAppliedFloor('')
+    setError('')
+  }
+
   const printBillForOrder = async (order) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
@@ -239,9 +268,30 @@ export default function OrdersPage() {
         </Button>
       </div>
 
+      <form className="card flex flex-col gap-3 p-4 md:flex-row md:items-end" onSubmit={applyFloorSearch}>
+        <label className="flex flex-1 flex-col gap-1 text-sm text-slate-700">
+          <span className="font-medium">Search by floor</span>
+          <input
+            className="input"
+            type="number"
+            min="1"
+            inputMode="numeric"
+            placeholder="Enter floor number"
+            value={floorSearch}
+            onChange={(event) => setFloorSearch(event.target.value)}
+          />
+        </label>
+        <Button type="submit">Search Floor</Button>
+        <Button type="button" variant="secondary" onClick={clearFloorSearch} disabled={!floorSearch && !appliedFloor}>
+          Clear
+        </Button>
+      </form>
+
       <div className="grid grid-cols-1 gap-4">
         <section className="space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-800">Active Orders</h2>
+          <h2 className="text-base font-semibold text-slate-800">
+            {appliedFloor ? `Active Orders - Floor ${appliedFloor}` : 'Active Orders'}
+          </h2>
           <div className="grid grid-cols-1 gap-4">
             {activeOrders.map((order) => (
               <OrderCard

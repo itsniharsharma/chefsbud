@@ -5,14 +5,15 @@ import { orderService } from '../services/orderService'
 import { tableService } from '../services/tableService'
 import { queryKeys } from '../lib/queryKeys'
 
-export function useOrdersBoardQuery({ restaurantId, statusFilter, scope }) {
+export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNumber }) {
   return useQuery({
-    queryKey: queryKeys.dashboard.ordersBoard(restaurantId, statusFilter, scope),
+    queryKey: queryKeys.dashboard.ordersBoard(restaurantId, statusFilter, scope, floorNumber),
     enabled: Boolean(restaurantId),
     queryFn: () =>
       orderService.listBoard(restaurantId, {
         status: statusFilter,
         scope: scope === 'Today' ? 'today' : 'all',
+        ...(floorNumber ? { floorNumber } : {}),
       }),
     refetchInterval: 25_000,
     refetchIntervalInBackground: false,
