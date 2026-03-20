@@ -5,8 +5,16 @@ const staffAllowedPaths = new Set([
   '/dashboard/orders',
   '/dashboard/menu',
   '/dashboard/offers',
-  '/dashboard/billing',
+  '/dashboard/recent-orders',
 ])
+
+function normalizeStaffPath(pathname) {
+  const currentPath = String(pathname || '')
+  if (currentPath === '/dashboard/billing') {
+    return '/dashboard/recent-orders'
+  }
+  return currentPath
+}
 
 function toTimestamp(value) {
   const ts = value ? new Date(value).getTime() : NaN
@@ -44,7 +52,7 @@ export default function ProtectedRoute({ children }) {
   }
 
   if (user?.role === 'staff') {
-    const currentPath = String(location.pathname || '')
+    const currentPath = normalizeStaffPath(location.pathname)
     if (!staffAllowedPaths.has(currentPath)) {
       return <Navigate to="/dashboard/orders" replace />
     }

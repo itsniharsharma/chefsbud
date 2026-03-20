@@ -73,6 +73,8 @@ orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt
 orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
+orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
+orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ hiddenFromActive: 1, deletedByOwnerAt: 1, isArchived: 1 })
 orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
 orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })

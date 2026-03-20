@@ -4,6 +4,7 @@ const cacheStore = new Map()
 const tagIndex = new Map()
 const inflightStore = new Map()
 const redisTagMembershipStore = new Map()
+const redisTagMembershipIndex = new Map()
 const MAX_CACHE_ENTRIES = 500
 const MAX_INFLIGHT_MS = 30000
 const MAX_REDIS_TAG_MEMBERSHIP_ENTRIES = 5000
@@ -29,6 +30,12 @@ function attachKeyToTag(tag, key) {
     tagIndex.set(tag, new Set())
   }
   tagIndex.get(tag).add(key)
+}
+
+function touchCacheEntry(key, entry) {
+  if (!cacheStore.has(key) || !entry) return
+  cacheStore.delete(key)
+  cacheStore.set(key, entry)
 }
 
 function clearKey(key) {
@@ -78,7 +85,16 @@ function cleanupRedisTagMembership() {
   const current = nowMs()
   for (const [membershipKey, expiresAt] of redisTagMembershipStore.entries()) {
     if (expiresAt <= current) {
+      const separatorIndex = membershipKey.indexOf('::')
+      const tag = separatorIndex >= 0 ? membershipKey.slice(0, separatorIndex) : ''
       redisTagMembershipStore.delete(membershipKey)
+      if (!tag) continue
+      const membershipKeys = redisTagMembershipIndex.get(tag)
+      if (!membershipKeys) continue
+      membershipKeys.delete(membershipKey)
+      if (membershipKeys.size === 0) {
+        redisTagMembershipIndex.delete(tag)
+      }
     }
   }
 }
@@ -96,6 +112,10 @@ function shouldRefreshRedisTagMembership(tag, key, ttlSeconds) {
   }
 
   redisTagMembershipStore.set(membershipKey, current + ttlSeconds * 1000)
+  if (!redisTagMembershipIndex.has(tag)) {
+    redisTagMembershipIndex.set(tag, new Set())
+  }
+  redisTagMembershipIndex.get(tag).add(membershipKey)
   return true
 }
 
@@ -175,11 +195,12 @@ export function invalidateCacheByTags(tags = []) {
   const normalizedTags = normalizeTags(tags)
 
   for (const tag of normalizedTags) {
-    for (const membershipKey of [...redisTagMembershipStore.keys()]) {
-      if (membershipKey.startsWith(`${tag}::`)) {
-        redisTagMembershipStore.delete(membershipKey)
-      }
+    const membershipKeys = redisTagMembershipIndex.get(tag)
+    if (!membershipKeys) continue
+    for (const membershipKey of [...membershipKeys]) {
+      redisTagMembershipStore.delete(membershipKey)
     }
+    redisTagMembershipIndex.delete(tag)
   }
 
   for (const tag of normalizedTags) {
@@ -214,6 +235,7 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder } = {})
     const cached = cacheStore.get(key)
 
     if (cached && cached.expiresAt > current) {
+      touchCacheEntry(key, cached)
       return res.status(cached.status).json(cached.payload)
     }
 
@@ -226,18 +248,20 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder } = {})
       ensureCacheCapacity()
       const tags = new Set(normalizeTags(distributedCached.tags || []))
 
-      cacheStore.set(key, {
+      const entry = {
         status: Number(distributedCached.status || 200),
         payload: distributedCached.payload,
         tags,
         expiresAt: Number(distributedCached.expiresAt || nowMs() + ttl * 1000),
-      })
+      }
+
+      cacheStore.set(key, entry)
 
       for (const tag of tags) {
         attachKeyToTag(tag, key)
       }
 
-      return res.status(Number(distributedCached.status || 200)).json(distributedCached.payload)
+      return res.status(entry.status).json(entry.payload)
     }
 
     const inflight = inflightStore.get(key)

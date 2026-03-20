@@ -257,14 +257,9 @@ export async function getPublicOrderStatus(req, res, next) {
   try {
     const { restaurantSlug, tableNumber, orderId } = req.params
 
-    const restaurant = await Restaurant.findOne({ slug: restaurantSlug }).select('_id').lean()
-    if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
-    }
-
     const order = await Order.findOne({
       _id: orderId,
-      restaurantId: restaurant._id,
+      restaurantSlug,
       tableNumber: Number(tableNumber),
       isArchived: false,
     })
@@ -287,13 +282,8 @@ export async function getPublicTableOrders(req, res, next) {
   try {
     const { restaurantSlug, tableNumber } = req.params
 
-    const restaurant = await Restaurant.findOne({ slug: restaurantSlug }).select('_id').lean()
-    if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
-    }
-
     const orders = await Order.find({
-      restaurantId: restaurant._id,
+      restaurantSlug,
       tableNumber: Number(tableNumber),
       isArchived: false,
       paymentStatus: { $nin: ['Pending', 'Failed'] },

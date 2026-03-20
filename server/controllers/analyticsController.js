@@ -1,33 +1,10 @@
 import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
-import MenuItem from '../models/MenuItem.js'
 
 async function ensureOwnerRestaurant(ownerId, restaurantId) {
   if (!restaurantId) return null
   return Restaurant.findOne({ _id: restaurantId, ownerId }).lean()
-}
-
-function safePeriod(period) {
-  return {
-    revenue: period?.revenue || 0,
-    orders: period?.orders || 0,
-    paidOrders: period?.paidOrders || 0,
-    unpaidOrders: period?.unpaidOrders || 0,
-    avgOrderValue: period?.avgOrderValue || 0,
-  }
-}
-
-function calcGrowth(current, previous) {
-  if (!previous) {
-    return current > 0 ? 100 : 0
-  }
-  return ((current - previous) / previous) * 100
-}
-
-function safePct(part, whole) {
-  if (!whole) return 0
-  return (part / whole) * 100
 }
 
 function buildDateKeys(startDate, endDate) {
@@ -58,8 +35,10 @@ export async function getDashboard(req, res, next) {
     const now = new Date()
     const startDay = new Date(now)
     startDay.setHours(0, 0, 0, 0)
+    const trendStart = new Date(startDay)
+    trendStart.setDate(trendStart.getDate() - 6)
 
-    const [todayStats, recentOrders, topItems, trend, activeTables] = await Promise.all([
+    const [todayStats, trend, activeTables] = await Promise.all([
       Order.aggregate([
         { $match: { restaurantId: ownerRestaurant._id, createdAt: { $gte: startDay } } },
         {
@@ -70,20 +49,13 @@ export async function getDashboard(req, res, next) {
           },
         },
       ]),
-      Order.find({ restaurantId: ownerRestaurant._id })
-        .sort({ createdAt: -1 })
-        .limit(8)
-        .select('_id tableNumber orderStatus totalAmount createdAt')
-        .lean(),
       Order.aggregate([
-        { $match: { restaurantId: ownerRestaurant._id } },
-        { $unwind: '$items' },
-        { $group: { _id: '$items.name', qty: { $sum: '$items.quantity' } } },
-        { $sort: { qty: -1 } },
-        { $limit: 5 },
-      ]),
-      Order.aggregate([
-        { $match: { restaurantId: ownerRestaurant._id } },
+        {
+          $match: {
+            restaurantId: ownerRestaurant._id,
+            createdAt: { $gte: trendStart },
+          },
+        },
         {
           $group: {
             _id: {
@@ -96,7 +68,6 @@ export async function getDashboard(req, res, next) {
           },
         },
         { $sort: { date: -1 } },
-        { $limit: 7 },
         { $sort: { date: 1 } },
       ]),
       Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
@@ -104,6 +75,13 @@ export async function getDashboard(req, res, next) {
 
     const stats = todayStats[0] || { todayRevenue: 0, totalOrdersToday: 0 }
     const avgOrderValue = stats.totalOrdersToday ? stats.todayRevenue / stats.totalOrdersToday : 0
+    const trendRevenueByDate = new Map(
+      trend.map((entry) => [new Date(entry.date).toISOString().slice(0, 10), entry.revenue]),
+    )
+    const revenueTrend = buildDateKeys(trendStart, startDay).map((isoDate) => ({
+      day: formatShortDate(isoDate),
+      revenue: Number(trendRevenueByDate.get(isoDate) || 0),
+    }))
 
     return res.json({
       cards: {
@@ -112,12 +90,9 @@ export async function getDashboard(req, res, next) {
         averageOrderValue: avgOrderValue,
         activeTables,
       },
-      recentOrders,
-      topSellingItems: topItems.map((item) => item._id),
-      revenueTrend: trend.map((entry) => ({
-        day: new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short' }),
-        revenue: entry.revenue,
-      })),
+      recentOrders: [],
+      topSellingItems: [],
+      revenueTrend,
     })
   } catch (error) {
     next(error)
