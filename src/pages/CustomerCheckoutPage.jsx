@@ -5,6 +5,7 @@ import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { queryKeys } from '../lib/queryKeys'
+import { analyticsService } from '../services/analyticsService'
 import { offerService } from '../services/offerService'
 import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
@@ -94,6 +95,15 @@ export default function CustomerCheckoutPage() {
     }
   }
 
+  const trackAddToCart = (item) => {
+    addItem(restaurantSlug, tableNumber, { _id: item.menuItemId, ...item })
+    void analyticsService.trackAddToCart({
+      restaurantSlug,
+      menuItemId: item.menuItemId,
+      quantity: 1,
+    }).catch(() => {})
+  }
+
   return (
     <div className="customer-shell p-4 pb-32">
       <header className="mb-4 flex items-center justify-between">
@@ -137,7 +147,7 @@ export default function CustomerCheckoutPage() {
                   <span className="min-w-6 text-center text-sm font-semibold text-gray-900">{item.quantity}</span>
                   <button
                     className="h-8 w-8 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
-                    onClick={() => addItem(restaurantSlug, tableNumber, { _id: item.menuItemId, ...item })}
+                    onClick={() => trackAddToCart(item)}
                   >
                     +
                   </button>

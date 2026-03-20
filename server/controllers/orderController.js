@@ -2,6 +2,10 @@ import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
+import {
+  revertCompletedOrderAnalytics,
+  syncCompletedOrderAnalytics,
+} from '../services/itemAnalyticsService.js'
 import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
@@ -153,20 +157,43 @@ export async function updateOrderStatus(req, res, next) {
       return res.status(400).json({ message: 'Invalid order status' })
     }
 
+    const existingOrder = await Order.findOne({
+      _id: req.params.orderId,
+      restaurantId: restaurant._id,
+    })
+      .select('_id restaurantId items subtotalAmount totalAmount orderStatus completedAt createdAt updatedAt analyticsTrackedAt')
+      .lean()
+
+    if (!existingOrder) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    const wasCompleted = existingOrder.orderStatus === 'Completed'
     const isCompleted = orderStatus === 'Completed'
     const update = {
       orderStatus,
       completedAt: isCompleted ? new Date() : null,
       hiddenFromActive: isCompleted,
       deletedByOwnerAt: isCompleted ? new Date() : null,
+      ...(wasCompleted && !isCompleted ? { analyticsTrackedAt: null } : {}),
     }
 
-    const order = await Order.findOneAndUpdate({ _id: req.params.orderId, restaurantId: restaurant._id }, { $set: update }, { new: true, runValidators: true })
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' })
+    if (wasCompleted && !isCompleted && existingOrder.analyticsTrackedAt) {
+      await revertCompletedOrderAnalytics(existingOrder)
+    }
+
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.orderId, restaurantId: restaurant._id },
+      { $set: update },
+      { new: true, runValidators: true },
+    )
+
+    if (isCompleted && !wasCompleted) {
+      await syncCompletedOrderAnalytics(order._id)
     }
 
     invalidateCacheByTags([
+      `analytics:${String(restaurant._id)}`,
       `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${order.tableNumber}`,
       `orders:order:${String(order._id)}`,
@@ -199,6 +226,11 @@ export async function deleteOrder(req, res, next) {
 
     if (!['Served', 'Completed'].includes(order.orderStatus)) {
       return res.status(400).json({ message: 'Order can be deleted only after Served or Completed' })
+    }
+
+    const fullOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id }).lean()
+    if (fullOrder?.analyticsTrackedAt) {
+      await revertCompletedOrderAnalytics(fullOrder)
     }
 
     await Order.deleteOne({ _id: req.params.orderId, restaurantId: restaurant._id })

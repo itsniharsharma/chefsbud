@@ -69,3 +69,14 @@ export function useDashboardAnalyticsCardsQuery({ restaurantId }) {
     placeholderData: (previousData) => previousData,
   })
 }
+
+export function useAnalyticsOverviewQuery({ restaurantId, rangeDays }) {
+  return useQuery({
+    queryKey: queryKeys.dashboard.analyticsOverview(restaurantId, rangeDays),
+    enabled: Boolean(restaurantId),
+    queryFn: () => analyticsService.analytics(restaurantId, { rangeDays }),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    placeholderData: (previousData) => previousData,
+  })
+}

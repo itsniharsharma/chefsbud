@@ -2,9 +2,11 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import Button from '../components/Button'
+import { analyticsService } from '../services/analyticsService'
 import { menuService } from '../services/menuService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { formatCurrencyINR } from '../utils/currency'
+import { getCustomerAnalyticsSessionId } from '../utils/customerAnalytics'
 import { buildCustomerCheckoutUrl } from '../utils/customerUrl'
 
 export default function CustomerMenuPage() {
@@ -88,6 +90,29 @@ export default function CustomerMenuPage() {
   const selectedCategoryName = menu.categories.find((c) => c._id === activeCategory)?.name || ''
 
   const floorNumber = Number(searchParams.get('floor') || 1)
+  const analyticsSessionId = useMemo(
+    () => getCustomerAnalyticsSessionId({ restaurantSlug, tableNumber }),
+    [restaurantSlug, tableNumber],
+  )
+
+  useEffect(() => {
+    if (!restaurantSlug || !analyticsSessionId || !activeCategory || !visibleItems.length) return
+
+    void analyticsService.trackMenuExposure({
+      restaurantSlug,
+      sessionId: analyticsSessionId,
+      menuItemIds: visibleItems.map((item) => item._id),
+    }).catch(() => {})
+  }, [activeCategory, analyticsSessionId, restaurantSlug, visibleItems])
+
+  const trackAddToCart = (item) => {
+    addItem(restaurantSlug, tableNumber, item)
+    void analyticsService.trackAddToCart({
+      restaurantSlug,
+      menuItemId: item._id,
+      quantity: 1,
+    }).catch(() => {})
+  }
 
   const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
   const dietFilterLabel = dietFilter === 'veg' ? 'Veg' : dietFilter === 'nonveg' ? 'Non-Veg' : 'All'
@@ -250,12 +275,12 @@ export default function CustomerMenuPage() {
                           <div className="customer-qty-control">
                             <button onClick={() => removeItem(restaurantSlug, tableNumber, item._id)}>−</button>
                             <span>{quantity}</span>
-                            <button onClick={() => addItem(restaurantSlug, tableNumber, item)}>+</button>
+                            <button onClick={() => trackAddToCart(item)}>+</button>
                           </div>
                         ) : (
                           <button
                             className="customer-add-btn"
-                            onClick={() => addItem(restaurantSlug, tableNumber, item)}
+                            onClick={() => trackAddToCart(item)}
                           >
                             ADD
                           </button>

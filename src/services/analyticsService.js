@@ -4,8 +4,13 @@ export const analyticsService = {
   dashboard(restaurantId) {
     return api.get(`/analytics/dashboard/${restaurantId}`).then((response) => response.data)
   },
-  // analytics detail — disabled until AWS data pipeline is ready
-  // analytics(restaurantId) {
-  //   return api.get(`/analytics/${restaurantId}`).then((response) => response.data)
-  // },
+  analytics(restaurantId, params = {}) {
+    return api.get(`/analytics/${restaurantId}`, { params }).then((response) => response.data)
+  },
+  trackMenuExposure(payload) {
+    return api.post('/analytics/track/menu-view', payload).then((response) => response.data)
+  },
+  trackAddToCart(payload) {
+    return api.post('/analytics/track/add-to-cart', payload).then((response) => response.data)
+  },
 }
