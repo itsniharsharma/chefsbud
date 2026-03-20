@@ -4,6 +4,9 @@ export const menuService = {
   getBySlug(slug) {
     return api.get(`/menu/${slug}`).then((response) => response.data)
   },
+  getManagedMenu(restaurantId) {
+    return api.get(`/menu/manage/${restaurantId}`).then((response) => response.data)
+  },
   analyzeWithAI(payload) {
     return api.post('/menu/ai/analyze', payload).then((response) => response.data)
   },

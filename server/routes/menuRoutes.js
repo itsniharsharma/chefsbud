@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { body } from 'express-validator'
+import { param } from 'express-validator'
 import {
   analyzeMenuWithAI,
   createCategory,
   createMenuItem,
   deleteMenuItem,
+  getManagedMenu,
   getMenuBySlug,
   importMenuDraft,
   updateMenuItem,
@@ -17,9 +19,18 @@ import { validateRequest } from '../middleware/validateRequest.js'
 const router = Router()
 
 router.get(
+  '/manage/:restaurantId',
+  requireAuth,
+  requireActiveBilling,
+  [param('restaurantId').isMongoId()],
+  validateRequest,
+  getManagedMenu,
+)
+router.get(
   '/:restaurantSlug',
   cacheResponse({
     ttlSeconds: 120,
+    skip: (req) => Boolean(req.headers.authorization),
     keyBuilder: (req) => `menu:${req.params.restaurantSlug}`,
     tagsBuilder: (req) => [`menu:${req.params.restaurantSlug}`],
   }),

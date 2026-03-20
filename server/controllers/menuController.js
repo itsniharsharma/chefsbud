@@ -5,8 +5,35 @@ import Offer from '../models/Offer.js'
 import { parseMenuWithAI } from '../services/aiMenuParser.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 
+const menuProjection = '_id categoryId name description price available isVeg bestseller'
+const categoryProjection = '_id name orderIndex'
+const offerProjection = '_id name type discountValue conditions active startTime endTime'
+
 async function getOwnerRestaurant(ownerId) {
   return Restaurant.findOne({ ownerId }).select('_id slug').lean()
+}
+
+function invalidateMenuCache(restaurantSlug) {
+  invalidateCacheByTags([`menu:${restaurantSlug}`])
+}
+
+async function buildMenuPayload(restaurant) {
+  const [categories, items, offers] = await Promise.all([
+    Category.find({ restaurantId: restaurant._id })
+      .sort({ orderIndex: 1, name: 1 })
+      .select(categoryProjection)
+      .lean(),
+    MenuItem.find({ restaurantId: restaurant._id })
+      .sort({ createdAt: -1 })
+      .select(menuProjection)
+      .lean(),
+    Offer.find({ restaurantId: restaurant._id, active: true })
+      .sort({ createdAt: -1 })
+      .select(offerProjection)
+      .lean(),
+  ])
+
+  return { restaurant, categories, items, offers }
 }
 
 export async function getMenuBySlug(req, res, next) {
@@ -18,22 +45,26 @@ export async function getMenuBySlug(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const [categories, items, offers] = await Promise.all([
-      Category.find({ restaurantId: restaurant._id })
-        .sort({ orderIndex: 1, name: 1 })
-        .select('_id name orderIndex')
-        .lean(),
-      MenuItem.find({ restaurantId: restaurant._id })
-        .sort({ createdAt: -1 })
-        .select('_id categoryId name description price available isVeg bestseller')
-        .lean(),
-      Offer.find({ restaurantId: restaurant._id, active: true })
-        .sort({ createdAt: -1 })
-        .select('_id name type discountValue conditions active startTime endTime')
-        .lean(),
-    ])
+    return res.json(await buildMenuPayload(restaurant))
+  } catch (error) {
+    next(error)
+  }
+}
 
-    return res.json({ restaurant, categories, items, offers })
+export async function getManagedMenu(req, res, next) {
+  try {
+    const restaurant = await Restaurant.findOne({
+      _id: req.params.restaurantId,
+      ownerId: req.user._id,
+    })
+      .select('_id name slug address phone')
+      .lean()
+
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    return res.json(await buildMenuPayload(restaurant))
   } catch (error) {
     next(error)
   }
@@ -57,7 +88,7 @@ export async function createCategory(req, res, next) {
       orderIndex,
     })
 
-    invalidateCacheByTags([`menu:${restaurant.slug}`])
+    invalidateMenuCache(restaurant.slug)
 
     return res.status(201).json(category)
   } catch (error) {
@@ -93,7 +124,7 @@ export async function createMenuItem(req, res, next) {
       bestseller,
     })
 
-    invalidateCacheByTags([`menu:${restaurant.slug}`])
+    invalidateMenuCache(restaurant.slug)
 
     return res.status(201).json(item)
   } catch (error) {
@@ -116,6 +147,10 @@ export async function updateMenuItem(req, res, next) {
       }
     })
 
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ message: 'No valid menu fields provided' })
+    }
+
     const item = await MenuItem.findOneAndUpdate(
       { _id: req.params.id, restaurantId: restaurant._id },
       { $set: patch },
@@ -125,7 +160,7 @@ export async function updateMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Menu item not found' })
     }
 
-    invalidateCacheByTags([`menu:${restaurant.slug}`])
+    invalidateMenuCache(restaurant.slug)
     return res.json(item)
   } catch (error) {
     next(error)
@@ -144,7 +179,7 @@ export async function deleteMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Menu item not found' })
     }
 
-    invalidateCacheByTags([`menu:${restaurant.slug}`])
+    invalidateMenuCache(restaurant.slug)
 
     return res.json({ success: true })
   } catch (error) {
@@ -284,7 +319,7 @@ export async function importMenuDraft(req, res, next) {
     }
 
     await MenuItem.insertMany(itemDocs, { ordered: false })
-    invalidateCacheByTags([`menu:${restaurant.slug}`])
+    invalidateMenuCache(restaurant.slug)
 
     return res.status(201).json({
       importedCategories: categories.length,

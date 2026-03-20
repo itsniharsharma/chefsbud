@@ -48,11 +48,11 @@ export function useTablesQuery({ restaurantId }) {
   })
 }
 
-export function useMenuQuery({ restaurantSlug }) {
+export function useMenuQuery({ restaurantId }) {
   return useQuery({
-    queryKey: queryKeys.dashboard.menu(restaurantSlug),
-    enabled: Boolean(restaurantSlug),
-    queryFn: () => menuService.getBySlug(restaurantSlug),
+    queryKey: queryKeys.dashboard.menu(restaurantId),
+    enabled: Boolean(restaurantId),
+    queryFn: () => menuService.getManagedMenu(restaurantId),
     refetchInterval: 120_000,
     refetchIntervalInBackground: false,
     placeholderData: (previousData) => previousData,

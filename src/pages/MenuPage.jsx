@@ -38,22 +38,25 @@ export default function MenuPage() {
   const [form, setForm] = useState(initialForm)
   const [editingId, setEditingId] = useState(null)
   const [error, setError] = useState('')
+  const [pendingToggleItemIds, setPendingToggleItemIds] = useState({})
   const [aiImages, setAiImages] = useState([])
   const [aiDraftCategories, setAiDraftCategories] = useState([])
   const [aiLoading, setAiLoading] = useState(false)
   const queryClient = useQueryClient()
 
   const { data: menuData } = useMenuQuery({
-    restaurantSlug: restaurant?.slug,
+    restaurantId: restaurant?._id,
   })
+
+  const menuQueryKey = queryKeys.dashboard.menu(restaurant?._id)
 
   const categories = useMemo(() => menuData?.categories || [], [menuData?.categories])
   const items = useMemo(() => menuData?.items || [], [menuData?.items])
 
   const refreshMenu = () => {
-    if (!restaurant?.slug) return Promise.resolve()
+    if (!restaurant?._id) return Promise.resolve()
     return queryClient.invalidateQueries({
-      queryKey: queryKeys.dashboard.menu(restaurant.slug),
+      queryKey: menuQueryKey,
     })
   }
 
@@ -74,9 +77,9 @@ export default function MenuPage() {
   }, [categories])
 
   const patchMenuItemInCache = (itemId, patch) => {
-    if (!restaurant?.slug) return
+    if (!restaurant?._id) return
 
-    queryClient.setQueryData(queryKeys.dashboard.menu(restaurant.slug), (current) => {
+    queryClient.setQueryData(menuQueryKey, (current) => {
       if (!current) return current
 
       return {
@@ -91,6 +94,64 @@ export default function MenuPage() {
       }
     })
   }
+
+  const replaceMenuItemInCache = (nextItem) => {
+    if (!restaurant?._id || !nextItem?._id) return
+
+    queryClient.setQueryData(menuQueryKey, (current) => {
+      if (!current) return current
+
+      return {
+        ...current,
+        items: Array.isArray(current.items)
+          ? current.items.map((item) =>
+              String(item._id) === String(nextItem._id)
+                ? { ...item, ...nextItem }
+                : item,
+            )
+          : current.items,
+      }
+    })
+  }
+
+  const toggleItemFieldMutation = useMutation({
+    mutationFn: ({ itemId, patch }) => menuService.updateItem(itemId, patch),
+    onMutate: async ({ itemId, patch }) => {
+      setPendingToggleItemIds((current) => ({ ...current, [String(itemId)]: true }))
+      setError('')
+
+      await queryClient.cancelQueries({
+        queryKey: menuQueryKey,
+      })
+
+      const previousMenu = restaurant?._id
+        ? queryClient.getQueryData(menuQueryKey)
+        : null
+
+      patchMenuItemInCache(itemId, patch)
+
+      return {
+        previousMenu,
+      }
+    },
+    onSuccess: (updatedItem) => {
+      replaceMenuItemInCache(updatedItem)
+    },
+    onError: (requestError, _variables, context) => {
+      if (restaurant?._id && context?.previousMenu) {
+        queryClient.setQueryData(menuQueryKey, context.previousMenu)
+      }
+      setError(requestError?.response?.data?.message || 'Failed to update menu item')
+    },
+    onSettled: (_data, _error, variables) => {
+      setPendingToggleItemIds((current) => {
+        const next = { ...current }
+        delete next[String(variables?.itemId || '')]
+        return next
+      })
+      void queryClient.invalidateQueries({ queryKey: menuQueryKey })
+    },
+  })
 
   const saveItemMutation = useMutation({
     mutationFn: ({ targetEditingId, payload }) =>
@@ -273,11 +334,11 @@ export default function MenuPage() {
       prev.map((category, currentCategoryIndex) => {
         if (currentCategoryIndex !== categoryIndex) return category
 
-          return {
-            ...category,
-            items: category.items.map((item, currentItemIndex) =>
-              currentItemIndex === itemIndex ? { ...item, [field]: value } : item,
-            ),
+        return {
+          ...category,
+          items: category.items.map((item, currentItemIndex) =>
+            currentItemIndex === itemIndex ? { ...item, [field]: value } : item,
+          ),
         }
       }),
     )
@@ -310,31 +371,18 @@ export default function MenuPage() {
     await importDraftMutation.mutateAsync({ categories: aiDraftCategories })
   }
 
-  const toggleItemAvailability = async (item) => {
-    const nextAvailable = item.available === false
-    patchMenuItemInCache(item._id, { available: nextAvailable })
-    setError('')
-
-    try {
-      await menuService.updateItem(item._id, { available: nextAvailable })
-    } catch (requestError) {
-      patchMenuItemInCache(item._id, { available: item.available !== false })
-      setError(requestError?.response?.data?.message || 'Failed to update availability')
-    }
+  const toggleItemAvailability = (item) => {
+    toggleItemFieldMutation.mutate({
+      itemId: item._id,
+      patch: { available: item.available === false },
+    })
   }
 
-  const toggleItemDiet = async (item) => {
-    const currentIsVeg = item.isVeg !== false
-    const nextIsVeg = !currentIsVeg
-    patchMenuItemInCache(item._id, { isVeg: nextIsVeg })
-    setError('')
-
-    try {
-      await menuService.updateItem(item._id, { isVeg: nextIsVeg })
-    } catch (requestError) {
-      patchMenuItemInCache(item._id, { isVeg: currentIsVeg })
-      setError(requestError?.response?.data?.message || 'Failed to update dish type')
-    }
+  const toggleItemDiet = (item) => {
+    toggleItemFieldMutation.mutate({
+      itemId: item._id,
+      patch: { isVeg: item.isVeg === false },
+    })
   }
 
   return (
@@ -579,6 +627,7 @@ export default function MenuPage() {
                     : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                 }`}
                 onClick={() => toggleItemAvailability(item)}
+                disabled={Boolean(pendingToggleItemIds[String(item._id)])}
               >
                 {item.available === false ? 'Off' : 'On'}
               </Button>
@@ -590,6 +639,7 @@ export default function MenuPage() {
                     : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                 }`}
                 onClick={() => toggleItemDiet(item)}
+                disabled={Boolean(pendingToggleItemIds[String(item._id)])}
               >
                 {item.isVeg === false ? 'NonVeg' : 'Veg'}
               </Button>

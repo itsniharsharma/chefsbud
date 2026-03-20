@@ -46,8 +46,8 @@ export default function DashboardLayout() {
         }),
     })
     queryClient.prefetchQuery({
-      queryKey: queryKeys.dashboard.menu(restaurant.slug),
-      queryFn: () => menuService.getBySlug(restaurant.slug),
+      queryKey: queryKeys.dashboard.menu(restaurant._id),
+      queryFn: () => menuService.getManagedMenu(restaurant._id),
     })
     queryClient.prefetchQuery({
       queryKey: queryKeys.dashboard.recentOrders(restaurant._id, 'All'),

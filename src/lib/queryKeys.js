@@ -24,6 +24,6 @@ export const queryKeys = {
     ],
     recentOrders: (restaurantId, scope) => ['dashboard', 'recent-orders', restaurantId, scope],
     tables: (restaurantId) => ['dashboard', 'tables', restaurantId],
-    menu: (restaurantSlug) => ['dashboard', 'menu', restaurantSlug],
+    menu: (restaurantId) => ['dashboard', 'menu', restaurantId],
   },
 }

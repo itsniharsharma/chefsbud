@@ -215,11 +215,15 @@ export function invalidateCacheByTags(tags = []) {
   void invalidateRedisByTags(normalizedTags)
 }
 
-export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder } = {}) {
+export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip } = {}) {
   const ttl = Math.max(1, Number(ttlSeconds) || 20)
 
   return async (req, res, next) => {
     if (req.method !== 'GET') {
+      return next()
+    }
+
+    if (typeof skip === 'function' && skip(req)) {
       return next()
     }
 
