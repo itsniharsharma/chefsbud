@@ -42,29 +42,29 @@ function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, printingBil
       <div className="mt-3">
         <Button
           type="button"
-          variant="secondary"
+          variant="custom"
           className={
             isBillPrinted
-              ? 'mr-2 border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
-              : 'mr-2 border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100'
+              ? 'mr-2 border border-emerald-300 bg-emerald-50 text-emerald-700 hover:-translate-y-0.5 hover:border-emerald-400 hover:bg-emerald-100 hover:shadow-md'
+              : 'mr-2 border border-red-300 bg-red-50 text-red-700 hover:-translate-y-0.5 hover:border-red-400 hover:bg-red-100 hover:shadow-md'
           }
           onClick={() => onPrintBill?.(order)}
           disabled={isPrintingBill}
         >
-          {isPrintingBill ? 'Printing Bill...' : isBillPrinted ? 'Print Bill (Clicked)' : 'Print Bill'}
+          {isPrintingBill ? 'Printing Bill...' : 'Print Bill'}
         </Button>
         <Button
           type="button"
-          variant="secondary"
+          variant="custom"
           className={
             isKotPrinted
-              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
-              : 'border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100'
+              ? 'border border-emerald-300 bg-emerald-50 text-emerald-700 hover:-translate-y-0.5 hover:border-emerald-400 hover:bg-emerald-100 hover:shadow-md'
+              : 'border border-red-300 bg-red-50 text-red-700 hover:-translate-y-0.5 hover:border-red-400 hover:bg-red-100 hover:shadow-md'
           }
           onClick={() => onPrintKot?.(order)}
           disabled={isPrintingKot}
         >
-          {isPrintingKot ? 'Printing KOT...' : isKotPrinted ? 'Print KOT (Clicked)' : 'Print KOT'}
+          {isPrintingKot ? 'Printing KOT...' : 'Print KOT'}
         </Button>
       </div>
       {showStatusActions ? (
