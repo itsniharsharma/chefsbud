@@ -15,6 +15,7 @@ const initialForm = {
   price: '',
   categoryId: '',
   available: true,
+  isVeg: true,
   bestseller: false,
 }
 
@@ -23,6 +24,7 @@ const newDraftItem = {
   description: '',
   price: '',
   available: true,
+  isVeg: true,
   bestseller: false,
 }
 
@@ -70,6 +72,25 @@ export default function MenuPage() {
       return { ...prev, categoryId: categories[0]?._id || '' }
     })
   }, [categories])
+
+  const patchMenuItemInCache = (itemId, patch) => {
+    if (!restaurant?.slug) return
+
+    queryClient.setQueryData(queryKeys.dashboard.menu(restaurant.slug), (current) => {
+      if (!current) return current
+
+      return {
+        ...current,
+        items: Array.isArray(current.items)
+          ? current.items.map((item) =>
+              String(item._id) === String(itemId)
+                ? { ...item, ...patch }
+                : item,
+            )
+          : current.items,
+      }
+    })
+  }
 
   const saveItemMutation = useMutation({
     mutationFn: ({ targetEditingId, payload }) =>
@@ -220,6 +241,7 @@ export default function MenuPage() {
           description: item.description || '',
           price: String(item.price ?? ''),
           available: item.available ?? true,
+          isVeg: item.isVeg ?? true,
           bestseller: item.bestseller ?? false,
         })),
       }))
@@ -251,11 +273,11 @@ export default function MenuPage() {
       prev.map((category, currentCategoryIndex) => {
         if (currentCategoryIndex !== categoryIndex) return category
 
-        return {
-          ...category,
-          items: category.items.map((item, currentItemIndex) =>
-            currentItemIndex === itemIndex ? { ...item, [field]: value } : item,
-          ),
+          return {
+            ...category,
+            items: category.items.map((item, currentItemIndex) =>
+              currentItemIndex === itemIndex ? { ...item, [field]: value } : item,
+            ),
         }
       }),
     )
@@ -286,6 +308,33 @@ export default function MenuPage() {
     setError('')
 
     await importDraftMutation.mutateAsync({ categories: aiDraftCategories })
+  }
+
+  const toggleItemAvailability = async (item) => {
+    const nextAvailable = item.available === false
+    patchMenuItemInCache(item._id, { available: nextAvailable })
+    setError('')
+
+    try {
+      await menuService.updateItem(item._id, { available: nextAvailable })
+    } catch (requestError) {
+      patchMenuItemInCache(item._id, { available: item.available !== false })
+      setError(requestError?.response?.data?.message || 'Failed to update availability')
+    }
+  }
+
+  const toggleItemDiet = async (item) => {
+    const currentIsVeg = item.isVeg !== false
+    const nextIsVeg = !currentIsVeg
+    patchMenuItemInCache(item._id, { isVeg: nextIsVeg })
+    setError('')
+
+    try {
+      await menuService.updateItem(item._id, { isVeg: nextIsVeg })
+    } catch (requestError) {
+      patchMenuItemInCache(item._id, { isVeg: currentIsVeg })
+      setError(requestError?.response?.data?.message || 'Failed to update dish type')
+    }
   }
 
   return (
@@ -402,6 +451,14 @@ export default function MenuPage() {
                       <label className="md:col-span-1 flex items-center justify-center gap-1 text-xs text-slate-600">
                         <input
                           type="checkbox"
+                          checked={item.isVeg !== false}
+                          onChange={(e) => updateDraftItem(categoryIndex, itemIndex, 'isVeg', e.target.checked)}
+                        />
+                        Veg
+                      </label>
+                      <label className="md:col-span-1 flex items-center justify-center gap-1 text-xs text-slate-600">
+                        <input
+                          type="checkbox"
                           checked={item.bestseller}
                           onChange={(e) => updateDraftItem(categoryIndex, itemIndex, 'bestseller', e.target.checked)}
                         />
@@ -476,6 +533,14 @@ export default function MenuPage() {
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
+              checked={form.isVeg}
+              onChange={(e) => setForm((prev) => ({ ...prev, isVeg: e.target.checked }))}
+            />
+            Veg Dish
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
               checked={form.bestseller}
               onChange={(e) => setForm((prev) => ({ ...prev, bestseller: e.target.checked }))}
             />
@@ -497,8 +562,37 @@ export default function MenuPage() {
             <p className="text-sm text-slate-600">{item.description}</p>
             <p className="mt-2 text-sm text-slate-500">Category: {categoryMap.get(item.categoryId) || '-'}</p>
             <div className="mt-2 flex gap-2 text-xs">
-              <span className="rounded bg-slate-100 px-2 py-1">{item.available ? 'Available' : 'Not Available'}</span>
+              <span className={`rounded px-2 py-1 ${item.available === false ? 'bg-slate-200 text-slate-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                {item.available === false ? 'Hidden' : 'Visible'}
+              </span>
+              <span className={`rounded px-2 py-1 ${item.isVeg === false ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                {item.isVeg === false ? 'Non-Veg' : 'Veg'}
+              </span>
               {item.bestseller && <span className="rounded bg-red-50 px-2 py-1 text-[var(--primary)]">Bestseller</span>}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                variant="custom"
+                className={`border ${
+                  item.available === false
+                    ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                }`}
+                onClick={() => toggleItemAvailability(item)}
+              >
+                {item.available === false ? 'Off' : 'On'}
+              </Button>
+              <Button
+                variant="custom"
+                className={`border ${
+                  item.isVeg === false
+                    ? 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                }`}
+                onClick={() => toggleItemDiet(item)}
+              >
+                {item.isVeg === false ? 'NonVeg' : 'Veg'}
+              </Button>
             </div>
             <div className="mt-3 flex gap-2">
               <Button variant="secondary" onClick={() => onEdit(item)}>

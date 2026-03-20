@@ -70,6 +70,7 @@ function parseItemLine(line) {
       description: '',
       price,
       available: true,
+      isVeg: true,
       bestseller: false,
     }
   }
@@ -91,6 +92,7 @@ function parseItemLine(line) {
     description: '',
     price,
     available: true,
+    isVeg: true,
     bestseller: false,
   }
 }
@@ -180,6 +182,7 @@ function normalizeParsedMenu(parsed) {
             description: String(item?.description || '').trim(),
             price,
             available: true,
+            isVeg: item?.isVeg !== false,
             bestseller: false,
           }
         })

@@ -8,6 +8,7 @@ const menuItemSchema = new mongoose.Schema(
     description: { type: String, default: '' },
     price: { type: Number, required: true, min: 0 },
     available: { type: Boolean, default: true },
+    isVeg: { type: Boolean, default: true },
     bestseller: { type: Boolean, default: false },
   },
   { timestamps: true },
@@ -15,6 +16,7 @@ const menuItemSchema = new mongoose.Schema(
 
 menuItemSchema.index({ restaurantId: 1, name: 1 })
 menuItemSchema.index({ restaurantId: 1, categoryId: 1, available: 1, createdAt: -1 })
+menuItemSchema.index({ restaurantId: 1, categoryId: 1, isVeg: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, createdAt: -1 })
 
 export default mongoose.model('MenuItem', menuItemSchema)

@@ -176,12 +176,22 @@ export default function CustomerMenuPage() {
               <div className="space-y-3">
                 {visibleItems.map((item) => {
                   const quantity = cartQuantityByItemId.get(item._id) || 0
+                  const isVeg = item.isVeg !== false
                   return (
                     <article key={item._id} className="customer-food-card">
                       <div className="min-w-0 flex-1">
-                        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-red-600">
-                          {item.bestseller ? 'Bestseller' : 'Fresh pick'}
-                        </p>
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-red-600">
+                            {item.bestseller ? 'Bestseller' : 'Fresh pick'}
+                          </p>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              isVeg ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+                            }`}
+                          >
+                            {isVeg ? 'Veg' : 'Non-Veg'}
+                          </span>
+                        </div>
                         <h3 className="text-base font-bold text-gray-900">{item.name}</h3>
                         <p className="mt-1 line-clamp-2 text-sm text-gray-500">
                           {item.description || 'Chef special prepared with quality ingredients.'}

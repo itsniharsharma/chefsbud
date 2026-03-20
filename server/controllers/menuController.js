@@ -25,7 +25,7 @@ export async function getMenuBySlug(req, res, next) {
         .lean(),
       MenuItem.find({ restaurantId: restaurant._id })
         .sort({ createdAt: -1 })
-        .select('_id categoryId name description price available bestseller')
+        .select('_id categoryId name description price available isVeg bestseller')
         .lean(),
       Offer.find({ restaurantId: restaurant._id, active: true })
         .sort({ createdAt: -1 })
@@ -75,7 +75,7 @@ export async function createMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const { categoryId, name, description, price, available, bestseller } = req.body
+    const { categoryId, name, description, price, available, isVeg, bestseller } = req.body
 
     const category = await Category.findOne({ _id: categoryId, restaurantId: restaurant._id }).lean()
     if (!category) {
@@ -89,6 +89,7 @@ export async function createMenuItem(req, res, next) {
       description,
       price,
       available,
+      isVeg,
       bestseller,
     })
 
@@ -107,7 +108,7 @@ export async function updateMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const updates = ['categoryId', 'name', 'description', 'price', 'available', 'bestseller']
+    const updates = ['categoryId', 'name', 'description', 'price', 'available', 'isVeg', 'bestseller']
     const patch = {}
     updates.forEach((field) => {
       if (field in req.body) {
@@ -212,6 +213,7 @@ export async function importMenuDraft(req, res, next) {
               description: String(item?.description || '').trim(),
               price,
               available: item?.available !== false,
+              isVeg: item?.isVeg !== false,
               bestseller: Boolean(item?.bestseller),
             }
           })
@@ -271,6 +273,7 @@ export async function importMenuDraft(req, res, next) {
           description: item.description,
           price: item.price,
           available: item.available,
+          isVeg: item.isVeg,
           bestseller: item.bestseller,
         })
       }
