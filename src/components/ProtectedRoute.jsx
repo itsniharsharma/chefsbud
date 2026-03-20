@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { hasBillingAccess } from '../utils/billingAccess'
 
 const staffAllowedPaths = new Set([
   '/dashboard/orders',
@@ -14,25 +15,6 @@ function normalizeStaffPath(pathname) {
     return '/dashboard/recent-orders'
   }
   return currentPath
-}
-
-function toTimestamp(value) {
-  const ts = value ? new Date(value).getTime() : NaN
-  return Number.isFinite(ts) ? ts : 0
-}
-
-function hasBillingAccess(billing) {
-  if (!billing) {
-    return false
-  }
-
-  if (billing.status === 'active') {
-    return true
-  }
-
-  const now = Date.now()
-  const graceWindowEnds = Math.max(toTimestamp(billing.graceEndsAt), toTimestamp(billing.currentPeriodEnd))
-  return ['grace_period', 'past_due'].includes(billing.status) && graceWindowEnds > now
 }
 
 export default function ProtectedRoute({ children }) {

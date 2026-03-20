@@ -4,20 +4,10 @@ import OrderCard from '../components/OrderCard'
 import Button from '../components/Button'
 import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
-import { queryKeys } from '../lib/queryKeys'
 import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
-import { formatCurrencyINR } from '../utils/currency'
+import { buildBillHtml, buildKotHtml, printHtmlDocument } from '../utils/orderPrint'
 
 const statusFilters = ['All', 'Confirmed', 'Preparing', 'Ready', 'Served']
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 export default function OrdersPage() {
   const { restaurant } = useAuth()
@@ -114,7 +104,6 @@ export default function OrdersPage() {
     onSuccess: () => {
       setError('')
       refreshBoard()
-      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.analyticsCards(restaurant?._id) })
     },
     onError: (requestError, _variables, context) => {
       if (context?.previousBoards) {
@@ -187,55 +176,6 @@ export default function OrdersPage() {
     updateStatusMutation.mutate({ id, status })
   }
 
-  const buildBillHtml = (order) => {
-    const rows = (order.items || [])
-      .map((item) => {
-        const qty = Number(item.quantity || 0)
-        const price = Number(item.price || 0)
-        const subtotal = qty * price
-        return `
-          <tr>
-            <td>${escapeHtml(item.name)}</td>
-            <td style="text-align:center;">${qty}</td>
-            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(price))}</td>
-            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(subtotal))}</td>
-          </tr>
-        `
-      })
-      .join('')
-
-    return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Bill ${escapeHtml(order._id || order.id)}</title>
-  </head>
-  <body style="font-family:Arial,sans-serif;padding:16px;color:#0f172a;">
-    <h2 style="margin:0 0 8px 0;">${escapeHtml(restaurant?.name || "Chef's Bud")}</h2>
-    <div style="font-size:12px;line-height:1.6;">
-      <div><strong>Order:</strong> ${escapeHtml(order._id || order.id)}</div>
-      <div><strong>Table:</strong> ${escapeHtml(order.tableNumber)} | <strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</div>
-      <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
-      <div><strong>Status:</strong> ${escapeHtml(order.orderStatus || '-')}</div>
-    </div>
-    <hr style="margin:10px 0;"/>
-    <table style="width:100%;font-size:13px;border-collapse:collapse;">
-      <thead>
-        <tr>
-          <th style="text-align:left;padding:4px 0;">Item</th>
-          <th style="text-align:center;padding:4px 0;">Qty</th>
-          <th style="text-align:right;padding:4px 0;">Price</th>
-          <th style="text-align:right;padding:4px 0;">Subtotal</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <hr style="margin:10px 0;"/>
-    <div style="text-align:right;font-weight:700;">Total: ${escapeHtml(formatCurrencyINR(order.totalAmount || 0))}</div>
-  </body>
-</html>`
-  }
-
   const printBillForOrder = async (order) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
@@ -245,16 +185,11 @@ export default function OrdersPage() {
 
     try {
       await markBillPrintedMutation.mutateAsync({ id: orderId })
-
-      const opened = window.open('', '_blank', 'width=860,height=700')
-      if (!opened) {
-        throw new Error('Popup blocked. Please allow popups to print bill.')
-      }
-
-      opened.document.write(buildBillHtml(order))
-      opened.document.close()
-      opened.focus()
-      opened.print()
+      printHtmlDocument({
+        html: buildBillHtml({ order, restaurantName: restaurant?.name }),
+        title: 'bill',
+        features: 'width=860,height=700',
+      })
     } catch (requestError) {
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill')
     } finally {
@@ -271,51 +206,11 @@ export default function OrdersPage() {
 
     try {
       await markKotPrintedMutation.mutateAsync({ id: orderId })
-
-      const printableItems = Array.isArray(order.items)
-        ? order.items
-            .map((item) => {
-              const name = escapeHtml(typeof item === 'string' ? item : item?.name || 'Item')
-              const qty = typeof item === 'string' ? 1 : Number(item?.quantity || 1)
-              return `<tr><td style="padding:4px 0;">${name}</td><td style="padding:4px 0;text-align:right;">x${qty}</td></tr>`
-            })
-            .join('')
-        : ''
-
-      const opened = window.open('', '_blank', 'width=380,height=640')
-      if (!opened) {
-        throw new Error('Popup blocked. Please allow popups to print KOT.')
-      }
-
-      const createdAt = order.createdAt ? new Date(order.createdAt).toLocaleString() : '-'
-      const note = order.customerNote ? escapeHtml(String(order.customerNote)) : ''
-
-      opened.document.write(`<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>KOT - ${orderId}</title>
-  </head>
-  <body style="font-family:Arial,sans-serif;padding:14px;color:#0f172a;">
-    <h2 style="margin:0 0 8px 0;">KITCHEN ORDER TICKET</h2>
-    <div style="font-size:12px;line-height:1.6;">
-      <div><strong>Order:</strong> ${orderId}</div>
-      <div><strong>Table:</strong> ${order.tableNumber} | <strong>Floor:</strong> ${order.floorNumber || 1}</div>
-      <div><strong>Time:</strong> ${createdAt}</div>
-      <div><strong>Status:</strong> ${order.orderStatus}</div>
-    </div>
-    <hr style="margin:10px 0;"/>
-    <table style="width:100%;font-size:13px;border-collapse:collapse;">
-      <tbody>
-        ${printableItems}
-      </tbody>
-    </table>
-    ${note ? `<hr style="margin:10px 0;"/><div style="font-size:12px;"><strong>Note:</strong> ${note}</div>` : ''}
-  </body>
-</html>`)
-      opened.document.close()
-      opened.focus()
-      opened.print()
+      printHtmlDocument({
+        html: buildKotHtml({ order }),
+        title: 'KOT',
+        features: 'width=380,height=640',
+      })
     } catch (requestError) {
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
     } finally {

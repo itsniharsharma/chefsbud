@@ -3,25 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import FormInput from '../components/FormInput'
 import Button from '../components/Button'
-
-function toTimestamp(value) {
-  const ts = value ? new Date(value).getTime() : NaN
-  return Number.isFinite(ts) ? ts : 0
-}
-
-function hasBillingAccess(billing) {
-  if (!billing) {
-    return false
-  }
-
-  if (billing.status === 'active') {
-    return true
-  }
-
-  const now = Date.now()
-  const graceWindowEnds = Math.max(toTimestamp(billing.graceEndsAt), toTimestamp(billing.currentPeriodEnd))
-  return ['grace_period', 'past_due'].includes(billing.status) && graceWindowEnds > now
-}
+import { hasBillingAccess } from '../utils/billingAccess'
 
 export default function LoginPage() {
   const [mode, setMode] = useState('manager')
