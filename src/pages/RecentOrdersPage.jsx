@@ -7,7 +7,7 @@ import { queryKeys } from '../lib/queryKeys'
 import { useRecentOrdersQuery } from '../hooks/useDashboardQueries'
 import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
-import { buildBillHtml, buildKotHtml, printHtmlDocument } from '../utils/orderPrint'
+import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 
 export default function RecentOrdersPage() {
   const { restaurant } = useAuth()
@@ -131,17 +131,19 @@ export default function RecentOrdersPage() {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
 
+    let printWindow = null
     setPrintingBillOrderId(orderId)
     setError('')
 
     try {
-      await markBillPrintedMutation.mutateAsync({ id: orderId })
-      printHtmlDocument({
-        html: buildBillHtml({ order, restaurantName: restaurant?.name }),
+      printWindow = openPrintWindow({
         title: 'bill',
         features: 'width=860,height=700',
       })
+      await markBillPrintedMutation.mutateAsync({ id: orderId })
+      printIntoWindow(printWindow, buildBillHtml({ order, restaurantName: restaurant?.name }))
     } catch (requestError) {
+      closePrintWindow(printWindow)
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill')
     } finally {
       setPrintingBillOrderId('')
@@ -152,17 +154,19 @@ export default function RecentOrdersPage() {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
 
+    let printWindow = null
     setPrintingKotOrderId(orderId)
     setError('')
 
     try {
-      await markKotPrintedMutation.mutateAsync({ id: orderId })
-      printHtmlDocument({
-        html: buildKotHtml({ order }),
+      printWindow = openPrintWindow({
         title: 'KOT',
         features: 'width=380,height=640',
       })
+      await markKotPrintedMutation.mutateAsync({ id: orderId })
+      printIntoWindow(printWindow, buildKotHtml({ order }))
     } catch (requestError) {
+      closePrintWindow(printWindow)
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
     } finally {
       setPrintingKotOrderId('')

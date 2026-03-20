@@ -102,14 +102,43 @@ export function buildKotHtml({ order }) {
 </html>`
 }
 
-export function printHtmlDocument({ html, title, features }) {
+function writeHtmlToWindow(opened, html) {
+  opened.document.open()
+  opened.document.write(html)
+  opened.document.close()
+}
+
+export function openPrintWindow({ title, features }) {
   const opened = window.open('', '_blank', features)
   if (!opened) {
     throw new Error(`Popup blocked. Please allow popups to print ${title}.`)
   }
 
-  opened.document.write(html)
-  opened.document.close()
+  writeHtmlToWindow(
+    opened,
+    `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(title)}</title></head><body style="font-family:Arial,sans-serif;padding:16px;color:#475569;">Preparing ${escapeHtml(title)}...</body></html>`,
+  )
+  opened.focus()
+  return opened
+}
+
+export function printHtmlDocument({ html, title, features }) {
+  const opened = openPrintWindow({ title, features })
+  writeHtmlToWindow(opened, html)
+  opened.print()
+}
+
+export function printIntoWindow(opened, html) {
+  if (!opened || opened.closed) {
+    throw new Error('Print window was closed before printing could start.')
+  }
+
+  writeHtmlToWindow(opened, html)
   opened.focus()
   opened.print()
+}
+
+export function closePrintWindow(opened) {
+  if (!opened || opened.closed) return
+  opened.close()
 }
