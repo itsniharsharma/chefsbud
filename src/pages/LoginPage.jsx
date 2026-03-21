@@ -29,7 +29,12 @@ export default function LoginPage() {
           : await login({ email, password })
 
       if (!hasBillingAccess(result?.user?.billing)) {
-        navigate('/plans', { replace: true })
+        navigate('/plans', {
+          replace: true,
+          state: {
+            source: 'login',
+          },
+        })
         return
       }
 

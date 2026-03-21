@@ -23,4 +23,6 @@ const restaurantSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+restaurantSchema.index({ ownerId: 1 }, { unique: true })
+
 export default mongoose.model('Restaurant', restaurantSchema)

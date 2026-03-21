@@ -51,7 +51,7 @@ async function buildOrderItems(restaurantId, items) {
 
 async function resolveRestaurantAndTable({ restaurantSlug, tableNumber, floorNumber }) {
   const restaurant = await Restaurant.findOne({ slug: restaurantSlug })
-    .select('+paymentConfig.keySecretEncrypted +paymentConfig.webhookSecretEncrypted name slug paymentConfig')
+    .select('_id name slug paymentConfig')
     .lean()
 
   if (!restaurant) {

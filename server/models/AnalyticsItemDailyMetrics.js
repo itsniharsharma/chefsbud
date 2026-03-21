@@ -4,6 +4,7 @@ const analyticsItemDailyMetricsSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
     menuItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'MenuItem', required: true, index: true },
+    menuItemName: { type: String, default: '', trim: true },
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', default: null },
     date: { type: Date, required: true },
     dateKey: { type: String, required: true, trim: true },

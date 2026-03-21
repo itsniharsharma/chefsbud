@@ -4,11 +4,26 @@ import AnalyticsExposureSession from '../models/AnalyticsExposureSession.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
 import MenuItem from '../models/MenuItem.js'
 import Order from '../models/Order.js'
+import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
+import { withRedis } from '../config/redis.js'
+import { invalidateCacheByTags } from './responseCache.js'
+import { logger } from '../utils/logger.js'
+
+const ANALYTICS_BACKFILL_LOCK_SECONDS = Math.max(30, Number(process.env.ANALYTICS_BACKFILL_LOCK_SECONDS || 120))
+const ANALYTICS_BACKFILL_BATCH_SIZE = Math.max(50, Math.min(Number(process.env.ANALYTICS_BACKFILL_BATCH_SIZE || 250), 1000))
+const ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN || 8), 50))
+const localBackfillLocks = new Map()
 
 function normalizeDate(dateLike = new Date()) {
   const date = new Date(dateLike)
   date.setHours(0, 0, 0, 0)
   return date
+}
+
+function normalizeHour(dateLike = new Date()) {
+  const date = new Date(dateLike)
+  const hour = Number(date.getHours())
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 0
 }
 
 function toDateKey(dateLike = new Date()) {
@@ -74,9 +89,15 @@ async function loadMenuItemsMap(restaurantId, menuItemIds = []) {
   return new Map(items.map((item) => [String(item._id), item]))
 }
 
+function sanitizeMetricIncrement(value) {
+  const numeric = Number(value || 0)
+  return Number.isFinite(numeric) && numeric !== 0 ? numeric : 0
+}
+
 async function upsertItemDailyMetric({
   restaurantId,
   menuItemId,
+  menuItemName = '',
   categoryId = null,
   date,
   dateKey,
@@ -84,7 +105,7 @@ async function upsertItemDailyMetric({
 }) {
   const safeIncrements = {}
   Object.entries(increments || {}).forEach(([key, value]) => {
-    const numeric = Number(value || 0)
+    const numeric = sanitizeMetricIncrement(value)
     if (!numeric) return
     safeIncrements[key] = numeric
   })
@@ -97,9 +118,13 @@ async function upsertItemDailyMetric({
       $setOnInsert: {
         restaurantId,
         menuItemId,
+        menuItemName: String(menuItemName || '').trim(),
         categoryId,
         date,
         dateKey,
+      },
+      $set: {
+        menuItemName: String(menuItemName || '').trim(),
       },
       $inc: safeIncrements,
     },
@@ -127,7 +152,7 @@ async function upsertItemDailyMetric({
 async function upsertDailyMetric({ restaurantId, date, dateKey, increments }) {
   const safeIncrements = {}
   Object.entries(increments || {}).forEach(([key, value]) => {
-    const numeric = Number(value || 0)
+    const numeric = sanitizeMetricIncrement(value)
     if (!numeric) return
     safeIncrements[key] = numeric
   })
@@ -164,9 +189,44 @@ async function upsertDailyMetric({ restaurantId, date, dateKey, increments }) {
   }
 }
 
+async function upsertHourlyMetric({ restaurantId, date, dateKey, hour, increment }) {
+  const safeIncrement = sanitizeMetricIncrement(increment)
+  if (!safeIncrement) return
+
+  await OrderHourlyMetrics.updateOne(
+    { restaurantId, dateKey, hour },
+    {
+      $setOnInsert: {
+        restaurantId,
+        date,
+        dateKey,
+        hour,
+      },
+      $inc: {
+        orders: safeIncrement,
+      },
+    },
+    { upsert: true },
+  )
+
+  if (safeIncrement < 0) {
+    await OrderHourlyMetrics.updateOne(
+      { restaurantId, dateKey, hour },
+      [
+        {
+          $set: {
+            orders: { $max: [0, '$orders'] },
+          },
+        },
+      ],
+    )
+  }
+}
+
 export async function trackMenuExposure({
   restaurantId,
   menuItemIds = [],
+  resolvedMenuItems = null,
   sessionId,
   occurredAt = new Date(),
 }) {
@@ -181,66 +241,88 @@ export async function trackMenuExposure({
   const date = normalizeDate(occurredAt)
   const dateKey = toDateKey(date)
   const expiresAt = addDays(date, 45)
-  const menuMap = await loadMenuItemsMap(restaurantId, uniqueIds)
+  const menuMap =
+    resolvedMenuItems instanceof Map
+      ? resolvedMenuItems
+      : Array.isArray(resolvedMenuItems)
+        ? new Map(
+            resolvedMenuItems.map((item) => [String(item?._id || ''), item]).filter(([id]) => Boolean(id)),
+          )
+        : await loadMenuItemsMap(restaurantId, uniqueIds)
 
-  let tracked = 0
-  for (const menuItemId of uniqueIds) {
-    const menuItem = menuMap.get(menuItemId)
-    if (!menuItem) continue
-
-    const result = await AnalyticsExposureSession.updateOne(
-      {
-        restaurantId,
-        menuItemId,
-        sessionId: normalizedSessionId,
-        dateKey,
-      },
-      {
-        $setOnInsert: {
-          restaurantId,
-          menuItemId,
-          sessionId: normalizedSessionId,
-          dateKey,
-          firstSeenAt: occurredAt,
-          lastSeenAt: occurredAt,
-          expiresAt,
-        },
-      },
-      { upsert: true },
-    )
-
-    const inserted = Number(result?.upsertedCount || 0) > 0
-    if (!inserted) {
-      await AnalyticsExposureSession.updateOne(
-        {
-          restaurantId,
-          menuItemId,
-          sessionId: normalizedSessionId,
-          dateKey,
-        },
-        { $set: { lastSeenAt: occurredAt, expiresAt } },
-      )
-      continue
-    }
-
-    tracked += 1
-    await upsertItemDailyMetric({
-      restaurantId,
-      menuItemId,
-      categoryId: menuItem.categoryId || null,
-      date,
-      dateKey,
-      increments: { views: 1 },
-    })
+  const validIds = uniqueIds.filter((menuItemId) => menuMap.has(menuItemId))
+  if (!validIds.length) {
+    return { tracked: 0 }
   }
 
+  const exposureOperations = validIds.map((menuItemId) => ({
+    menuItemId,
+    operation: {
+      updateOne: {
+        filter: {
+          restaurantId,
+          menuItemId,
+          sessionId: normalizedSessionId,
+          dateKey,
+        },
+        update: {
+          $setOnInsert: {
+            restaurantId,
+            menuItemId,
+            sessionId: normalizedSessionId,
+            dateKey,
+            firstSeenAt: occurredAt,
+            lastSeenAt: occurredAt,
+            expiresAt,
+          },
+        },
+        upsert: true,
+      },
+    },
+  }))
+
+  const exposureWriteResult = await AnalyticsExposureSession.bulkWrite(
+    exposureOperations.map((entry) => entry.operation),
+    { ordered: false },
+  )
+
+  const insertedOperationIndexes = exposureWriteResult?.upsertedIds
+    ? Object.keys(exposureWriteResult.upsertedIds).map((key) => Number(key))
+    : []
+  const insertedMenuItems = insertedOperationIndexes
+    .map((index) => exposureOperations[index]?.menuItemId)
+    .filter(Boolean)
+  const tracked = insertedMenuItems.length
+
   if (tracked > 0) {
-    await upsertDailyMetric({
-      restaurantId,
-      date,
-      dateKey,
-      increments: { views: tracked },
-    })
+    await Promise.all([
+      AnalyticsItemDailyMetrics.bulkWrite(
+        insertedMenuItems.map((menuItemId) => ({
+          updateOne: {
+            filter: { restaurantId, menuItemId, dateKey },
+            update: {
+              $setOnInsert: {
+                restaurantId,
+                menuItemId,
+                menuItemName: String(menuMap.get(menuItemId)?.name || '').trim(),
+                categoryId: menuMap.get(menuItemId)?.categoryId || null,
+                date,
+                dateKey,
+              },
+              $inc: { views: 1 },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      ),
+      upsertDailyMetric({
+        restaurantId,
+        date,
+        dateKey,
+        increments: { views: tracked },
+      }),
+    ])
   }
 
   return { tracked }
@@ -277,6 +359,7 @@ export async function trackAddToCart({
       restaurantId,
       menuItemId: menuItem._id,
       categoryId: menuItem.categoryId || null,
+      menuItemName: menuItem.name || '',
       date,
       dateKey,
       increments: { addToCart: safeQuantity },
@@ -303,6 +386,7 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
   const completedAt = order.completedAt || order.updatedAt || order.createdAt || new Date()
   const date = normalizeDate(completedAt)
   const dateKey = toDateKey(date)
+  const completedHour = normalizeHour(completedAt)
   const itemBreakdown = buildPurchaseBreakdown(order)
   const menuMap = await loadMenuItemsMap(
     order.restaurantId,
@@ -316,6 +400,7 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
         upsertItemDailyMetric({
           restaurantId: order.restaurantId,
           menuItemId: entry.menuItemId,
+          menuItemName: menuMap.get(entry.menuItemId)?.name || '',
           categoryId: menuMap.get(entry.menuItemId)?.categoryId || null,
           date,
           dateKey,
@@ -334,6 +419,13 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
         completedOrders: safeMultiplier,
         revenue: round2(clampNonNegative(order.totalAmount) * safeMultiplier),
       },
+    }),
+    upsertHourlyMetric({
+      restaurantId: order.restaurantId,
+      date,
+      dateKey,
+      hour: completedHour,
+      increment: safeMultiplier,
     }),
   ])
 }
@@ -472,24 +564,17 @@ async function aggregateItemMetrics({ restaurantId, startDate, endDate }) {
     {
       $group: {
         _id: '$menuItemId',
+        name: { $last: '$menuItemName' },
         views: { $sum: '$views' },
         orders: { $sum: '$orders' },
         revenue: { $sum: '$revenue' },
       },
     },
     {
-      $lookup: {
-        from: 'menuitems',
-        localField: '_id',
-        foreignField: '_id',
-        as: 'menuItem',
-      },
-    },
-    {
       $project: {
         _id: 0,
         menuItemId: '$_id',
-        name: { $ifNull: [{ $arrayElemAt: ['$menuItem.name', 0] }, 'Deleted item'] },
+        name: { $ifNull: ['$name', 'Deleted item'] },
         views: 1,
         orders: 1,
         revenue: 1,
@@ -499,21 +584,20 @@ async function aggregateItemMetrics({ restaurantId, startDate, endDate }) {
 }
 
 async function aggregateHourlyOrders({ restaurantId, startDate, endDate }) {
-  return Order.aggregate([
+  return OrderHourlyMetrics.aggregate([
     {
       $match: {
         restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
-        orderStatus: 'Completed',
-        completedAt: {
+        date: {
           $gte: startDate,
-          $lt: addDays(endDate, 1),
+          $lte: endDate,
         },
       },
     },
     {
       $group: {
-        _id: { hour: { $hour: '$completedAt' } },
-        orders: { $sum: 1 },
+        _id: { hour: '$hour' },
+        orders: { $sum: '$orders' },
       },
     },
     { $sort: { '_id.hour': 1 } },
@@ -553,14 +637,106 @@ function buildTrendSeries({ dailyMetrics, startDate, endDate }) {
 }
 
 function buildHourlySeries(hourlyRows = []) {
+  const ordersByHour = new Map(
+    (Array.isArray(hourlyRows) ? hourlyRows : []).map((entry) => [Number(entry?._id?.hour), clampNonNegative(entry?.orders)]),
+  )
+
   return Array.from({ length: 24 }, (_, hour) => {
-    const match = (Array.isArray(hourlyRows) ? hourlyRows : []).find((entry) => Number(entry?._id?.hour) === hour)
     return {
       hour: normalizeHourLabel(hour),
       hour24: hour,
-      orders: clampNonNegative(match?.orders),
+      orders: clampNonNegative(ordersByHour.get(hour)),
     }
   })
+}
+
+function cleanupExpiredLocalBackfillLocks() {
+  const now = Date.now()
+  for (const [key, expiresAt] of localBackfillLocks.entries()) {
+    if (expiresAt <= now) {
+      localBackfillLocks.delete(key)
+    }
+  }
+}
+
+async function acquireAnalyticsBackfillLock(restaurantId) {
+  const normalizedRestaurantId = String(restaurantId || '').trim()
+  if (!normalizedRestaurantId) {
+    return false
+  }
+
+  cleanupExpiredLocalBackfillLocks()
+  const localKey = `analytics-backfill:${normalizedRestaurantId}`
+  const localExpiresAt = Number(localBackfillLocks.get(localKey) || 0)
+  if (localExpiresAt > Date.now()) {
+    return false
+  }
+
+  localBackfillLocks.set(localKey, Date.now() + ANALYTICS_BACKFILL_LOCK_SECONDS * 1000)
+
+  const acquiredInRedis = await withRedis(
+    'analytics_backfill_lock_acquire',
+    async (redis) => {
+      const result = await redis.set(localKey, '1', { nx: true, ex: ANALYTICS_BACKFILL_LOCK_SECONDS })
+      return result === 'OK' || result === true
+    },
+    null,
+  )
+
+  if (acquiredInRedis === false) {
+    localBackfillLocks.delete(localKey)
+    return false
+  }
+
+  return true
+}
+
+async function releaseAnalyticsBackfillLock(restaurantId) {
+  const normalizedRestaurantId = String(restaurantId || '').trim()
+  if (!normalizedRestaurantId) return
+
+  const localKey = `analytics-backfill:${normalizedRestaurantId}`
+  localBackfillLocks.delete(localKey)
+  await withRedis('analytics_backfill_lock_release', (redis) => redis.del(localKey), null)
+}
+
+export async function scheduleCompletedOrderAnalyticsBackfill({ restaurantId } = {}) {
+  if (!restaurantId) return false
+
+  const lockAcquired = await acquireAnalyticsBackfillLock(restaurantId)
+  if (!lockAcquired) {
+    return false
+  }
+
+  setTimeout(async () => {
+    try {
+      let processed = 0
+      let batches = 0
+      let totalProcessed = 0
+
+      do {
+        processed = await backfillCompletedOrderAnalytics({
+          restaurantId,
+          batchSize: ANALYTICS_BACKFILL_BATCH_SIZE,
+        })
+        totalProcessed += processed
+        batches += 1
+      } while (processed > 0 && batches < ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN)
+
+      if (totalProcessed > 0) {
+        invalidateCacheByTags([`analytics:${String(restaurantId)}`])
+      }
+    } catch (error) {
+      logger.warn('analytics_backfill_failed', {
+        restaurantId: String(restaurantId),
+        message: error?.message || 'analytics backfill failed',
+      })
+    } finally {
+      await releaseAnalyticsBackfillLock(restaurantId)
+    }
+  }, 0)
+
+  return true
 }
 
 function buildItemGrowthList({ currentItems, previousItems, sortFn, limit = 5 }) {

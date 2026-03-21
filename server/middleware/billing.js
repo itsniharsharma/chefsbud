@@ -35,7 +35,11 @@ export async function requireActiveBilling(req, res, next) {
     }
 
     if (!hasBillingAccess(user.billing)) {
-      return res.status(403).json({ message: 'Billing inactive. Please update your subscription to continue.' })
+      const pausedMessage =
+        user.billing?.status === 'past_due' || user.billing?.status === 'cancelled'
+          ? 'Your subscription has been paused due to failed payment. Please contact support to continue.'
+          : 'Billing inactive. Please update your subscription to continue.'
+      return res.status(403).json({ message: pausedMessage })
     }
 
     return next()

@@ -3,7 +3,6 @@ import BillingEvent from '../models/BillingEvent.js'
 import { validationResult } from 'express-validator'
 import {
   createCustomer,
-  createOrder,
   createSubscription,
   getRazorpayKeyId,
   listCustomers,
@@ -19,7 +18,8 @@ import {
 } from '../services/webhookIdempotencyService.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1299900
-const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 3)
+const HYBRID_MONTHLY_AMOUNT_PAISE = 99900
+const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const customerIdByEmailCache = new Map()
@@ -103,9 +103,8 @@ function computeBillingPatch(eventType, context) {
   }
 
   if (eventType === 'subscription.cancelled' || eventType === 'subscription.paused' || eventType === 'subscription.completed') {
-    const accessEnd = currentPeriodEnd && currentPeriodEnd.getTime() > now ? currentPeriodEnd : null
-    patch['billing.status'] = accessEnd ? 'grace_period' : 'cancelled'
-    patch['billing.graceEndsAt'] = accessEnd
+    patch['billing.status'] = 'cancelled'
+    patch['billing.graceEndsAt'] = null
     patch['billing.cancelledAt'] = context.cancelledAt || new Date(now)
     return patch
   }
@@ -118,10 +117,7 @@ function computeBillingPatch(eventType, context) {
   }
 
   if (eventType === 'invoice.payment_failed' || eventType === 'payment.failed') {
-    const graceEndsAt =
-      currentPeriodEnd && currentPeriodEnd.getTime() > now
-        ? currentPeriodEnd
-        : fallbackGraceDate
+    const graceEndsAt = fallbackGraceDate
     patch['billing.status'] = 'past_due'
     patch['billing.graceEndsAt'] = graceEndsAt
     return patch
@@ -132,10 +128,6 @@ function computeBillingPatch(eventType, context) {
 
 function shouldNotifyStatus(nextStatus) {
   return ['grace_period', 'past_due', 'cancelled', 'active'].includes(nextStatus)
-}
-
-function buildReceipt(userId, type) {
-  return `${type}_${String(userId).slice(-8)}_${Date.now()}`
 }
 
 async function resolveExistingCustomerByEmail(email) {
@@ -180,30 +172,8 @@ export async function createCheckout(req, res, next) {
       return res.status(400).json({ message: 'Only hybrid plan is supported' })
     }
 
-    const user = await getUserOrThrow(req.user._id)
-    if (user.billing?.planType === 'hybrid' && user.billing?.status === 'setup_paid') {
-      return res.status(409).json({
-        message: 'Setup payment is already completed. Continue with autopay authorization.',
-      })
-    }
-
-    const amount = HYBRID_SETUP_AMOUNT_PAISE
-    const order = await createOrder({
-      amount,
-      currency: 'INR',
-      receipt: buildReceipt(req.user._id, plan),
-      notes: {
-        userId: String(req.user._id),
-        plan,
-      },
-    })
-
-    return res.status(201).json({
-      keyId: getRazorpayKeyId(),
-      plan,
-      amount,
-      currency: 'INR',
-      orderId: order.id,
+    return res.status(410).json({
+      message: 'Legacy setup checkout is disabled. Use subscription activation flow instead.',
     })
   } catch (error) {
     next(error)
@@ -232,19 +202,8 @@ export async function verifyOrder(req, res, next) {
       return res.status(400).json({ message: 'Invalid payment signature' })
     }
 
-    const user = await getUserOrThrow(req.user._id)
-    user.billing = {
-      ...user.billing,
-      planType: 'hybrid',
-      status: 'setup_paid',
-      setupPaymentId: paymentId,
-    }
-
-    await user.save()
-
-    return res.json({
-      message: 'Payment verified',
-      billing: user.billing,
+    return res.status(410).json({
+      message: 'Legacy setup checkout verification is disabled. Use subscription activation flow instead.',
     })
   } catch (error) {
     next(error)
@@ -262,9 +221,17 @@ export async function createHybridSubscription(req, res, next) {
 
     const user = await getUserOrThrow(req.user._id)
 
-    if (user.billing?.planType !== 'hybrid' || user.billing?.status !== 'setup_paid') {
-      return res.status(400).json({
-        message: 'Pay setup amount before starting auto-payment subscription',
+    if (user.billing?.status === 'active' && user.billing?.razorpaySubscriptionId) {
+      return res.status(200).json({
+        keyId: getRazorpayKeyId(),
+        subscriptionId: user.billing.razorpaySubscriptionId,
+        customerId: user.billing?.razorpayCustomerId || '',
+        planSummary: {
+          setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+          firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+          totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
+          recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+        },
       })
     }
 
@@ -273,6 +240,12 @@ export async function createHybridSubscription(req, res, next) {
         keyId: getRazorpayKeyId(),
         subscriptionId: user.billing.razorpaySubscriptionId,
         customerId: user.billing?.razorpayCustomerId || '',
+        planSummary: {
+          setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+          firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+          totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
+          recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+        },
       })
     }
 
@@ -316,6 +289,15 @@ export async function createHybridSubscription(req, res, next) {
       plan_id: hybridPlanId,
       customer_notify: 1,
       total_count: totalCount,
+      addons: [
+        {
+          item: {
+            name: "Chef's Bud setup fee",
+            amount: HYBRID_SETUP_AMOUNT_PAISE,
+            currency: 'INR',
+          },
+        },
+      ],
       notes: {
         userId: String(user._id),
         plan: 'hybrid',
@@ -341,6 +323,7 @@ export async function createHybridSubscription(req, res, next) {
     user.billing = {
       ...user.billing,
       planType: 'hybrid',
+      status: 'pending',
       razorpayCustomerId: customerId,
       razorpaySubscriptionId: subscription.id,
     }
@@ -350,6 +333,12 @@ export async function createHybridSubscription(req, res, next) {
       keyId: getRazorpayKeyId(),
       subscriptionId: subscription.id,
       customerId,
+      planSummary: {
+        setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+        firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+        totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
+        recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+      },
     })
   } catch (error) {
     next(error)
@@ -387,14 +376,29 @@ export async function verifyHybridSubscription(req, res, next) {
       ...user.billing,
       planType: 'hybrid',
       status: 'active',
+      setupPaymentId: paymentId,
       razorpaySubscriptionId: subscriptionId,
       activatedAt: new Date(),
+      graceEndsAt: null,
+      cancelledAt: null,
+      lastBillingEventAt: new Date(),
     }
 
     await user.save()
 
+    void sendBillingStatusEmail({
+      to: user.email,
+      name: user.name,
+      status: user.billing.status,
+      planType: user.billing.planType,
+      graceEndsAt: user.billing.graceEndsAt,
+      currentPeriodEnd: user.billing.currentPeriodEnd,
+    }).catch((mailError) => {
+      console.error('Subscription activation email failed', mailError)
+    })
+
     return res.json({
-      message: 'Subscription verified',
+      message: 'Subscription activated successfully',
       billing: user.billing,
     })
   } catch (error) {

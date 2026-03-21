@@ -73,7 +73,13 @@ export default function RegisterPage() {
         email,
         code: verificationCode.trim(),
       })
-      navigate('/plans', { replace: true })
+      navigate('/plans', {
+        replace: true,
+        state: {
+          autoStartPlan: 'hybrid',
+          source: 'registration',
+        },
+      })
     } catch (requestError) {
       setError(requestError?.response?.data?.message || 'Verification failed')
     } finally {
@@ -132,7 +138,7 @@ export default function RegisterPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.3em] text-red-200">Owner Access</p>
               <h2 className="mt-3 text-4xl font-bold leading-tight">Premium control for premium hospitality teams</h2>
               <p className="mt-4 text-sm text-slate-200">
-                Sign up to configure your workspace, then complete plan activation to unlock dashboard access.
+                Sign up once, verify your email, and move straight into a single subscription checkout to unlock your dashboard.
               </p>
 
               <div className="mt-8 space-y-3">
@@ -140,10 +146,10 @@ export default function RegisterPage() {
                   Fast owner onboarding with email verification
                 </div>
                 <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm backdrop-blur">
-                  Mandatory setup payment plus monthly autopay authorization
+                  One payment today that covers setup plus your first month
                 </div>
                 <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm backdrop-blur">
-                  Billing-aware access guard for protected routes
+                  Automated monthly billing with access protection and grace handling
                 </div>
               </div>
             </div>

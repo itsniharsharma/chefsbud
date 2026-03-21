@@ -100,17 +100,20 @@ export async function initiateRegistration(req, res, next) {
     const normalizedEmail = normalizeEmail(email)
     const normalizedGstin = normalizeGstin(gstin)
 
-    const existing = await User.findOne({ email: normalizedEmail }).lean()
+    const [existing, existingGstin, pendingByGstin] = await Promise.all([
+      User.findOne({ email: normalizedEmail }).select('_id').lean(),
+      Restaurant.findOne({ gstin: normalizedGstin }).select('_id').lean(),
+      PendingRegistration.findOne({ gstin: normalizedGstin }).select('email').lean(),
+    ])
+
     if (existing) {
       return res.status(409).json({ message: 'Email is already in use' })
     }
 
-    const existingGstin = await Restaurant.findOne({ gstin: normalizedGstin }).lean()
     if (existingGstin) {
       return res.status(409).json({ message: 'GSTIN is already registered' })
     }
 
-    const pendingByGstin = await PendingRegistration.findOne({ gstin: normalizedGstin }).lean()
     if (pendingByGstin && pendingByGstin.email !== normalizedEmail) {
       return res.status(409).json({ message: 'GSTIN is already being verified with another email' })
     }
@@ -167,10 +170,6 @@ export async function initiateRegistration(req, res, next) {
 
       if ('slug' in duplicateFields) {
         return res.status(409).json({ message: 'Restaurant slug already exists. Please try again.' })
-      }
-
-      if ('email' in duplicateFields) {
-        return res.status(409).json({ message: 'Email is already in use' })
       }
     }
     next(error)

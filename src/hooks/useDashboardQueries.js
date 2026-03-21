@@ -15,8 +15,10 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNu
         scope: scope === 'Today' ? 'today' : 'all',
         ...(floorNumber ? { floorNumber } : {}),
       }),
-    refetchInterval: 25_000,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }
@@ -31,8 +33,10 @@ export function useRecentOrdersQuery({ restaurantId, scope }) {
         scope: scope === 'Today' ? 'today' : 'all',
         limit: 200,
       }),
-    refetchInterval: 30_000,
+    staleTime: 20_000,
+    refetchInterval: 90_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }
@@ -42,8 +46,10 @@ export function useTablesQuery({ restaurantId }) {
     queryKey: queryKeys.dashboard.tables(restaurantId),
     enabled: Boolean(restaurantId),
     queryFn: () => tableService.list(restaurantId),
+    staleTime: 60_000,
     refetchInterval: 90_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }
@@ -53,8 +59,10 @@ export function useMenuQuery({ restaurantId }) {
     queryKey: queryKeys.dashboard.menu(restaurantId),
     enabled: Boolean(restaurantId),
     queryFn: () => menuService.getManagedMenu(restaurantId),
-    refetchInterval: 120_000,
+    staleTime: 90_000,
+    refetchInterval: 180_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }
@@ -64,8 +72,10 @@ export function useDashboardAnalyticsCardsQuery({ restaurantId }) {
     queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
     enabled: Boolean(restaurantId),
     queryFn: () => analyticsService.dashboard(restaurantId),
-    refetchInterval: 45_000,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }
@@ -75,8 +85,10 @@ export function useAnalyticsOverviewQuery({ restaurantId, rangeDays }) {
     queryKey: queryKeys.dashboard.analyticsOverview(restaurantId, rangeDays),
     enabled: Boolean(restaurantId),
     queryFn: () => analyticsService.analytics(restaurantId, { rangeDays }),
-    refetchInterval: 60_000,
+    staleTime: 60_000,
+    refetchInterval: 180_000,
     refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })
 }

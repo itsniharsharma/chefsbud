@@ -2,8 +2,8 @@ import MenuItem from '../models/MenuItem.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import {
-  backfillCompletedOrderAnalytics,
   buildAnalyticsOverview,
+  scheduleCompletedOrderAnalyticsBackfill,
   trackAddToCart,
   trackMenuExposure,
 } from '../services/itemAnalyticsService.js'
@@ -11,7 +11,7 @@ import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
 
 async function ensureOwnerRestaurant(ownerId, restaurantId) {
   if (!restaurantId) return null
-  return Restaurant.findOne({ _id: restaurantId, ownerId }).lean()
+  return Restaurant.findOne({ _id: restaurantId, ownerId }).select('_id').lean()
 }
 
 function buildDateKeys(startDate, endDate) {
@@ -96,7 +96,7 @@ export async function getAnalytics(req, res, next) {
     const ownerRestaurant = await ensureOwnerRestaurant(req.user._id, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    await backfillCompletedOrderAnalytics({ restaurantId: ownerRestaurant._id, batchSize: 400 })
+    void scheduleCompletedOrderAnalyticsBackfill({ restaurantId: ownerRestaurant._id })
     const analytics = await buildAnalyticsOverview({
       restaurantId: ownerRestaurant._id,
       rangeDays: req.query.rangeDays,
@@ -132,13 +132,14 @@ export async function trackPublicMenuExposure(req, res, next) {
       _id: { $in: menuItemIds },
       available: true,
     })
-      .select('_id')
+      .select('_id categoryId name')
       .lean()
 
     const result = await trackMenuExposure({
       restaurantId: restaurant._id,
       sessionId,
       menuItemIds: validItemIds.map((item) => item._id),
+      resolvedMenuItems: validItemIds,
     })
 
     return res.status(202).json(result)

@@ -57,6 +57,19 @@ export function AuthProvider({ children }) {
     setRestaurant(result.restaurant)
   }, [])
 
+  const refreshSession = useCallback(async () => {
+    if (!token) {
+      setUser(null)
+      setRestaurant(null)
+      return null
+    }
+
+    const data = await authService.me()
+    setUser(data.user)
+    setRestaurant(data.restaurant)
+    return data
+  }, [token])
+
   const login = useCallback(async (payload) => {
     const result = await authService.login(payload)
     hydrateSession(result)
@@ -105,9 +118,11 @@ export function AuthProvider({ children }) {
       initiateRegistration,
       verifyRegistration,
       logout,
+      refreshSession,
+      setUser,
       setRestaurant,
     }),
-    [token, user, restaurant, authLoading, login, staffLogin, initiateRegistration, verifyRegistration, logout, setRestaurant],
+    [token, user, restaurant, authLoading, login, staffLogin, initiateRegistration, verifyRegistration, logout, refreshSession, setUser, setRestaurant],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
