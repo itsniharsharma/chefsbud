@@ -13,8 +13,8 @@ export const orderService = {
   updateStatus(orderId, orderStatus) {
     return api.patch(`/orders/${orderId}/status`, { orderStatus }).then((response) => response.data)
   },
-  markKotPrinted(orderId) {
-    return api.patch(`/orders/${orderId}/kot-printed`).then((response) => response.data)
+  markKotPrinted(orderId, payload = {}) {
+    return api.patch(`/orders/${orderId}/kot-printed`, payload).then((response) => response.data)
   },
   markBillPrinted(orderId) {
     return api.patch(`/orders/${orderId}/bill-printed`).then((response) => response.data)

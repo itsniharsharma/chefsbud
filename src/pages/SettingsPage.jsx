@@ -14,6 +14,8 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('')
   const [staffMessage, setStaffMessage] = useState('')
   const [staffAccounts, setStaffAccounts] = useState([])
+  const [kotMessage, setKotMessage] = useState('')
+  const [kotPasskey, setKotPasskey] = useState('')
   const [staffForm, setStaffForm] = useState({
     username: '',
     passkey: '',
@@ -88,6 +90,22 @@ export default function SettingsPage() {
       })
   }
 
+  const onSaveKotReprintConfig = (event) => {
+    event.preventDefault()
+    setKotMessage('')
+
+    restaurantService
+      .updateKotReprintConfig({ passkey: kotPasskey })
+      .then((updated) => {
+        setRestaurant(updated)
+        setKotPasskey('')
+        setKotMessage('KOT reprint passkey saved successfully')
+      })
+      .catch((requestError) => {
+        setKotMessage(requestError?.response?.data?.message || 'Failed to save KOT reprint passkey')
+      })
+  }
+
   return (
     <div className="space-y-4">
       <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSave}>
@@ -140,6 +158,27 @@ export default function SettingsPage() {
           ))}
           {!staffAccounts.length && <p className="text-xs text-slate-500">No staff credentials created yet.</p>}
         </div>
+      </form>
+
+      <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSaveKotReprintConfig}>
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">KOT Reprint Authorization</h2>
+          <p className="text-xs text-slate-500">
+            Any KOT reprint after the first print will require this passkey and a reason. The reason is emailed to the manager.
+          </p>
+        </div>
+        {kotMessage && <p className="text-sm text-[var(--primary)]">{kotMessage}</p>}
+        <p className="text-xs text-slate-500">
+          Status: {restaurant?.hasKotReprintPasskey ? 'Configured' : 'Not configured'}
+        </p>
+        <FormInput
+          label={restaurant?.hasKotReprintPasskey ? 'Rotate Manager Reprint Passkey' : 'Manager Reprint Passkey'}
+          type="password"
+          value={kotPasskey}
+          onChange={(event) => setKotPasskey(event.target.value)}
+          required
+        />
+        <Button type="submit">Save Reprint Passkey</Button>
       </form>
     </div>
   )

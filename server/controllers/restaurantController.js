@@ -9,6 +9,20 @@ import {
 import { uniqueSlug } from '../utils/slugify.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
+function serializeRestaurantForOwner(restaurant) {
+  if (!restaurant) return null
+
+  const source = typeof restaurant.toObject === 'function' ? restaurant.toObject() : restaurant
+  return {
+    ...source,
+    hasKotReprintPasskey: Boolean(source?.kotReprintConfig?.passkeyHash),
+    kotReprintConfig: {
+      updatedAt: source?.kotReprintConfig?.updatedAt || null,
+    },
+    paymentConfig: serializeRestaurantPaymentConfig(source.paymentConfig),
+  }
+}
+
 function normalizeUsername(value) {
   return String(value || '')
     .trim()
@@ -33,10 +47,7 @@ export async function getMyRestaurant(req, res, next) {
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
-    return res.json({
-      ...restaurant,
-      paymentConfig: serializeRestaurantPaymentConfig(restaurant.paymentConfig),
-    })
+    return res.json(serializeRestaurantForOwner(restaurant))
   } catch (error) {
     next(error)
   }
@@ -65,7 +76,37 @@ export async function updateMyRestaurant(req, res, next) {
     if (typeof phone === 'string') restaurant.phone = phone
 
     await restaurant.save()
-    return res.json(restaurant)
+    return res.json(serializeRestaurantForOwner(restaurant))
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function updateMyKotReprintConfig(req, res, next) {
+  try {
+    const currentRestaurant = await resolveRequestRestaurant(req)
+    if (!currentRestaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const restaurant = await Restaurant.findById(currentRestaurant._id)
+      .select('kotReprintConfig paymentConfig name slug address phone ownerId')
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const passkey = String(req.body?.passkey || '').trim()
+    if (passkey.length < 6 || passkey.length > 80) {
+      return res.status(400).json({ message: 'KOT reprint passkey must be between 6 and 80 characters.' })
+    }
+
+    restaurant.kotReprintConfig = {
+      passkeyHash: await bcrypt.hash(passkey, 10),
+      updatedAt: new Date(),
+    }
+
+    await restaurant.save()
+    return res.json(serializeRestaurantForOwner(restaurant))
   } catch (error) {
     next(error)
   }

@@ -49,6 +49,10 @@ const orderSchema = new mongoose.Schema(
     billPrintedAt: { type: Date, default: null },
     kotPrinted: { type: Boolean, default: false, index: true },
     kotPrintedAt: { type: Date, default: null },
+    kotPrintCount: { type: Number, default: 0, min: 0 },
+    lastKotReprintReason: { type: String, default: '', trim: true, maxlength: 240 },
+    lastKotReprintBy: { type: String, default: '', trim: true, maxlength: 120 },
+    lastKotReprintAt: { type: Date, default: null },
     orderStatus: {
       type: String,
       enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],

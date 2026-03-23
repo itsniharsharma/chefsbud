@@ -10,6 +10,14 @@ const paymentConfigSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const kotReprintConfigSchema = new mongoose.Schema(
+  {
+    passkeyHash: { type: String, default: '' },
+    updatedAt: { type: Date, default: null },
+  },
+  { _id: false },
+)
+
 const restaurantSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -19,6 +27,7 @@ const restaurantSchema = new mongoose.Schema(
     phone: { type: String, default: '' },
     ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     paymentConfig: { type: paymentConfigSchema, default: () => ({ provider: 'razorpay_me', enabled: false }) },
+    kotReprintConfig: { type: kotReprintConfigSchema, default: () => ({ passkeyHash: '', updatedAt: null }) },
   },
   { timestamps: true },
 )

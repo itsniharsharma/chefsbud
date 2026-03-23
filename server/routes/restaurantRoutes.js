@@ -6,6 +6,7 @@ import {
   getMyRestaurantPaymentConfig,
   getRestaurantBySlug,
   listMyStaffAccounts,
+  updateMyKotReprintConfig,
   updateMyRestaurant,
   updateMyRestaurantPaymentConfig,
 } from '../controllers/restaurantController.js'
@@ -17,6 +18,7 @@ const router = Router()
 
 router.get('/me', requireAuth, requireActiveBilling, requireOwner, getMyRestaurant)
 router.put('/me', requireAuth, requireActiveBilling, requireOwner, updateMyRestaurant)
+router.put('/me/kot-reprint-config', requireAuth, requireActiveBilling, requireOwner, updateMyKotReprintConfig)
 router.get('/me/payment-config', requireAuth, requireActiveBilling, requireOwner, getMyRestaurantPaymentConfig)
 router.put('/me/payment-config', requireAuth, requireActiveBilling, requireOwner, updateMyRestaurantPaymentConfig)
 router.get('/me/staff', requireAuth, requireActiveBilling, requireOwner, listMyStaffAccounts)

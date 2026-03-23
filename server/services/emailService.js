@@ -294,3 +294,56 @@ export async function sendBillingStatusEmail({ to, name, status, planType, grace
     category: 'billing-status',
   })
 }
+
+export async function sendKotReprintAuditEmail({
+  to,
+  restaurantName,
+  orderId,
+  tableNumber,
+  floorNumber,
+  actorName,
+  actorRole,
+  reason,
+  reprintedAt,
+}) {
+  const subject = `Chef's Bud KOT reprint alert: ${orderId}`
+  const whenText = reprintedAt
+    ? new Date(reprintedAt).toLocaleString('en-IN', { hour12: true })
+    : new Date().toLocaleString('en-IN', { hour12: true })
+
+  const text = [
+    `Restaurant: ${restaurantName || 'Restaurant'}`,
+    `Order ID: ${orderId}`,
+    `Table: ${tableNumber || 'N/A'}`,
+    `Floor: ${floorNumber || 'N/A'}`,
+    `Reprinted by: ${actorName || 'Unknown'} (${actorRole || 'unknown'})`,
+    `When: ${whenText}`,
+    '',
+    'Reason:',
+    String(reason || '').trim(),
+  ].join('\n')
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a;">
+      <h2 style="margin-bottom: 12px;">KOT reprint alert</h2>
+      <p style="margin: 0 0 8px;"><strong>Restaurant:</strong> ${restaurantName || 'Restaurant'}</p>
+      <p style="margin: 0 0 8px;"><strong>Order ID:</strong> ${orderId}</p>
+      <p style="margin: 0 0 8px;"><strong>Table:</strong> ${tableNumber || 'N/A'}</p>
+      <p style="margin: 0 0 8px;"><strong>Floor:</strong> ${floorNumber || 'N/A'}</p>
+      <p style="margin: 0 0 8px;"><strong>Reprinted by:</strong> ${actorName || 'Unknown'} (${actorRole || 'unknown'})</p>
+      <p style="margin: 0 0 16px;"><strong>When:</strong> ${whenText}</p>
+      <div style="padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc;">
+        <p style="margin: 0 0 8px; font-weight: 700;">Reason</p>
+        <p style="margin: 0; white-space: pre-wrap;">${String(reason || '').trim()}</p>
+      </div>
+    </div>
+  `
+
+  await sendEmail({
+    to,
+    subject,
+    text,
+    html,
+    category: 'kot-reprint-audit',
+  })
+}

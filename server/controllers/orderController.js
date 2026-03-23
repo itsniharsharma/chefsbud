@@ -1,6 +1,9 @@
 import Order from '../models/Order.js'
+import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
+import bcrypt from 'bcrypt'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
+import { sendKotReprintAuditEmail } from '../services/emailService.js'
 import {
   revertCompletedOrderAnalytics,
   syncCompletedOrderAnalytics,
@@ -8,6 +11,7 @@ import {
 import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
+import { logger } from '../utils/logger.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
@@ -358,19 +362,80 @@ export async function markOrderKotPrinted(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
+    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
+      .select('_id tableNumber floorNumber kotPrinted kotPrintCount')
+      .lean()
+
+    if (!existingOrder) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    const isReprint = Boolean(existingOrder.kotPrinted)
+    const reprintPasskey = String(req.body?.reprintPasskey || '')
+    const reprintReason = String(req.body?.reprintReason || '').trim()
+    let reprintConfigHash = ''
+
+    if (isReprint) {
+      const secureRestaurant = await Restaurant.findById(restaurant._id)
+        .select('kotReprintConfig.passkeyHash')
+        .lean()
+      reprintConfigHash = String(secureRestaurant?.kotReprintConfig?.passkeyHash || '')
+
+      if (!reprintConfigHash) {
+        return res.status(403).json({ message: 'Manager must configure a KOT reprint passkey in Settings before reprinting.' })
+      }
+
+      if (!reprintReason || reprintReason.length < 3 || reprintReason.length > 240) {
+        return res.status(400).json({ message: 'A reprint reason between 3 and 240 characters is required.' })
+      }
+
+      const validPasskey = await bcrypt.compare(reprintPasskey, reprintConfigHash)
+      if (!validPasskey) {
+        return res.status(403).json({ message: 'Invalid KOT reprint passkey.' })
+      }
+    }
+
+    const printedAt = new Date()
+    const actorName = req.user?.role === 'staff'
+      ? req.user?.staffDisplayName || req.user?.staffUsername || 'Staff'
+      : req.user?.name || 'Manager'
+
+    const update = {
+      kotPrinted: true,
+      kotPrintedAt: printedAt,
+      kotPrintCount: Math.max(1, Number(existingOrder.kotPrintCount || 0) + 1),
+    }
+
+    if (isReprint) {
+      update.lastKotReprintReason = reprintReason
+      update.lastKotReprintBy = actorName
+      update.lastKotReprintAt = printedAt
+    }
+
     const order = await Order.findOneAndUpdate(
       { _id: req.params.orderId, restaurantId: restaurant._id },
-      {
-        $set: {
-          kotPrinted: true,
-          kotPrintedAt: new Date(),
-        },
-      },
+      { $set: update },
       { new: true, runValidators: true },
     )
 
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' })
+    if (isReprint) {
+      sendKotReprintAuditEmail({
+        to: req.user?.email,
+        restaurantName: restaurant.name,
+        orderId: String(order._id),
+        tableNumber: order.tableNumber,
+        floorNumber: order.floorNumber,
+        actorName,
+        actorRole: req.user?.role === 'staff' ? 'staff' : 'manager',
+        reason: reprintReason,
+        reprintedAt: printedAt,
+      }).catch((error) => {
+        logger.warn('kot_reprint_email_failed', {
+          orderId: String(order._id),
+          restaurantId: String(restaurant._id),
+          message: error?.message || 'failed_to_send_kot_reprint_email',
+        })
+      })
     }
 
     invalidateCacheByTags([

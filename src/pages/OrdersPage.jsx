@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import OrderCard from '../components/OrderCard'
 import Button from '../components/Button'
+import KotReprintModal from '../components/KotReprintModal'
 import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
 import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
@@ -18,6 +19,7 @@ export default function OrdersPage() {
   const [error, setError] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
+  const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
   const queryClient = useQueryClient()
 
   const { data } = useOrdersBoardQuery({
@@ -119,7 +121,7 @@ export default function OrdersPage() {
   })
 
   const markKotPrintedMutation = useMutation({
-    mutationFn: ({ id }) => orderService.markKotPrinted(id),
+    mutationFn: ({ id, payload }) => orderService.markKotPrinted(id, payload),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
       const previousBoards = queryClient.getQueriesData({
@@ -228,9 +230,14 @@ export default function OrdersPage() {
     }
   }
 
-  const printKotForOrder = async (order) => {
+  const printKotForOrder = async (order, payload = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
+
+    if (order?.kotPrinted && !payload?.reprintPasskey) {
+      setReprintTargetOrder(order)
+      return
+    }
 
     let printWindow = null
     setPrintingKotOrderId(orderId)
@@ -241,8 +248,9 @@ export default function OrdersPage() {
         title: 'KOT',
         features: 'width=380,height=640',
       })
-      await markKotPrintedMutation.mutateAsync({ id: orderId })
+      await markKotPrintedMutation.mutateAsync({ id: orderId, payload })
       printIntoWindow(printWindow, buildKotHtml({ order }))
+      setReprintTargetOrder(null)
     } catch (requestError) {
       closePrintWindow(printWindow)
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
@@ -253,6 +261,14 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-5">
+      <KotReprintModal
+        open={Boolean(reprintTargetOrder)}
+        order={reprintTargetOrder}
+        hasPasskey={Boolean(restaurant?.hasKotReprintPasskey)}
+        loading={Boolean(printingKotOrderId)}
+        onClose={() => setReprintTargetOrder(null)}
+        onConfirm={(payload) => printKotForOrder(reprintTargetOrder, payload)}
+      />
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
       <div className="card flex flex-wrap gap-2 p-4">
         {statusFilters.map((filter) => (

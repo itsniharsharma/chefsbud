@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import Button from '../components/Button'
+import KotReprintModal from '../components/KotReprintModal'
 import OrderCard from '../components/OrderCard'
 import { useAuth } from '../hooks/useAuth'
 import { queryKeys } from '../lib/queryKeys'
@@ -17,6 +18,7 @@ export default function RecentOrdersPage() {
   const [deletingOrderId, setDeletingOrderId] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
+  const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
 
   const { data, isLoading } = useRecentOrdersQuery({
     restaurantId: restaurant?._id,
@@ -75,7 +77,7 @@ export default function RecentOrdersPage() {
   })
 
   const markKotPrintedMutation = useMutation({
-    mutationFn: ({ id }) => orderService.markKotPrinted(id),
+    mutationFn: ({ id, payload }) => orderService.markKotPrinted(id, payload),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ['dashboard', 'recent-orders', restaurant?._id] })
       const previousData = queryClient.getQueriesData({ queryKey: ['dashboard', 'recent-orders', restaurant?._id] })
@@ -150,9 +152,14 @@ export default function RecentOrdersPage() {
     }
   }
 
-  const printKotForOrder = async (order) => {
+  const printKotForOrder = async (order, payload = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
+
+    if (order?.kotPrinted && !payload?.reprintPasskey) {
+      setReprintTargetOrder(order)
+      return
+    }
 
     let printWindow = null
     setPrintingKotOrderId(orderId)
@@ -163,8 +170,9 @@ export default function RecentOrdersPage() {
         title: 'KOT',
         features: 'width=380,height=640',
       })
-      await markKotPrintedMutation.mutateAsync({ id: orderId })
+      await markKotPrintedMutation.mutateAsync({ id: orderId, payload })
       printIntoWindow(printWindow, buildKotHtml({ order }))
+      setReprintTargetOrder(null)
     } catch (requestError) {
       closePrintWindow(printWindow)
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
@@ -190,6 +198,14 @@ export default function RecentOrdersPage() {
 
   return (
     <div className="space-y-5">
+      <KotReprintModal
+        open={Boolean(reprintTargetOrder)}
+        order={reprintTargetOrder}
+        hasPasskey={Boolean(restaurant?.hasKotReprintPasskey)}
+        loading={Boolean(printingKotOrderId)}
+        onClose={() => setReprintTargetOrder(null)}
+        onConfirm={(payload) => printKotForOrder(reprintTargetOrder, payload)}
+      />
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
 
       <div className="card flex flex-wrap gap-2 p-4">

@@ -7,6 +7,9 @@ export const restaurantService = {
   updateMine(payload) {
     return api.put('/restaurants/me', payload).then((response) => response.data)
   },
+  updateKotReprintConfig(payload) {
+    return api.put('/restaurants/me/kot-reprint-config', payload).then((response) => response.data)
+  },
   getPaymentConfig() {
     return api.get('/restaurants/me/payment-config').then((response) => response.data)
   },

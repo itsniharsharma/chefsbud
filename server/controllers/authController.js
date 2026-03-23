@@ -9,6 +9,20 @@ import StaffAccount from '../models/StaffAccount.js'
 import { sendRegistrationOtpEmail } from '../services/emailService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
+const sessionRestaurantProjection = '_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt'
+
+function serializeSessionRestaurant(restaurant) {
+  if (!restaurant) return null
+
+  return {
+    ...restaurant,
+    hasKotReprintPasskey: Boolean(restaurant?.kotReprintConfig?.passkeyHash),
+    kotReprintConfig: {
+      updatedAt: restaurant?.kotReprintConfig?.updatedAt || null,
+    },
+  }
+}
+
 const OTP_EXPIRY_MINUTES = Number(process.env.EMAIL_OTP_EXPIRY_MINUTES || 10)
 const OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.EMAIL_OTP_RESEND_COOLDOWN_SECONDS || 60)
 const OTP_MAX_ATTEMPTS = Number(process.env.EMAIL_OTP_MAX_ATTEMPTS || 5)
@@ -63,7 +77,10 @@ function signToken(payload) {
 }
 
 async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).lean()
+  const restaurant = await Restaurant.findOne({ ownerId })
+    .select(sessionRestaurantProjection)
+    .lean()
+  return serializeSessionRestaurant(restaurant)
 }
 
 function serializeUser(user) {
@@ -395,7 +412,9 @@ export async function staffLogin(req, res, next) {
       User.findById(staff.ownerId)
         .select('_id name email role emailVerified tokenVersion billing')
         .lean(),
-      Restaurant.findById(staff.restaurantId).lean(),
+      Restaurant.findById(staff.restaurantId)
+        .select(sessionRestaurantProjection)
+        .lean(),
     ])
 
     if (!owner || !restaurant) {
@@ -422,7 +441,7 @@ export async function staffLogin(req, res, next) {
     return res.json({
       token,
       user: serializeStaffSessionUser({ staff, owner }),
-      restaurant,
+      restaurant: serializeSessionRestaurant(restaurant),
     })
   } catch (error) {
     next(error)
@@ -432,7 +451,11 @@ export async function staffLogin(req, res, next) {
 export async function me(req, res, next) {
   try {
     if (req.user?.role === 'staff') {
-      const restaurant = req.restaurant || (await Restaurant.findById(req.user.restaurantId).lean())
+      const restaurant = serializeSessionRestaurant(req.restaurant) || serializeSessionRestaurant(
+        await Restaurant.findById(req.user.restaurantId)
+          .select(sessionRestaurantProjection)
+          .lean(),
+      )
       if (!restaurant) {
         return res.status(401).json({ message: 'Unauthorized' })
       }
@@ -456,7 +479,7 @@ export async function me(req, res, next) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
-    const restaurant = req.restaurant || (await getOwnerRestaurant(req.user._id))
+    const restaurant = serializeSessionRestaurant(req.restaurant) || (await getOwnerRestaurant(req.user._id))
     return res.json({
       user: serializeUser(currentUser),
       restaurant,

@@ -76,7 +76,17 @@ router.patch(
 	validateRequest,
 	updateOrderStatus,
 )
-router.patch('/:orderId/kot-printed', requireAuth, requireActiveBilling, markOrderKotPrinted)
+router.patch(
+	'/:orderId/kot-printed',
+	requireAuth,
+	requireActiveBilling,
+	[
+		body('reprintPasskey').optional().isString().isLength({ min: 6, max: 80 }),
+		body('reprintReason').optional().isString().trim().isLength({ min: 3, max: 240 }),
+	],
+	validateRequest,
+	markOrderKotPrinted,
+)
 router.patch('/:orderId/bill-printed', requireAuth, requireActiveBilling, markOrderBillPrinted)
 router.delete('/:orderId', requireAuth, requireActiveBilling, deleteOrder)
 
