@@ -87,7 +87,16 @@ router.patch(
 	validateRequest,
 	markOrderKotPrinted,
 )
-router.patch('/:orderId/bill-printed', requireAuth, requireActiveBilling, markOrderBillPrinted)
+router.patch(
+	'/:orderId/bill-printed',
+	requireAuth,
+	requireActiveBilling,
+	[
+		body('billAdjustments').optional().isArray({ max: 50 }),
+	],
+	validateRequest,
+	markOrderBillPrinted,
+)
 router.delete('/:orderId', requireAuth, requireActiveBilling, deleteOrder)
 
 export default router

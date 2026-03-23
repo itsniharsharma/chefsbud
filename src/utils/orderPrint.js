@@ -9,11 +9,11 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;')
 }
 
-function buildBillRows(order) {
-  return (order.items || [])
+function buildBillRows(items = []) {
+  return items
     .map((item) => {
       const qty = Number(item.quantity || 0)
-      const price = Number(item.price || 0)
+      const price = Number(item.price ?? item.unitPrice ?? 0)
       const subtotal = qty * price
       return `
           <tr>
@@ -21,6 +21,26 @@ function buildBillRows(order) {
             <td style="text-align:center;">${qty}</td>
             <td style="text-align:right;">${escapeHtml(formatCurrencyINR(price))}</td>
             <td style="text-align:right;">${escapeHtml(formatCurrencyINR(subtotal))}</td>
+          </tr>
+        `
+    })
+    .join('')
+}
+
+function buildAdjustmentRows(order) {
+  return (order.billAdjustments || [])
+    .map((item) => {
+      const qty = Number(item.quantity || 0)
+      const price = Number(item.unitPrice || 0)
+      const subtotal = qty * price
+      const sourceLabel = item.sourceType === 'custom' ? 'Manual' : 'Extra'
+      return `
+          <tr>
+            <td>${escapeHtml(item.name)}</td>
+            <td style="text-align:center;">${qty}</td>
+            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(price))}</td>
+            <td style="text-align:right;">${escapeHtml(formatCurrencyINR(subtotal))}</td>
+            <td style="text-align:right;">${escapeHtml(sourceLabel)}</td>
           </tr>
         `
     })
@@ -40,6 +60,12 @@ function buildKotRows(order) {
 }
 
 export function buildBillHtml({ order, restaurantName }) {
+  const baseSubtotal = Number(order.subtotalAmount || 0)
+  const discountTotal = Number(order.discountTotal || 0)
+  const adjustmentSubtotal = Number(order.billAdjustmentSubtotal || 0)
+  const finalTotal = Number(order.billFinalTotalAmount ?? order.totalAmount ?? 0)
+  const hasAdjustments = Array.isArray(order.billAdjustments) && order.billAdjustments.length > 0
+
   return `<!doctype html>
 <html>
   <head>
@@ -64,10 +90,30 @@ export function buildBillHtml({ order, restaurantName }) {
           <th style="text-align:right;padding:4px 0;">Subtotal</th>
         </tr>
       </thead>
-      <tbody>${buildBillRows(order)}</tbody>
+      <tbody>${buildBillRows(order.items || [])}</tbody>
     </table>
+    ${hasAdjustments ? `
     <hr style="margin:10px 0;"/>
-    <div style="text-align:right;font-weight:700;">Total: ${escapeHtml(formatCurrencyINR(order.totalAmount || 0))}</div>
+    <div style="font-size:12px;font-weight:700;margin-bottom:4px;">Bill Adjustments</div>
+    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:4px 0;">Item</th>
+          <th style="text-align:center;padding:4px 0;">Qty</th>
+          <th style="text-align:right;padding:4px 0;">Price</th>
+          <th style="text-align:right;padding:4px 0;">Subtotal</th>
+          <th style="text-align:right;padding:4px 0;">Type</th>
+        </tr>
+      </thead>
+      <tbody>${buildAdjustmentRows(order)}</tbody>
+    </table>` : ''}
+    <hr style="margin:10px 0;"/>
+    <div style="font-size:13px;line-height:1.7;display:flex;flex-direction:column;align-items:flex-end;">
+      <div>Order subtotal: ${escapeHtml(formatCurrencyINR(baseSubtotal))}</div>
+      ${discountTotal > 0 ? `<div>Discounts: -${escapeHtml(formatCurrencyINR(discountTotal))}</div>` : ''}
+      ${adjustmentSubtotal > 0 ? `<div>Bill adjustments: +${escapeHtml(formatCurrencyINR(adjustmentSubtotal))}</div>` : ''}
+      <div style="font-weight:700;font-size:15px;">Total: ${escapeHtml(formatCurrencyINR(finalTotal))}</div>
+    </div>
   </body>
 </html>`
 }

@@ -10,6 +10,18 @@ const orderItemSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const billAdjustmentItemSchema = new mongoose.Schema(
+  {
+    sourceType: { type: String, enum: ['menu', 'custom'], required: true },
+    menuItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'MenuItem', default: null },
+    name: { type: String, required: true, trim: true },
+    quantity: { type: Number, required: true, min: 1 },
+    unitPrice: { type: Number, required: true, min: 0 },
+    defaultUnitPrice: { type: Number, required: true, min: 0 },
+  },
+  { _id: false },
+)
+
 const orderSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
@@ -19,6 +31,9 @@ const orderSchema = new mongoose.Schema(
     items: { type: [orderItemSchema], required: true },
     subtotalAmount: { type: Number, default: 0, min: 0 },
     discountTotal: { type: Number, default: 0, min: 0 },
+    billAdjustments: { type: [billAdjustmentItemSchema], default: [] },
+    billAdjustmentSubtotal: { type: Number, default: 0, min: 0 },
+    billFinalTotalAmount: { type: Number, default: null, min: 0 },
     appliedOffers: {
       type: [
         new mongoose.Schema(

@@ -16,8 +16,8 @@ export const orderService = {
   markKotPrinted(orderId, payload = {}) {
     return api.patch(`/orders/${orderId}/kot-printed`, payload).then((response) => response.data)
   },
-  markBillPrinted(orderId) {
-    return api.patch(`/orders/${orderId}/bill-printed`).then((response) => response.data)
+  markBillPrinted(orderId, payload = {}) {
+    return api.patch(`/orders/${orderId}/bill-printed`, payload).then((response) => response.data)
   },
   delete(orderId) {
     return api.delete(`/orders/${orderId}`).then((response) => response.data)

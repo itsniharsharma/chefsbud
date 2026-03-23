@@ -35,6 +35,9 @@ function buildArchivePayload(restaurantId, orders) {
       tableNumber: order.tableNumber,
       items: order.items,
       subtotalAmount: order.subtotalAmount,
+      billAdjustments: order.billAdjustments,
+      billAdjustmentSubtotal: order.billAdjustmentSubtotal,
+      billFinalTotalAmount: order.billFinalTotalAmount,
       discountTotal: order.discountTotal,
       appliedOffers: order.appliedOffers,
       couponCode: order.couponCode,
@@ -143,7 +146,7 @@ export async function runOrderArchiveOnce() {
       deletedByOwnerAt: { $lte: cutoff },
     })
       .select(
-        '_id restaurantId tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt updatedAt completedAt deletedByOwnerAt',
+        '_id restaurantId tableNumber items subtotalAmount billAdjustments billAdjustmentSubtotal billFinalTotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt updatedAt completedAt deletedByOwnerAt',
       )
       .sort({ deletedByOwnerAt: 1 })
       .limit(batchSize)

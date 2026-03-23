@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import BillPrintModal from '../components/BillPrintModal'
 import Button from '../components/Button'
 import KotReprintModal from '../components/KotReprintModal'
 import OrderCard from '../components/OrderCard'
@@ -9,6 +10,7 @@ import { useRecentOrdersQuery } from '../hooks/useDashboardQueries'
 import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
+import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
 export default function RecentOrdersPage() {
   const { restaurant } = useAuth()
@@ -18,6 +20,7 @@ export default function RecentOrdersPage() {
   const [deletingOrderId, setDeletingOrderId] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
+  const [billTargetOrder, setBillTargetOrder] = useState(null)
   const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
 
   const { data, isLoading } = useRecentOrdersQuery({
@@ -29,7 +32,7 @@ export default function RecentOrdersPage() {
 
   const totals = useMemo(() => {
     const count = completedOrders.length
-    const revenue = completedOrders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0)
+    const revenue = completedOrders.reduce((sum, order) => sum + Number(order.billFinalTotalAmount ?? order.totalAmount ?? 0), 0)
     return { count, revenue }
   }, [completedOrders])
 
@@ -52,8 +55,19 @@ export default function RecentOrdersPage() {
     })
   }
 
+  const applyUpdatedOrder = (orders, updatedOrder) => {
+    if (!Array.isArray(orders) || !updatedOrder) return orders
+    return orders.map((order) => {
+      if (String(order._id || order.id) !== String(updatedOrder._id || updatedOrder.id)) return order
+      return {
+        ...order,
+        ...updatedOrder,
+      }
+    })
+  }
+
   const markBillPrintedMutation = useMutation({
-    mutationFn: ({ id }) => orderService.markBillPrinted(id),
+    mutationFn: ({ id, payload }) => orderService.markBillPrinted(id, payload),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ['dashboard', 'recent-orders', restaurant?._id] })
       const previousData = queryClient.getQueriesData({ queryKey: ['dashboard', 'recent-orders', restaurant?._id] })
@@ -62,8 +76,11 @@ export default function RecentOrdersPage() {
       )
       return { previousData }
     },
-    onSuccess: () => {
+    onSuccess: (updatedOrder) => {
       setError('')
+      queryClient.setQueriesData({ queryKey: ['dashboard', 'recent-orders', restaurant?._id] }, (orders) =>
+        applyUpdatedOrder(orders, updatedOrder),
+      )
       refreshRecentOrders()
     },
     onError: (requestError, _variables, context) => {
@@ -129,9 +146,17 @@ export default function RecentOrdersPage() {
     },
   })
 
-  const printBillForOrder = async (order) => {
+  const printBillForOrder = async (order, options = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
+
+    const confirmed = Boolean(options?.confirmed)
+    const payload = buildBillPrintPayload(options)
+
+    if (!confirmed) {
+      setBillTargetOrder(order)
+      return
+    }
 
     let printWindow = null
     setPrintingBillOrderId(orderId)
@@ -142,8 +167,16 @@ export default function RecentOrdersPage() {
         title: 'bill',
         features: 'width=860,height=700',
       })
-      await markBillPrintedMutation.mutateAsync({ id: orderId })
-      printIntoWindow(printWindow, buildBillHtml({ order, restaurantName: restaurant?.name }))
+
+      let orderForPrint
+      if (order?.billPrinted) {
+        orderForPrint = buildReprintOrderForBill({ order, billAdjustments: payload.billAdjustments })
+      } else {
+        orderForPrint = await markBillPrintedMutation.mutateAsync({ id: orderId, payload })
+      }
+
+      printIntoWindow(printWindow, buildBillHtml({ order: orderForPrint, restaurantName: restaurant?.name }))
+      setBillTargetOrder(null)
     } catch (requestError) {
       closePrintWindow(printWindow)
       setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill')
@@ -198,6 +231,15 @@ export default function RecentOrdersPage() {
 
   return (
     <div className="space-y-5">
+      <BillPrintModal
+        open={Boolean(billTargetOrder)}
+        order={billTargetOrder}
+        restaurantId={restaurant?._id}
+        printing={Boolean(printingBillOrderId)}
+        onClose={() => setBillTargetOrder(null)}
+        onSimplePrint={() => printBillForOrder(billTargetOrder, { confirmed: true })}
+        onPrintWithAdjustments={(payload) => printBillForOrder(billTargetOrder, { confirmed: true, ...payload })}
+      />
       <KotReprintModal
         open={Boolean(reprintTargetOrder)}
         order={reprintTargetOrder}

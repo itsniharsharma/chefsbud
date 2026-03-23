@@ -3,6 +3,7 @@ import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import bcrypt from 'bcrypt'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
+import { buildValidatedBillAdjustments } from '../services/orderBillComposerService.js'
 import { sendKotReprintAuditEmail } from '../services/emailService.js'
 import {
   revertCompletedOrderAnalytics,
@@ -17,7 +18,11 @@ import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+
+function round2(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
 
 function buildOrderQuery({ restaurantId, view, status, scope }) {
   const query = { restaurantId, isArchived: false }
@@ -463,20 +468,46 @@ export async function markOrderBillPrinted(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const order = await Order.findOneAndUpdate(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
-      {
-        $set: {
-          billPrinted: true,
-          billPrintedAt: new Date(),
-        },
-      },
-      { new: true, runValidators: true },
-    )
+    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
+      .select('_id floorNumber tableNumber totalAmount billPrinted billAdjustments billAdjustmentSubtotal billFinalTotalAmount')
+      .lean()
 
-    if (!order) {
+    if (!existingOrder) {
       return res.status(404).json({ message: 'Order not found' })
     }
+
+    const rawBillAdjustments = Array.isArray(req.body?.billAdjustments) ? req.body.billAdjustments : null
+    if (existingOrder.billPrinted && rawBillAdjustments !== null) {
+      return res.status(400).json({ message: 'Bill adjustments can only be added before the first bill print.' })
+    }
+
+    let billAdjustments = null
+    let billAdjustmentSubtotal = null
+    if (rawBillAdjustments !== null) {
+      const built = await buildValidatedBillAdjustments({
+        restaurantId: restaurant._id,
+        adjustments: rawBillAdjustments,
+      })
+      billAdjustments = built.billAdjustments
+      billAdjustmentSubtotal = built.adjustmentSubtotal
+    }
+
+    const update = {
+      billPrinted: true,
+      billPrintedAt: new Date(),
+    }
+
+    if (billAdjustments !== null && billAdjustmentSubtotal !== null) {
+      update.billAdjustments = billAdjustments
+      update.billAdjustmentSubtotal = billAdjustmentSubtotal
+      update.billFinalTotalAmount = round2(Number(existingOrder.totalAmount || 0) + Number(billAdjustmentSubtotal || 0))
+    }
+
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.orderId, restaurantId: restaurant._id },
+      { $set: update },
+      { new: true, runValidators: true },
+    )
 
     invalidateCacheByTags([
       `orders:board:${String(restaurant._id)}`,

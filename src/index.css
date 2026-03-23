@@ -42,6 +42,14 @@ textarea {
   font: inherit;
 }
 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 #root {
   min-height: 100vh;
 }
@@ -88,6 +96,10 @@ canvas {
 .input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 4px var(--ring);
+}
+
+input[type='checkbox'] {
+  accent-color: var(--primary);
 }
 
 .customer-shell,
