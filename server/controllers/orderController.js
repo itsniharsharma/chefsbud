@@ -1,5 +1,4 @@
 import Order from '../models/Order.js'
-import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import {
@@ -9,15 +8,12 @@ import {
 import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 
 const orderListProjection =
   '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
-
-async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).select('_id slug').lean()
-}
 
 function buildOrderQuery({ restaurantId, view, status, scope }) {
   const query = { restaurantId, isArchived: false }
@@ -109,7 +105,7 @@ async function enrichOrdersWithFloorNumbers(restaurantId, orders = []) {
 
 export async function getOrders(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -146,7 +142,7 @@ export async function getOrders(req, res, next) {
 
 export async function updateOrderStatus(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -211,7 +207,7 @@ export async function updateOrderStatus(req, res, next) {
 
 export async function deleteOrder(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -340,7 +336,7 @@ export async function getPublicTableOrders(req, res, next) {
       restaurantSlug,
       tableNumber: Number(tableNumber),
       isArchived: false,
-      paymentStatus: { $nin: ['Pending', 'Failed'] },
+      paymentStatus: { $in: ['Paid', 'Unpaid'] },
     })
       .sort({ createdAt: -1 })
       .limit(PUBLIC_TABLE_ORDER_LIMIT)
@@ -357,7 +353,7 @@ export async function getPublicTableOrders(req, res, next) {
 
 export async function markOrderKotPrinted(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -397,7 +393,7 @@ export async function markOrderKotPrinted(req, res, next) {
 
 export async function markOrderBillPrinted(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }

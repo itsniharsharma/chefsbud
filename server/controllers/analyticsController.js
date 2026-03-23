@@ -8,11 +8,7 @@ import {
   trackMenuExposure,
 } from '../services/itemAnalyticsService.js'
 import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
-
-async function ensureOwnerRestaurant(ownerId, restaurantId) {
-  if (!restaurantId) return null
-  return Restaurant.findOne({ _id: restaurantId, ownerId }).select('_id').lean()
-}
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 function buildDateKeys(startDate, endDate) {
   const cursor = new Date(startDate)
@@ -36,7 +32,7 @@ function formatShortDate(isoDate) {
 
 export async function getDashboard(req, res, next) {
   try {
-    const ownerRestaurant = await ensureOwnerRestaurant(req.user._id, req.params.restaurantId)
+    const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
     const now = new Date()
@@ -93,7 +89,7 @@ export async function getDashboard(req, res, next) {
 
 export async function getAnalytics(req, res, next) {
   try {
-    const ownerRestaurant = await ensureOwnerRestaurant(req.user._id, req.params.restaurantId)
+    const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
     void scheduleCompletedOrderAnalyticsBackfill({ restaurantId: ownerRestaurant._id })

@@ -1,5 +1,3 @@
-import User from '../models/User.js'
-
 function toTimestamp(value) {
   const ts = value ? new Date(value).getTime() : NaN
   return Number.isFinite(ts) ? ts : 0
@@ -25,18 +23,13 @@ export async function requireActiveBilling(req, res, next) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
-    const user = await User.findById(req.user._id).select('billing emailVerified').lean()
-    if (!user) {
-      return res.status(401).json({ message: 'Unauthorized' })
-    }
-
-    if (user.emailVerified === false) {
+    if (req.user.emailVerified === false) {
       return res.status(403).json({ message: 'Verify your email to continue' })
     }
 
-    if (!hasBillingAccess(user.billing)) {
+    if (!hasBillingAccess(req.user.billing)) {
       const pausedMessage =
-        user.billing?.status === 'past_due' || user.billing?.status === 'cancelled'
+        req.user.billing?.status === 'past_due' || req.user.billing?.status === 'cancelled'
           ? 'Your subscription has been paused due to failed payment. Please contact support to continue.'
           : 'Billing inactive. Please update your subscription to continue.'
       return res.status(403).json({ message: pausedMessage })

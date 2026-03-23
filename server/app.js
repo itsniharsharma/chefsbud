@@ -13,6 +13,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { requestContext } from './middleware/requestContext.js'
 import { securityHeaders } from './middleware/securityHeaders.js'
 import { createRateLimiter } from './middleware/rateLimit.js'
+import { getDbStatus } from './config/db.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -71,7 +72,13 @@ app.use(express.json({ limit: jsonLimit }))
 app.use(express.urlencoded({ extended: false, limit: urlEncodedLimit }))
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, app: "Chef's Bud - Restaurant Revenue OS" })
+  res.json({
+    ok: true,
+    app: "Chef's Bud - Restaurant Revenue OS",
+    uptimeSeconds: Math.round(process.uptime()),
+    processRole: String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase(),
+    db: getDbStatus(),
+  })
 })
 
 app.use('/api/auth', authRoutes)

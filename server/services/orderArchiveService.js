@@ -1,8 +1,11 @@
 import Order from '../models/Order.js'
+import { withRedis } from '../config/redis.js'
 import { logger } from '../utils/logger.js'
 import { buildTenantArchiveKey, isS3ArchiveConfigured, uploadArchiveJsonGzip } from './s3ArchiveService.js'
 
 const DEFAULT_BATCH_SIZE = 500
+const ARCHIVE_LOCK_TTL_SECONDS = Math.max(30, Number(process.env.ORDER_ARCHIVE_LOCK_TTL_SECONDS || 15 * 60))
+const archiveRunLocks = new Map()
 
 function getArchiveDelayMs() {
   const hours = Number(process.env.ORDER_ARCHIVE_DELAY_HOURS || 6)
@@ -46,6 +49,47 @@ function buildArchivePayload(restaurantId, orders) {
   }
 }
 
+function cleanupArchiveRunLocks() {
+  const current = Date.now()
+  for (const [key, expiresAt] of archiveRunLocks.entries()) {
+    if (expiresAt <= current) {
+      archiveRunLocks.delete(key)
+    }
+  }
+}
+
+async function acquireArchiveRunLock() {
+  const key = 'order-archive:run-lock'
+  cleanupArchiveRunLocks()
+
+  const localExpiresAt = Number(archiveRunLocks.get(key) || 0)
+  if (localExpiresAt > Date.now()) {
+    return false
+  }
+
+  const lockUntil = Date.now() + ARCHIVE_LOCK_TTL_SECONDS * 1000
+  archiveRunLocks.set(key, lockUntil)
+
+  const distributedLock = await withRedis(
+    'order_archive_lock_acquire',
+    (redis) => redis.set(key, String(lockUntil), { nx: true, ex: ARCHIVE_LOCK_TTL_SECONDS }),
+    '__FALLBACK__',
+  )
+
+  if (distributedLock === 'OK' || distributedLock === true || distributedLock === '__FALLBACK__') {
+    return true
+  }
+
+  archiveRunLocks.delete(key)
+  return false
+}
+
+async function releaseArchiveRunLock() {
+  const key = 'order-archive:run-lock'
+  archiveRunLocks.delete(key)
+  await withRedis('order_archive_lock_release', (redis) => redis.del(key), null)
+}
+
 async function archiveRestaurantOrders(restaurantId, orders, purgeAfterArchive) {
   const key = buildTenantArchiveKey({ restaurantId })
   const payload = buildArchivePayload(restaurantId, orders)
@@ -53,19 +97,19 @@ async function archiveRestaurantOrders(restaurantId, orders, purgeAfterArchive) 
   const uploadResult = await uploadArchiveJsonGzip({ key, payload })
 
   const ids = orders.map((order) => order._id)
-  await Order.updateMany(
-    { _id: { $in: ids } },
-    {
-      $set: {
-        isArchived: true,
-        archivedAt: new Date(),
-        archiveKey: uploadResult.key,
-      },
-    },
-  )
-
   if (purgeAfterArchive) {
     await Order.deleteMany({ _id: { $in: ids } })
+  } else {
+    await Order.updateMany(
+      { _id: { $in: ids } },
+      {
+        $set: {
+          isArchived: true,
+          archivedAt: new Date(),
+          archiveKey: uploadResult.key,
+        },
+      },
+    )
   }
 
   logger.info('Archived tenant order batch to S3', {
@@ -84,44 +128,53 @@ export async function runOrderArchiveOnce() {
     return { archivedOrders: 0, archivedRestaurants: 0, skipped: true }
   }
 
-  const cutoff = new Date(Date.now() - getArchiveDelayMs())
-  const batchSize = getBatchSize()
-
-  const candidates = await Order.find({
-    hiddenFromActive: true,
-    isArchived: false,
-    deletedByOwnerAt: { $lte: cutoff },
-  })
-    .select(
-      '_id restaurantId tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt updatedAt completedAt deletedByOwnerAt',
-    )
-    .sort({ deletedByOwnerAt: 1 })
-    .limit(batchSize)
-    .lean()
-
-  if (!candidates.length) {
-    return { archivedOrders: 0, archivedRestaurants: 0, skipped: false }
+  const lockAcquired = await acquireArchiveRunLock()
+  if (!lockAcquired) {
+    return { archivedOrders: 0, archivedRestaurants: 0, skipped: true }
   }
 
-  const byRestaurant = new Map()
-  for (const order of candidates) {
-    const tenantKey = String(order.restaurantId)
-    const list = byRestaurant.get(tenantKey) || []
-    list.push(order)
-    byRestaurant.set(tenantKey, list)
+  try {
+    const cutoff = new Date(Date.now() - getArchiveDelayMs())
+    const batchSize = getBatchSize()
+
+    const candidates = await Order.find({
+      hiddenFromActive: true,
+      isArchived: false,
+      deletedByOwnerAt: { $lte: cutoff },
+    })
+      .select(
+        '_id restaurantId tableNumber items subtotalAmount discountTotal appliedOffers couponCode totalAmount paymentStatus orderStatus createdAt updatedAt completedAt deletedByOwnerAt',
+      )
+      .sort({ deletedByOwnerAt: 1 })
+      .limit(batchSize)
+      .lean()
+
+    if (!candidates.length) {
+      return { archivedOrders: 0, archivedRestaurants: 0, skipped: false }
+    }
+
+    const byRestaurant = new Map()
+    for (const order of candidates) {
+      const tenantKey = String(order.restaurantId)
+      const list = byRestaurant.get(tenantKey) || []
+      list.push(order)
+      byRestaurant.set(tenantKey, list)
+    }
+
+    let archivedOrders = 0
+    let archivedRestaurants = 0
+    const purgeAfterArchive = shouldPurgeAfterArchive()
+
+    for (const [tenantKey, orders] of byRestaurant.entries()) {
+      await archiveRestaurantOrders(tenantKey, orders, purgeAfterArchive)
+      archivedOrders += orders.length
+      archivedRestaurants += 1
+    }
+
+    return { archivedOrders, archivedRestaurants, skipped: false }
+  } finally {
+    await releaseArchiveRunLock()
   }
-
-  let archivedOrders = 0
-  let archivedRestaurants = 0
-  const purgeAfterArchive = shouldPurgeAfterArchive()
-
-  for (const [tenantKey, orders] of byRestaurant.entries()) {
-    await archiveRestaurantOrders(tenantKey, orders, purgeAfterArchive)
-    archivedOrders += orders.length
-    archivedRestaurants += 1
-  }
-
-  return { archivedOrders, archivedRestaurants, skipped: false }
 }
 
 let archiveTimer = null

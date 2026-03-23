@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken'
+import Restaurant from '../models/Restaurant.js'
 import User from '../models/User.js'
 import StaffAccount from '../models/StaffAccount.js'
 
@@ -66,6 +67,14 @@ export async function requireAuth(req, res, next) {
         emailVerified: owner.emailVerified,
         billing: owner.billing,
       }
+
+      req.restaurant = await Restaurant.findOne({
+        _id: staff.restaurantId,
+        ownerId,
+      })
+        .select('_id ownerId slug name address phone paymentConfig')
+        .lean()
+
       return next()
     }
 
@@ -91,6 +100,11 @@ export async function requireAuth(req, res, next) {
       emailVerified: user.emailVerified,
       billing: user.billing,
     }
+
+    req.restaurant = await Restaurant.findOne({ ownerId: user._id })
+      .select('_id ownerId slug name address phone paymentConfig')
+      .lean()
+
     next()
   } catch {
     return res.status(401).json({ message: 'Unauthorized' })

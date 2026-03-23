@@ -4,14 +4,11 @@ import Restaurant from '../models/Restaurant.js'
 import Offer from '../models/Offer.js'
 import { parseMenuWithAI } from '../services/aiMenuParser.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const menuProjection = '_id categoryId name description price available isVeg bestseller'
 const categoryProjection = '_id name orderIndex'
 const offerProjection = '_id name type discountValue conditions active startTime endTime'
-
-async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).select('_id slug').lean()
-}
 
 function invalidateMenuCache(restaurantSlug) {
   invalidateCacheByTags([`menu:${restaurantSlug}`])
@@ -72,7 +69,7 @@ export async function getManagedMenu(req, res, next) {
 
 export async function createCategory(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -101,7 +98,7 @@ export async function createCategory(req, res, next) {
 
 export async function createMenuItem(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -134,7 +131,7 @@ export async function createMenuItem(req, res, next) {
 
 export async function updateMenuItem(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -169,7 +166,7 @@ export async function updateMenuItem(req, res, next) {
 
 export async function deleteMenuItem(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -189,7 +186,7 @@ export async function deleteMenuItem(req, res, next) {
 
 export async function analyzeMenuWithAI(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -220,7 +217,7 @@ export async function analyzeMenuWithAI(req, res, next) {
 
 export async function importMenuDraft(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }

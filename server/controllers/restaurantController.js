@@ -7,6 +7,7 @@ import {
   serializeRestaurantPaymentConfig,
 } from '../services/restaurantPaymentService.js'
 import { uniqueSlug } from '../utils/slugify.js'
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 function normalizeUsername(value) {
   return String(value || '')
@@ -28,7 +29,7 @@ function serializeStaffAccount(staff) {
 
 export async function getMyRestaurant(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id }).lean()
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -43,7 +44,12 @@ export async function getMyRestaurant(req, res, next) {
 
 export async function updateMyRestaurant(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
+    const currentRestaurant = await resolveRequestRestaurant(req)
+    if (!currentRestaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const restaurant = await Restaurant.findById(currentRestaurant._id)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -89,9 +95,7 @@ export async function getRestaurantBySlug(req, res, next) {
 
 export async function getMyRestaurantPaymentConfig(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('paymentConfig')
-      .lean()
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -104,7 +108,12 @@ export async function getMyRestaurantPaymentConfig(req, res, next) {
 
 export async function updateMyRestaurantPaymentConfig(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
+    const currentRestaurant = await resolveRequestRestaurant(req)
+    if (!currentRestaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const restaurant = await Restaurant.findById(currentRestaurant._id)
       .select('paymentConfig')
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
@@ -124,9 +133,7 @@ export async function updateMyRestaurantPaymentConfig(req, res, next) {
 
 export async function listMyStaffAccounts(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('_id')
-      .lean()
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -148,9 +155,7 @@ export async function listMyStaffAccounts(req, res, next) {
 
 export async function createMyStaffAccount(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('_id')
-      .lean()
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -190,9 +195,7 @@ export async function createMyStaffAccount(req, res, next) {
 
 export async function deleteMyStaffAccount(req, res, next) {
   try {
-    const restaurant = await Restaurant.findOne({ ownerId: req.user._id })
-      .select('_id')
-      .lean()
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }

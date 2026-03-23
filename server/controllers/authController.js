@@ -432,7 +432,7 @@ export async function staffLogin(req, res, next) {
 export async function me(req, res, next) {
   try {
     if (req.user?.role === 'staff') {
-      const restaurant = await Restaurant.findById(req.user.restaurantId).lean()
+      const restaurant = req.restaurant || (await Restaurant.findById(req.user.restaurantId).lean())
       if (!restaurant) {
         return res.status(401).json({ message: 'Unauthorized' })
       }
@@ -456,7 +456,7 @@ export async function me(req, res, next) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = req.restaurant || (await getOwnerRestaurant(req.user._id))
     return res.json({
       user: serializeUser(currentUser),
       restaurant,

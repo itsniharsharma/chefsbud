@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { createAdapter } from '@socket.io/redis-adapter'
 import { createClient } from 'redis'
 import Restaurant from '../models/Restaurant.js'
+import { logger } from '../utils/logger.js'
 
 let ioServer = null
 
@@ -34,7 +35,7 @@ async function configureRedisAdapter(io) {
   if (!redisUrl) return
 
   if (!/^rediss?:\/\//i.test(redisUrl)) {
-    console.warn('socket_redis_adapter_disabled', 'REDIS_URL must start with redis:// or rediss://')
+    logger.warn('socket_redis_adapter_disabled', { message: 'REDIS_URL must start with redis:// or rediss://' })
     return
   }
 
@@ -43,10 +44,10 @@ async function configureRedisAdapter(io) {
 
   // Redis clients emit error events that must be handled to avoid process crash.
   pubClient.on('error', (error) => {
-    console.warn('socket_redis_pub_error', error?.message || 'unknown_redis_pub_error')
+    logger.warn('socket_redis_pub_error', { message: error?.message || 'unknown_redis_pub_error' })
   })
   subClient.on('error', (error) => {
-    console.warn('socket_redis_sub_error', error?.message || 'unknown_redis_sub_error')
+    logger.warn('socket_redis_sub_error', { message: error?.message || 'unknown_redis_sub_error' })
   })
 
   await Promise.all([pubClient.connect(), subClient.connect()])
@@ -122,7 +123,7 @@ export function initSocketServer(server) {
   })
 
   configureRedisAdapter(ioServer).catch((error) => {
-    console.warn('socket_redis_adapter_disabled', error?.message || 'failed_to_configure_redis_adapter')
+    logger.warn('socket_redis_adapter_disabled', { message: error?.message || 'failed_to_configure_redis_adapter' })
   })
 
   return ioServer
@@ -130,6 +131,15 @@ export function initSocketServer(server) {
 
 export function getSocketServer() {
   return ioServer
+}
+
+export async function closeSocketServer() {
+  if (!ioServer) return
+
+  await new Promise((resolve) => {
+    ioServer.close(() => resolve())
+  })
+  ioServer = null
 }
 
 export function emitToRestaurant(restaurantId, eventName, payload) {

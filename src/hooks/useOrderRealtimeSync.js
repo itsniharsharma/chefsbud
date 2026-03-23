@@ -21,6 +21,8 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
 
     const invalidateOrders = (payload = {}) => {
       const eventType = String(payload?.type || '').trim()
+      const nextStatus = String(payload?.orderStatus || '').trim()
+
       queryClient.invalidateQueries({
         queryKey: ['dashboard', 'orders-board', restaurantId],
       })
@@ -28,7 +30,7 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
         queryKey: ['dashboard', 'recent-orders', restaurantId],
       })
 
-      if (eventType === 'created' || eventType === 'deleted') {
+      if (eventType === 'created' || eventType === 'deleted' || nextStatus === 'Completed') {
         queryClient.invalidateQueries({
           queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
         })

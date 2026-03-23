@@ -1,14 +1,10 @@
 import Table from '../models/Table.js'
-import Restaurant from '../models/Restaurant.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
-
-async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).select('_id').lean()
-}
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 export async function createTables(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -69,7 +65,7 @@ export async function createTables(req, res, next) {
 
 export async function getTables(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }

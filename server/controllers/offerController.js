@@ -3,14 +3,11 @@ import Restaurant from '../models/Restaurant.js'
 import MenuItem from '../models/MenuItem.js'
 import { parseOfferPrompt, validateOfferDraft } from '../services/offerDraftParser.js'
 import { applyOffersToOrder } from '../services/offerEngine.js'
-
-async function getOwnerRestaurant(ownerId) {
-  return Restaurant.findOne({ ownerId }).select('_id slug').lean()
-}
+import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 export async function getOffers(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -28,7 +25,7 @@ export async function getOffers(req, res, next) {
 
 export async function createOffer(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -74,7 +71,7 @@ export async function createOffer(req, res, next) {
 
 export async function updateOffer(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -114,7 +111,7 @@ export async function updateOffer(req, res, next) {
 
 export async function deleteOffer(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -132,7 +129,7 @@ export async function deleteOffer(req, res, next) {
 
 export async function draftOfferFromPrompt(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -167,7 +164,7 @@ export async function draftOfferFromPrompt(req, res, next) {
 
 export async function validateOfferDraftPayload(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
@@ -186,7 +183,7 @@ export async function validateOfferDraftPayload(req, res, next) {
 
 export async function publishOfferDraft(req, res, next) {
   try {
-    const restaurant = await getOwnerRestaurant(req.user._id)
+    const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }

@@ -16,12 +16,15 @@ import {
   markWebhookProcessed,
   releaseWebhookLock,
 } from '../services/webhookIdempotencyService.js'
+import { logger } from '../utils/logger.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1299900
 const HYBRID_MONTHLY_AMOUNT_PAISE = 99900
 const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
+const CUSTOMER_LOOKUP_PAGE_SIZE = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_PAGE_SIZE || 100), 100))
+const CUSTOMER_LOOKUP_MAX_PAGES = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_MAX_PAGES || 10), 50))
 const customerIdByEmailCache = new Map()
 
 function normalizeEmail(value) {
@@ -141,13 +144,24 @@ async function resolveExistingCustomerByEmail(email) {
     return { id: cachedId, email: normalizedEmail }
   }
 
-  const response = await listCustomers({ count: 100 })
-  const items = Array.isArray(response?.items) ? response.items : []
-  const found = items.find((item) => normalizeEmail(item?.email) === normalizedEmail) || null
-  if (found?.id) {
-    setCachedCustomerIdByEmail(normalizedEmail, found.id)
+  for (let page = 0; page < CUSTOMER_LOOKUP_MAX_PAGES; page += 1) {
+    const response = await listCustomers({
+      count: CUSTOMER_LOOKUP_PAGE_SIZE,
+      skip: page * CUSTOMER_LOOKUP_PAGE_SIZE,
+    })
+    const items = Array.isArray(response?.items) ? response.items : []
+    const found = items.find((item) => normalizeEmail(item?.email) === normalizedEmail) || null
+    if (found?.id) {
+      setCachedCustomerIdByEmail(normalizedEmail, found.id)
+      return found
+    }
+
+    if (items.length < CUSTOMER_LOOKUP_PAGE_SIZE) {
+      break
+    }
   }
-  return found
+
+  return null
 }
 
 async function getUserOrThrow(userId) {
@@ -394,7 +408,10 @@ export async function verifyHybridSubscription(req, res, next) {
       graceEndsAt: user.billing.graceEndsAt,
       currentPeriodEnd: user.billing.currentPeriodEnd,
     }).catch((mailError) => {
-      console.error('Subscription activation email failed', mailError)
+      logger.warn('subscription_activation_email_failed', {
+        userId: String(user._id),
+        message: mailError?.message || 'Subscription activation email failed',
+      })
     })
 
     return res.json({
@@ -514,7 +531,11 @@ export async function handleRazorpayWebhook(req, res, next) {
         graceEndsAt: user.billing.graceEndsAt,
         currentPeriodEnd: user.billing.currentPeriodEnd,
       }).catch((mailError) => {
-        console.error('Billing status email failed', mailError)
+        logger.warn('billing_status_email_failed', {
+          userId: String(user._id),
+          eventType,
+          message: mailError?.message || 'Billing status email failed',
+        })
       })
     }
 
