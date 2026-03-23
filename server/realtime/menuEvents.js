@@ -1,12 +1,35 @@
 import { emitToMenu } from './socketServer.js'
 
+const DETAILED_MENU_EVENTS_ENABLED = String(process.env.MENU_REALTIME_DETAILED_EVENTS || 'false').toLowerCase() === 'true'
+const MENU_REFRESH_DEBOUNCE_MS = Number(process.env.MENU_REALTIME_REFRESH_DEBOUNCE_MS || 1200)
+const pendingRefreshBySlug = new Map()
+
 function normalizeSlug(value) {
   return String(value || '').trim().toLowerCase()
+}
+
+function scheduleRefreshEmit(slug, reason) {
+  if (!slug) return
+  if (pendingRefreshBySlug.has(slug)) return
+
+  const timer = setTimeout(() => {
+    pendingRefreshBySlug.delete(slug)
+    emitToMenu(slug, 'menu:refresh-required', {
+      restaurantSlug: slug,
+      reason: String(reason || 'menu-changed'),
+      emittedAt: new Date().toISOString(),
+    })
+  }, Math.max(100, MENU_REFRESH_DEBOUNCE_MS))
+
+  pendingRefreshBySlug.set(slug, timer)
 }
 
 export function emitMenuItemCreated(restaurantSlug, item = {}) {
   const slug = normalizeSlug(restaurantSlug)
   if (!slug) return
+
+  scheduleRefreshEmit(slug, 'item-created')
+  if (!DETAILED_MENU_EVENTS_ENABLED) return
 
   emitToMenu(slug, 'menu:item-created', {
     restaurantSlug: slug,
@@ -28,6 +51,9 @@ export function emitMenuItemUpdated(restaurantSlug, itemId, patch = {}) {
   const slug = normalizeSlug(restaurantSlug)
   const normalizedId = String(itemId || '').trim()
   if (!slug || !normalizedId) return
+
+  scheduleRefreshEmit(slug, 'item-updated')
+  if (!DETAILED_MENU_EVENTS_ENABLED) return
 
   const safePatch = {}
   const allowedFields = ['categoryId', 'name', 'description', 'price', 'available', 'isVeg', 'bestseller']
@@ -61,6 +87,9 @@ export function emitMenuItemDeleted(restaurantSlug, itemId) {
   const normalizedId = String(itemId || '').trim()
   if (!slug || !normalizedId) return
 
+  scheduleRefreshEmit(slug, 'item-deleted')
+  if (!DETAILED_MENU_EVENTS_ENABLED) return
+
   emitToMenu(slug, 'menu:item-deleted', {
     restaurantSlug: slug,
     itemId: normalizedId,
@@ -71,10 +100,5 @@ export function emitMenuItemDeleted(restaurantSlug, itemId) {
 export function emitMenuRefreshRequired(restaurantSlug, reason = 'menu-changed') {
   const slug = normalizeSlug(restaurantSlug)
   if (!slug) return
-
-  emitToMenu(slug, 'menu:refresh-required', {
-    restaurantSlug: slug,
-    reason: String(reason || 'menu-changed'),
-    emittedAt: new Date().toISOString(),
-  })
+  scheduleRefreshEmit(slug, reason)
 }

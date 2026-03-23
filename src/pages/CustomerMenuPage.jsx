@@ -24,6 +24,7 @@ export default function CustomerMenuPage() {
   const isMountedRef = useRef(true)
   const lastMenuRefreshRef = useRef(0)
   const refreshTimerRef = useRef(null)
+  const disconnectTimerRef = useRef(null)
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
@@ -87,6 +88,13 @@ export default function CustomerMenuPage() {
 
     const socket = getCustomerMenuSocket()
     const roomPayload = { restaurantSlug: String(restaurantSlug).trim().toLowerCase() }
+
+    const clearDisconnectTimer = () => {
+      if (disconnectTimerRef.current) {
+        clearTimeout(disconnectTimerRef.current)
+        disconnectTimerRef.current = null
+      }
+    }
 
     const onConnected = () => {
       socket.emit('menu:join-restaurant', roomPayload)
@@ -180,18 +188,62 @@ export default function CustomerMenuPage() {
     socket.on('menu:item-deleted', onMenuItemDeleted)
     socket.on('menu:refresh-required', onMenuRefreshRequired)
 
-    socket.connect()
-    if (socket.connected) {
-      onConnected()
+    const connectForLiveUpdates = () => {
+      clearDisconnectTimer()
+      if (!navigator.onLine) return
+      if (!socket.connected) {
+        socket.connect()
+      } else {
+        onConnected()
+      }
+    }
+
+    const disconnectToSaveCost = () => {
+      clearDisconnectTimer()
+      // Short grace window avoids churn during rapid tab switching.
+      disconnectTimerRef.current = setTimeout(() => {
+        socket.emit('menu:leave-restaurant', roomPayload)
+        socket.disconnect()
+      }, 12_000)
+    }
+
+    const onVisibilityChanged = () => {
+      if (document.visibilityState === 'visible') {
+        connectForLiveUpdates()
+      } else {
+        disconnectToSaveCost()
+      }
+    }
+
+    const onWindowOnline = () => {
+      if (document.visibilityState === 'visible') {
+        connectForLiveUpdates()
+      }
+    }
+
+    const onWindowOffline = () => {
+      disconnectToSaveCost()
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChanged)
+    window.addEventListener('online', onWindowOnline)
+    window.addEventListener('offline', onWindowOffline)
+
+    if (document.visibilityState === 'visible') {
+      connectForLiveUpdates()
     }
 
     return () => {
+      clearDisconnectTimer()
       socket.emit('menu:leave-restaurant', roomPayload)
       socket.off('connect', onConnected)
       socket.off('menu:item-created', onMenuItemCreated)
       socket.off('menu:item-updated', onMenuItemUpdated)
       socket.off('menu:item-deleted', onMenuItemDeleted)
       socket.off('menu:refresh-required', onMenuRefreshRequired)
+      document.removeEventListener('visibilitychange', onVisibilityChanged)
+      window.removeEventListener('online', onWindowOnline)
+      window.removeEventListener('offline', onWindowOffline)
       socket.disconnect()
     }
   }, [restaurantSlug, scheduleMenuRefresh])
