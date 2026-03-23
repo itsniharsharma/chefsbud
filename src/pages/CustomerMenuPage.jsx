@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import Button from '../components/Button'
 import { analyticsService } from '../services/analyticsService'
 import { menuService } from '../services/menuService'
+import { getCustomerMenuSocket } from '../services/customerMenuSocketService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { formatCurrencyINR } from '../utils/currency'
 import { getCustomerAnalyticsSessionId } from '../utils/customerAnalytics'
@@ -20,31 +21,180 @@ export default function CustomerMenuPage() {
   const [dietFilter, setDietFilter] = useState('all')
   // null = category grid view; a category._id = items view for that category
   const [activeCategory, setActiveCategory] = useState(null)
+  const isMountedRef = useRef(true)
+  const lastMenuRefreshRef = useRef(0)
+  const refreshTimerRef = useRef(null)
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
 
-  useEffect(() => {
-    let active = true
-    setLoading(true)
+  const fetchMenu = useCallback(async ({ showLoader = false } = {}) => {
+    if (!restaurantSlug) return
+
+    if (showLoader) {
+      setLoading(true)
+    }
+
     setError('')
-    menuService
-      .getBySlug(restaurantSlug)
-      .then((data) => {
-        if (!active) return
-        setMenu(data)
-        setActiveCategory(null) // start at grid
-      })
-      .catch((err) => {
-        if (!active) return
-        setError(err?.response?.data?.message || 'Unable to load menu')
-      })
-      .finally(() => {
-        if (!active) return
+
+    try {
+      const data = await menuService.getBySlug(restaurantSlug)
+      if (!isMountedRef.current) return
+      setMenu(data)
+      if (showLoader) {
+        setActiveCategory(null)
+      }
+    } catch (err) {
+      if (!isMountedRef.current) return
+      setError(err?.response?.data?.message || 'Unable to load menu')
+    } finally {
+      if (showLoader && isMountedRef.current) {
         setLoading(false)
-      })
-    return () => { active = false }
+      }
+    }
   }, [restaurantSlug])
+
+  const scheduleMenuRefresh = useCallback(() => {
+    const now = Date.now()
+    if (now - lastMenuRefreshRef.current < 1_000) {
+      return
+    }
+
+    lastMenuRefreshRef.current = now
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current)
+    }
+
+    refreshTimerRef.current = setTimeout(() => {
+      void fetchMenu({ showLoader: false })
+    }, 200)
+  }, [fetchMenu])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    void fetchMenu({ showLoader: true })
+
+    return () => {
+      isMountedRef.current = false
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current)
+      }
+    }
+  }, [fetchMenu])
+
+  useEffect(() => {
+    if (!restaurantSlug) return undefined
+
+    const socket = getCustomerMenuSocket()
+    const roomPayload = { restaurantSlug: String(restaurantSlug).trim().toLowerCase() }
+
+    const onConnected = () => {
+      socket.emit('menu:join-restaurant', roomPayload)
+    }
+
+    const onMenuItemCreated = (payload = {}) => {
+      const item = payload?.item
+      if (!item?._id) {
+        scheduleMenuRefresh()
+        return
+      }
+
+      setMenu((current) => {
+        const items = Array.isArray(current?.items) ? current.items : []
+        const exists = items.some((entry) => String(entry?._id || '') === String(item._id))
+        if (exists) {
+          return current
+        }
+
+        return {
+          ...current,
+          items: [item, ...items],
+        }
+      })
+    }
+
+    const onMenuItemUpdated = (payload = {}) => {
+      const itemId = String(payload?.itemId || '').trim()
+      const patch = payload?.patch && typeof payload.patch === 'object' ? payload.patch : null
+      if (!itemId || !patch) {
+        scheduleMenuRefresh()
+        return
+      }
+
+      setMenu((current) => {
+        const items = Array.isArray(current?.items) ? current.items : []
+        let changed = false
+        const nextItems = items.map((entry) => {
+          if (String(entry?._id || '') !== itemId) {
+            return entry
+          }
+
+          changed = true
+          return {
+            ...entry,
+            ...patch,
+          }
+        })
+
+        if (!changed) {
+          scheduleMenuRefresh()
+          return current
+        }
+
+        return {
+          ...current,
+          items: nextItems,
+        }
+      })
+    }
+
+    const onMenuItemDeleted = (payload = {}) => {
+      const itemId = String(payload?.itemId || '').trim()
+      if (!itemId) {
+        scheduleMenuRefresh()
+        return
+      }
+
+      setMenu((current) => {
+        const items = Array.isArray(current?.items) ? current.items : []
+        const nextItems = items.filter((entry) => String(entry?._id || '') !== itemId)
+        if (nextItems.length === items.length) {
+          scheduleMenuRefresh()
+          return current
+        }
+
+        return {
+          ...current,
+          items: nextItems,
+        }
+      })
+    }
+
+    const onMenuRefreshRequired = () => {
+      scheduleMenuRefresh()
+    }
+
+    socket.on('connect', onConnected)
+    socket.on('menu:item-created', onMenuItemCreated)
+    socket.on('menu:item-updated', onMenuItemUpdated)
+    socket.on('menu:item-deleted', onMenuItemDeleted)
+    socket.on('menu:refresh-required', onMenuRefreshRequired)
+
+    socket.connect()
+    if (socket.connected) {
+      onConnected()
+    }
+
+    return () => {
+      socket.emit('menu:leave-restaurant', roomPayload)
+      socket.off('connect', onConnected)
+      socket.off('menu:item-created', onMenuItemCreated)
+      socket.off('menu:item-updated', onMenuItemUpdated)
+      socket.off('menu:item-deleted', onMenuItemDeleted)
+      socket.off('menu:refresh-required', onMenuRefreshRequired)
+      socket.disconnect()
+    }
+  }, [restaurantSlug, scheduleMenuRefresh])
 
   const availableItems = useMemo(() => menu.items.filter((item) => item.available), [menu.items])
 

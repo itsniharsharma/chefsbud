@@ -4,6 +4,12 @@ import Restaurant from '../models/Restaurant.js'
 import Offer from '../models/Offer.js'
 import { parseMenuWithAI } from '../services/aiMenuParser.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
+import {
+  emitMenuItemCreated,
+  emitMenuItemDeleted,
+  emitMenuItemUpdated,
+  emitMenuRefreshRequired,
+} from '../realtime/menuEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const menuProjection = '_id categoryId name description price available isVeg bestseller'
@@ -86,6 +92,7 @@ export async function createCategory(req, res, next) {
     })
 
     invalidateMenuCache(restaurant.slug)
+    emitMenuRefreshRequired(restaurant.slug, 'category-created')
 
     return res.status(201).json(category)
   } catch (error) {
@@ -122,6 +129,7 @@ export async function createMenuItem(req, res, next) {
     })
 
     invalidateMenuCache(restaurant.slug)
+    emitMenuItemCreated(restaurant.slug, item)
 
     return res.status(201).json(item)
   } catch (error) {
@@ -158,6 +166,7 @@ export async function updateMenuItem(req, res, next) {
     }
 
     invalidateMenuCache(restaurant.slug)
+    emitMenuItemUpdated(restaurant.slug, req.params.id, patch)
     return res.json(item)
   } catch (error) {
     next(error)
@@ -177,6 +186,7 @@ export async function deleteMenuItem(req, res, next) {
     }
 
     invalidateMenuCache(restaurant.slug)
+    emitMenuItemDeleted(restaurant.slug, req.params.id)
 
     return res.json({ success: true })
   } catch (error) {
@@ -317,6 +327,7 @@ export async function importMenuDraft(req, res, next) {
 
     await MenuItem.insertMany(itemDocs, { ordered: false })
     invalidateMenuCache(restaurant.slug)
+    emitMenuRefreshRequired(restaurant.slug, 'menu-imported')
 
     return res.status(201).json({
       importedCategories: categories.length,

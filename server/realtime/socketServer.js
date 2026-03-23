@@ -30,6 +30,10 @@ export function restaurantRoomName(restaurantId) {
   return `restaurant:${String(restaurantId || '').trim()}`
 }
 
+export function menuRoomName(restaurantSlug) {
+  return `menu:${String(restaurantSlug || '').trim().toLowerCase()}`
+}
+
 async function configureRedisAdapter(io) {
   const redisUrl = String(process.env.REDIS_URL || '').trim()
   if (!redisUrl) return
@@ -70,12 +74,14 @@ export function initSocketServer(server) {
   })
 
   ioServer.use(async (socket, next) => {
-    try {
-      const token = parseToken(socket)
-      if (!token) {
-        return next(new Error('Unauthorized'))
-      }
+    const token = parseToken(socket)
+    if (!token) {
+      socket.data.role = 'public'
+      socket.data.userId = ''
+      return next()
+    }
 
+    try {
       if (!process.env.JWT_SECRET) {
         return next(new Error('Unauthorized'))
       }
@@ -96,6 +102,11 @@ export function initSocketServer(server) {
   ioServer.on('connection', (socket) => {
     socket.on('dashboard:join-restaurant', async (payload = {}, ack) => {
       try {
+        if (!socket.data?.userId || socket.data?.role === 'public') {
+          if (typeof ack === 'function') ack({ ok: false, message: 'Unauthorized' })
+          return
+        }
+
         const restaurantId = String(payload.restaurantId || '').trim()
         if (!restaurantId) {
           if (typeof ack === 'function') ack({ ok: false, message: 'restaurantId is required' })
@@ -119,6 +130,33 @@ export function initSocketServer(server) {
       const restaurantId = String(payload.restaurantId || '').trim()
       if (!restaurantId) return
       socket.leave(restaurantRoomName(restaurantId))
+    })
+
+    socket.on('menu:join-restaurant', async (payload = {}, ack) => {
+      try {
+        const restaurantSlug = String(payload.restaurantSlug || '').trim().toLowerCase()
+        if (!restaurantSlug) {
+          if (typeof ack === 'function') ack({ ok: false, message: 'restaurantSlug is required' })
+          return
+        }
+
+        const exists = await Restaurant.exists({ slug: restaurantSlug })
+        if (!exists) {
+          if (typeof ack === 'function') ack({ ok: false, message: 'Restaurant not found' })
+          return
+        }
+
+        socket.join(menuRoomName(restaurantSlug))
+        if (typeof ack === 'function') ack({ ok: true })
+      } catch {
+        if (typeof ack === 'function') ack({ ok: false, message: 'Failed to join menu room' })
+      }
+    })
+
+    socket.on('menu:leave-restaurant', (payload = {}) => {
+      const restaurantSlug = String(payload.restaurantSlug || '').trim().toLowerCase()
+      if (!restaurantSlug) return
+      socket.leave(menuRoomName(restaurantSlug))
     })
   })
 
@@ -145,4 +183,9 @@ export async function closeSocketServer() {
 export function emitToRestaurant(restaurantId, eventName, payload) {
   if (!ioServer || !restaurantId) return
   ioServer.to(restaurantRoomName(restaurantId)).emit(eventName, payload)
+}
+
+export function emitToMenu(restaurantSlug, eventName, payload) {
+  if (!ioServer || !restaurantSlug) return
+  ioServer.to(menuRoomName(restaurantSlug)).emit(eventName, payload)
 }
