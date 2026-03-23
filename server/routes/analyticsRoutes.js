@@ -43,7 +43,7 @@ router.get(
   cacheResponse({
     ttlSeconds: 60,
     keyBuilder: (req) =>
-      `analytics:detail:${req.user._id}:${req.params.restaurantId}:range:${req.query.rangeDays || '14'}`,
+      `analytics:detail:${req.user._id}:${req.params.restaurantId}:range:${req.query.range || req.query.rangeDays || '14d'}`,
     tagsBuilder: (req) => [`analytics:${req.params.restaurantId}`],
   }),
   getAnalytics,

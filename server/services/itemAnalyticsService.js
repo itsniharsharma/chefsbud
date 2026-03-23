@@ -343,7 +343,7 @@ export async function trackAddToCart({
     _id: normalizedMenuItemId,
     restaurantId,
   })
-    .select('_id categoryId')
+    .select('_id categoryId name')
     .lean()
 
   if (!menuItem) {
@@ -511,6 +511,13 @@ function percentage(numerator, denominator) {
   return round2((Number(numerator || 0) / Number(denominator || 0)) * 100)
 }
 
+function boundedPercentage(numerator, denominator) {
+  const safeDenominator = clampNonNegative(denominator)
+  if (!safeDenominator) return 0
+  const safeNumerator = Math.min(clampNonNegative(numerator), safeDenominator)
+  return percentage(safeNumerator, safeDenominator)
+}
+
 function buildGrowth(currentValue, previousValue, formatter = 'number') {
   const current = Number(currentValue || 0)
   const previous = Number(previousValue || 0)
@@ -566,7 +573,9 @@ async function aggregateItemMetrics({ restaurantId, startDate, endDate }) {
         _id: '$menuItemId',
         name: { $last: '$menuItemName' },
         views: { $sum: '$views' },
+        addToCart: { $sum: '$addToCart' },
         orders: { $sum: '$orders' },
+        quantitySold: { $sum: '$quantitySold' },
         revenue: { $sum: '$revenue' },
       },
     },
@@ -576,11 +585,35 @@ async function aggregateItemMetrics({ restaurantId, startDate, endDate }) {
         menuItemId: '$_id',
         name: { $ifNull: ['$name', 'Deleted item'] },
         views: 1,
+        addToCart: 1,
         orders: 1,
+        quantitySold: 1,
         revenue: 1,
       },
     },
   ])
+}
+
+async function hydrateAggregatedItemNames(restaurantId, items = []) {
+  const rows = Array.isArray(items) ? items : []
+  const missingIds = rows
+    .filter((item) => !String(item?.name || '').trim())
+    .map((item) => String(item?.menuItemId || '').trim())
+    .filter((id) => isValidObjectId(id))
+
+  if (!missingIds.length) {
+    return rows.map((item) => ({
+      ...item,
+      name: String(item?.name || '').trim() || 'Archived item',
+    }))
+  }
+
+  const menuMap = await loadMenuItemsMap(restaurantId, missingIds)
+
+  return rows.map((item) => ({
+    ...item,
+    name: String(item?.name || '').trim() || menuMap.get(String(item?.menuItemId || ''))?.name || 'Archived item',
+  }))
 }
 
 async function aggregateHourlyOrders({ restaurantId, startDate, endDate }) {
@@ -883,5 +916,432 @@ export async function buildAnalyticsOverview({ restaurantId, rangeDays = 14 }) {
       lostUsers: dropoffGrowth,
       message: `${dropoffCurrent} users viewed but did not order`,
     },
+  }
+}
+
+function startOfMonth(dateLike = new Date()) {
+  const date = normalizeDate(dateLike)
+  date.setDate(1)
+  return date
+}
+
+function startOfYear(dateLike = new Date()) {
+  const date = normalizeDate(dateLike)
+  date.setMonth(0, 1)
+  return date
+}
+
+function differenceInDaysInclusive(startDate, endDate) {
+  const start = normalizeDate(startDate)
+  const end = normalizeDate(endDate)
+  return Math.max(1, Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1)
+}
+
+function resolveAnalyticsRange(range) {
+  const normalized = String(range || '').trim().toLowerCase()
+  const today = normalizeDate(new Date())
+
+  if (normalized === 'today') {
+    const previous = addDays(today, -1)
+    return {
+      key: 'today',
+      label: 'Today',
+      currentStartDate: today,
+      currentEndDate: today,
+      previousStartDate: previous,
+      previousEndDate: previous,
+    }
+  }
+
+  if (normalized === 'this_month' || normalized === 'month' || normalized === 'thismonth') {
+    const currentStartDate = startOfMonth(today)
+    const elapsedDays = differenceInDaysInclusive(currentStartDate, today)
+    const previousMonthEnd = addDays(currentStartDate, -1)
+    const previousStartDate = startOfMonth(previousMonthEnd)
+    const previousEndDate = addDays(previousStartDate, elapsedDays - 1)
+
+    return {
+      key: 'this_month',
+      label: 'This Month',
+      currentStartDate,
+      currentEndDate: today,
+      previousStartDate,
+      previousEndDate,
+    }
+  }
+
+  if (normalized === 'yearly' || normalized === 'year' || normalized === 'ytd') {
+    const currentStartDate = startOfYear(today)
+    const elapsedDays = differenceInDaysInclusive(currentStartDate, today)
+    const previousStartDate = startOfYear(addDays(currentStartDate, -1))
+    const previousEndDate = addDays(previousStartDate, elapsedDays - 1)
+
+    return {
+      key: 'yearly',
+      label: 'Yearly',
+      currentStartDate,
+      currentEndDate: today,
+      previousStartDate,
+      previousEndDate,
+    }
+  }
+
+  const numericRange = Number.parseInt(normalized.replace(/d$/, ''), 10)
+  const safeDays = [7, 14, 30].includes(numericRange) ? numericRange : 14
+  const currentStartDate = normalizeDate(addDays(today, -(safeDays - 1)))
+  const previousEndDate = normalizeDate(addDays(currentStartDate, -1))
+  const previousStartDate = normalizeDate(addDays(previousEndDate, -(safeDays - 1)))
+
+  return {
+    key: `${safeDays}d`,
+    label: `${safeDays} Days`,
+    currentStartDate,
+    currentEndDate: today,
+    previousStartDate,
+    previousEndDate,
+  }
+}
+
+function buildMetricDelta(currentValue, previousValue, precision = 2) {
+  const current = Number(currentValue || 0)
+  const previous = Number(previousValue || 0)
+  const change = round2(current - previous)
+  const rawPercent = previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0
+  const changePercent = Number(rawPercent.toFixed(precision))
+
+  return {
+    value: round2(current),
+    previousValue: round2(previous),
+    change,
+    changePercent,
+  }
+}
+
+function average(values = []) {
+  if (!Array.isArray(values) || values.length === 0) return 0
+  const total = values.reduce((sum, value) => sum + Number(value || 0), 0)
+  return total / values.length
+}
+
+function buildAdvancedTrendSeries({ dailyMetrics, startDate, endDate }) {
+  const dailyByKey = new Map(
+    (Array.isArray(dailyMetrics) ? dailyMetrics : []).map((entry) => [
+      entry.dateKey,
+      {
+        revenue: round2(entry.revenue),
+        orders: clampNonNegative(entry.completedOrders),
+        views: clampNonNegative(entry.views),
+      },
+    ]),
+  )
+
+  return buildTrendBuckets(startDate, endDate).map((bucket) => {
+    const row = dailyByKey.get(bucket.dateKey) || {}
+    const revenue = round2(row.revenue)
+    const orders = clampNonNegative(row.orders)
+    const views = clampNonNegative(row.views)
+
+    return {
+      date: bucket.dateKey,
+      label: bucket.label,
+      revenue,
+      orders,
+      conversion: boundedPercentage(orders, views),
+    }
+  })
+}
+
+function buildTrendArrays(points = []) {
+  const rows = Array.isArray(points) ? points : []
+  return {
+    combined: rows,
+    revenueTrend: rows.map((point) => ({ date: point.date, revenue: point.revenue })),
+    ordersTrend: rows.map((point) => ({ date: point.date, orders: point.orders })),
+    conversionTrend: rows.map((point) => ({ date: point.date, conversion: point.conversion })),
+  }
+}
+
+function classifyItemIntelligence(items = []) {
+  const activeItems = (Array.isArray(items) ? items : []).filter((item) => item.views > 0 || item.orders > 0 || item.revenue > 0)
+  if (!activeItems.length) {
+    return {
+      winners: [],
+      losers: [],
+      hiddenGems: [],
+      comparison: [],
+    }
+  }
+
+  const normalizedItems = activeItems.map((item) => ({
+    itemId: String(item.menuItemId),
+    name: item.name || 'Archived item',
+    views: clampNonNegative(item.views),
+    addToCart: clampNonNegative(item.addToCart),
+    orders: clampNonNegative(item.orders),
+    revenue: round2(item.revenue),
+    conversion: boundedPercentage(item.orders, item.views),
+  }))
+
+  const avgViews = average(normalizedItems.map((item) => item.views))
+  const avgOrders = average(normalizedItems.map((item) => item.orders))
+  const avgConversion = average(normalizedItems.map((item) => item.conversion))
+
+  const winners = normalizedItems
+    .filter((item) => item.views >= avgViews && item.orders >= Math.max(1, avgOrders))
+    .sort((a, b) => b.revenue - a.revenue || b.orders - a.orders)
+    .slice(0, 5)
+
+  const losers = normalizedItems
+    .filter((item) => item.views >= avgViews && item.orders <= Math.max(0, avgOrders * 0.6))
+    .sort((a, b) => b.views - a.views || a.orders - b.orders)
+    .slice(0, 5)
+
+  const hiddenGems = normalizedItems
+    .filter((item) => item.views > 0 && item.views < Math.max(1, avgViews) && item.conversion >= Math.max(10, avgConversion * 1.25) && item.orders > 0)
+    .sort((a, b) => b.conversion - a.conversion || b.orders - a.orders)
+    .slice(0, 5)
+
+  const comparison = [...normalizedItems]
+    .sort((a, b) => b.views - a.views || b.orders - a.orders)
+    .slice(0, 8)
+
+  return { winners, losers, hiddenGems, comparison }
+}
+
+function buildRevenueContribution(items = [], totalRevenue = 0) {
+  const safeTotalRevenue = round2(totalRevenue)
+  return [...(Array.isArray(items) ? items : [])]
+    .filter((item) => Number(item?.revenue || 0) > 0)
+    .sort((a, b) => Number(b?.revenue || 0) - Number(a?.revenue || 0))
+    .slice(0, 5)
+    .map((item) => ({
+      itemId: String(item.menuItemId),
+      name: item.name || 'Archived item',
+      revenue: round2(item.revenue),
+      orders: clampNonNegative(item.orders),
+      views: clampNonNegative(item.views),
+      conversion: boundedPercentage(item.orders, item.views),
+      revenueContribution: percentage(item.revenue, safeTotalRevenue),
+    }))
+}
+
+function buildTimeIntelligence(hourlyRows = [], averageOrderValue = 0) {
+  const safeAov = round2(averageOrderValue)
+  const ordersByHour = buildHourlySeries(hourlyRows).map((entry) => ({
+    hour: entry.hour,
+    hour24: entry.hour24,
+    orders: clampNonNegative(entry.orders),
+  }))
+  const revenueByHour = ordersByHour.map((entry) => ({
+    hour: entry.hour,
+    hour24: entry.hour24,
+    revenue: round2(entry.orders * safeAov),
+  }))
+  const peak = [...ordersByHour].sort((a, b) => b.orders - a.orders)[0] || { hour: '-', hour24: 0, orders: 0 }
+
+  return {
+    ordersByHour,
+    revenueByHour,
+    peakHour: peak.hour,
+    peakOrders: peak.orders,
+  }
+}
+
+function buildInsights({
+  itemGroups,
+  funnel,
+  dropoff,
+  time,
+  kpis,
+  revenue,
+}) {
+  const insights = []
+
+  if (itemGroups.losers[0]) {
+    insights.push(
+      `${itemGroups.losers[0].name} has high visibility but weak order conversion. Consider revisiting pricing, item photo, or menu placement.`,
+    )
+  }
+
+  if (Number(kpis.cartAbandonment?.value || 0) >= 35) {
+    insights.push('Many users add items but do not complete orders. Simplify checkout and review pricing friction at the cart stage.')
+  }
+
+  if (funnel.viewToCartRate < 25) {
+    insights.push('Customers are seeing the menu but not moving into cart often. Improve item naming, descriptions, and hero-item placement.')
+  }
+
+  if (funnel.cartToOrderRate < 55) {
+    insights.push('Cart-to-order conversion is soft. Review the final checkout experience and make payment or confirmation steps clearer.')
+  }
+
+  if (time.peakOrders > 0) {
+    insights.push(`Peak order demand is currently around ${time.peakHour}. Consider aligning staff coverage and kitchen prep for that window.`)
+  }
+
+  if (itemGroups.hiddenGems[0]) {
+    insights.push(`${itemGroups.hiddenGems[0].name} converts well with relatively low visibility. Promote it more aggressively on the menu.`)
+  }
+
+  if (dropoff.usersViewedButNotOrdered > 0) {
+    insights.push(`${dropoff.usersViewedButNotOrdered} item views did not turn into completed orders in this period. Focus on reducing drop-off before adding more menu complexity.`)
+  }
+
+  if (revenue.topItemsByRevenue[0] && Number(revenue.topItemsByRevenue[0].revenueContribution || 0) >= 30) {
+    insights.push(`${revenue.topItemsByRevenue[0].name} is carrying a large share of revenue. Protect availability and consider similar high-margin variants.`)
+  }
+
+  return insights.slice(0, 6)
+}
+
+export async function buildAdvancedAnalytics({ restaurantId, range = '14d' }) {
+  const resolvedRange = resolveAnalyticsRange(range)
+
+  const [currentDailyMetrics, previousDailyMetrics, currentItemsRaw, previousItemsRaw, currentHourly] = await Promise.all([
+    AnalyticsDailyMetrics.find({
+      restaurantId,
+      date: { $gte: resolvedRange.currentStartDate, $lte: resolvedRange.currentEndDate },
+    })
+      .sort({ date: 1 })
+      .select('date dateKey views addToCart completedOrders revenue')
+      .lean(),
+    AnalyticsDailyMetrics.find({
+      restaurantId,
+      date: { $gte: resolvedRange.previousStartDate, $lte: resolvedRange.previousEndDate },
+    })
+      .sort({ date: 1 })
+      .select('date dateKey views addToCart completedOrders revenue')
+      .lean(),
+    aggregateItemMetrics({
+      restaurantId,
+      startDate: resolvedRange.currentStartDate,
+      endDate: resolvedRange.currentEndDate,
+    }),
+    aggregateItemMetrics({
+      restaurantId,
+      startDate: resolvedRange.previousStartDate,
+      endDate: resolvedRange.previousEndDate,
+    }),
+    aggregateHourlyOrders({
+      restaurantId,
+      startDate: resolvedRange.currentStartDate,
+      endDate: resolvedRange.currentEndDate,
+    }),
+  ])
+
+  const [currentItems, previousItems] = await Promise.all([
+    hydrateAggregatedItemNames(restaurantId, currentItemsRaw),
+    hydrateAggregatedItemNames(restaurantId, previousItemsRaw),
+  ])
+
+  const currentTotals = sumTotalsFromDailyMetrics(currentDailyMetrics)
+  const previousTotals = sumTotalsFromDailyMetrics(previousDailyMetrics)
+
+  const currentAov = computeAov(currentTotals.revenue, currentTotals.orders)
+  const previousAov = computeAov(previousTotals.revenue, previousTotals.orders)
+  const currentConversion = boundedPercentage(currentTotals.orders, currentTotals.views)
+  const previousConversion = boundedPercentage(previousTotals.orders, previousTotals.views)
+  const currentAddToCartRate = boundedPercentage(currentTotals.addToCart, currentTotals.views)
+  const previousAddToCartRate = boundedPercentage(previousTotals.addToCart, previousTotals.views)
+  const currentCartAbandonment = percentage(
+    Math.max(0, currentTotals.addToCart - currentTotals.orders),
+    currentTotals.addToCart,
+  )
+  const previousCartAbandonment = percentage(
+    Math.max(0, previousTotals.addToCart - previousTotals.orders),
+    previousTotals.addToCart,
+  )
+
+  const currentQuantitySold = (Array.isArray(currentItems) ? currentItems : []).reduce(
+    (sum, item) => sum + clampNonNegative(item.quantitySold),
+    0,
+  )
+  const previousQuantitySold = (Array.isArray(previousItems) ? previousItems : []).reduce(
+    (sum, item) => sum + clampNonNegative(item.quantitySold),
+    0,
+  )
+
+  const currentRevenuePerView = currentTotals.views > 0 ? round2(currentTotals.revenue / currentTotals.views) : 0
+  const previousRevenuePerView = previousTotals.views > 0 ? round2(previousTotals.revenue / previousTotals.views) : 0
+  const currentOrderedItemLines = (Array.isArray(currentItems) ? currentItems : []).reduce(
+    (sum, item) => sum + clampNonNegative(item.orders),
+    0,
+  )
+  const previousOrderedItemLines = (Array.isArray(previousItems) ? previousItems : []).reduce(
+    (sum, item) => sum + clampNonNegative(item.orders),
+    0,
+  )
+  const normalizedCurrentQuantitySold = currentQuantitySold > 0 ? currentQuantitySold : currentOrderedItemLines
+  const normalizedPreviousQuantitySold = previousQuantitySold > 0 ? previousQuantitySold : previousOrderedItemLines
+  const currentAvgItemsPerOrder = currentTotals.orders > 0 ? round2(normalizedCurrentQuantitySold / currentTotals.orders) : 0
+  const previousAvgItemsPerOrder = previousTotals.orders > 0 ? round2(normalizedPreviousQuantitySold / previousTotals.orders) : 0
+
+  const trendPoints = buildAdvancedTrendSeries({
+    dailyMetrics: currentDailyMetrics,
+    startDate: resolvedRange.currentStartDate,
+    endDate: resolvedRange.currentEndDate,
+  })
+
+  const funnel = {
+    views: currentTotals.views,
+    addToCart: currentTotals.addToCart,
+    orders: currentTotals.orders,
+    viewToCartRate: boundedPercentage(currentTotals.addToCart, currentTotals.views),
+    cartToOrderRate: boundedPercentage(currentTotals.orders, currentTotals.addToCart),
+    dropOffPercent: percentage(Math.max(0, currentTotals.views - currentTotals.orders), currentTotals.views),
+  }
+
+  const itemGroups = classifyItemIntelligence(currentItems)
+  const time = buildTimeIntelligence(currentHourly, currentAov)
+  const revenue = {
+    topItemsByRevenue: buildRevenueContribution(currentItems, currentTotals.revenue),
+  }
+  const dropoff = {
+    usersViewedButNotOrdered: Math.max(0, currentTotals.views - currentTotals.orders),
+    cartDrop: Math.max(0, currentTotals.addToCart - currentTotals.orders),
+  }
+
+  const kpis = {
+    revenue: buildMetricDelta(currentTotals.revenue, previousTotals.revenue),
+    orders: buildMetricDelta(currentTotals.orders, previousTotals.orders),
+    aov: buildMetricDelta(currentAov, previousAov),
+    totalViews: buildMetricDelta(currentTotals.views, previousTotals.views),
+    conversionRate: buildMetricDelta(currentConversion, previousConversion),
+    addToCartRate: buildMetricDelta(currentAddToCartRate, previousAddToCartRate),
+    cartAbandonment: buildMetricDelta(currentCartAbandonment, previousCartAbandonment),
+    revenuePerView: buildMetricDelta(currentRevenuePerView, previousRevenuePerView),
+    avgItemsPerOrder: buildMetricDelta(currentAvgItemsPerOrder, previousAvgItemsPerOrder),
+  }
+
+  const insights = buildInsights({
+    itemGroups,
+    funnel,
+    dropoff,
+    time,
+    kpis,
+    revenue,
+  })
+
+  return {
+    range: resolvedRange.key,
+    label: resolvedRange.label,
+    period: {
+      current: {
+        startDate: resolvedRange.currentStartDate.toISOString(),
+        endDate: resolvedRange.currentEndDate.toISOString(),
+      },
+      previous: {
+        startDate: resolvedRange.previousStartDate.toISOString(),
+        endDate: resolvedRange.previousEndDate.toISOString(),
+      },
+    },
+    kpis,
+    trends: buildTrendArrays(trendPoints),
+    funnel,
+    items: itemGroups,
+    time,
+    revenue,
+    dropoff,
+    insights,
   }
 }

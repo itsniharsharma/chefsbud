@@ -80,11 +80,11 @@ export function useDashboardAnalyticsCardsQuery({ restaurantId }) {
   })
 }
 
-export function useAnalyticsOverviewQuery({ restaurantId, rangeDays }) {
+export function useAnalyticsOverviewQuery({ restaurantId, range }) {
   return useQuery({
-    queryKey: queryKeys.dashboard.analyticsOverview(restaurantId, rangeDays),
+    queryKey: queryKeys.dashboard.analyticsOverview(restaurantId, range),
     enabled: Boolean(restaurantId),
-    queryFn: () => analyticsService.analytics(restaurantId, { rangeDays }),
+    queryFn: () => analyticsService.analytics(restaurantId, { range }),
     staleTime: 60_000,
     refetchInterval: 180_000,
     refetchIntervalInBackground: false,

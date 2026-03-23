@@ -14,11 +14,11 @@ export const queryKeys = {
   },
   dashboard: {
     analyticsCards: (restaurantId) => ['dashboard', 'analytics-cards', restaurantId],
-    analyticsOverview: (restaurantId, rangeDays) => [
+    analyticsOverview: (restaurantId, range) => [
       'dashboard',
       'analytics-overview',
       restaurantId,
-      String(rangeDays || 14),
+      String(range || '14d'),
     ],
     ordersBoard: (restaurantId, statusFilter, scope, floorNumber = 'all') => [
       'dashboard',

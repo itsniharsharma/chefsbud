@@ -2,7 +2,7 @@ import MenuItem from '../models/MenuItem.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import {
-  buildAnalyticsOverview,
+  buildAdvancedAnalytics,
   scheduleCompletedOrderAnalyticsBackfill,
   trackAddToCart,
   trackMenuExposure,
@@ -97,9 +97,9 @@ export async function getAnalytics(req, res, next) {
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
     void scheduleCompletedOrderAnalyticsBackfill({ restaurantId: ownerRestaurant._id })
-    const analytics = await buildAnalyticsOverview({
+    const analytics = await buildAdvancedAnalytics({
       restaurantId: ownerRestaurant._id,
-      rangeDays: req.query.rangeDays,
+      range: req.query.range || req.query.rangeDays,
     })
 
     return res.json({
