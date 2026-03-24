@@ -7,7 +7,7 @@ import { buildCustomerMenuUrl } from './utils/customerUrl'
 const DashboardLayout = lazy(importers.dashboardLayout)
 const LandingPage = lazy(importers.landing)
 const PlatformPage = lazy(importers.platform)
-const TrustPage = lazy(importers.trust)
+const DemoPage = lazy(importers.trust)
 const ContactPage = lazy(importers.contact)
 const LoginPage = lazy(importers.login)
 const RegisterPage = lazy(importers.register)
@@ -58,7 +58,8 @@ function App() {
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<LandingPage />} />
           <Route path="/platform" element={<PlatformPage />} />
-          <Route path="/trust" element={<TrustPage />} />
+          <Route path="/demo" element={<DemoPage />} />
+          <Route path="/trust" element={<Navigate to="/demo" replace />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />

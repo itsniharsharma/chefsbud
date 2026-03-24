@@ -24,6 +24,15 @@ function parseFromAddress(value) {
   }
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 function getMailProvider() {
   const explicitProvider = String(process.env.MAIL_PROVIDER || '').trim().toLowerCase()
   if (explicitProvider) return explicitProvider
@@ -345,5 +354,59 @@ export async function sendKotReprintAuditEmail({
     text,
     html,
     category: 'kot-reprint-audit',
+  })
+}
+
+export async function sendDemoBookingEmail({
+  fullName,
+  phoneNumber,
+  restaurantName,
+  state,
+  city,
+  email,
+  note,
+}) {
+  const to = String(process.env.DEMO_BOOKING_EMAIL || 'chefsbudofficial@gmail.com').trim()
+  const subject = `Demo Booking Request - ${restaurantName}`
+  const bookedAt = new Date().toLocaleString('en-IN', { hour12: true })
+
+  const text = [
+    'New Demo Booking Request',
+    '',
+    `Full Name: ${fullName}`,
+    `Phone Number: ${phoneNumber}`,
+    `Restaurant Name: ${restaurantName}`,
+    `State: ${state}`,
+    `City: ${city}`,
+    `Email: ${email}`,
+    `Booked At: ${bookedAt}`,
+    '',
+    'Note:',
+    String(note || '').trim() || 'N/A',
+  ].join('\n')
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #0f172a;">
+      <h2 style="margin-bottom: 12px;">New Demo Booking Request</h2>
+      <p><strong>Full Name:</strong> ${escapeHtml(fullName)}</p>
+      <p><strong>Phone Number:</strong> ${escapeHtml(phoneNumber)}</p>
+      <p><strong>Restaurant Name:</strong> ${escapeHtml(restaurantName)}</p>
+      <p><strong>State:</strong> ${escapeHtml(state)}</p>
+      <p><strong>City:</strong> ${escapeHtml(city)}</p>
+      <p><strong>Email:</strong> ${escapeHtml(email)}</p>
+      <p><strong>Booked At:</strong> ${escapeHtml(bookedAt)}</p>
+      <div style="margin-top: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;">
+        <p style="margin: 0 0 6px;"><strong>Note</strong></p>
+        <p style="margin: 0; white-space: pre-wrap;">${escapeHtml(String(note || '').trim() || 'N/A')}</p>
+      </div>
+    </div>
+  `
+
+  await sendEmail({
+    to,
+    subject,
+    text,
+    html,
+    category: 'demo-booking',
   })
 }

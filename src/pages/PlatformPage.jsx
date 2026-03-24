@@ -60,8 +60,8 @@ export default function PlatformPage() {
             <Link to="/plans">
               <Button className="px-7 py-3">Go to Pricing</Button>
             </Link>
-            <Link to="/trust">
-              <Button variant="secondary" className="px-7 py-3">See Trust Standards</Button>
+            <Link to="/demo">
+              <Button variant="secondary" className="px-7 py-3">Book Demo</Button>
             </Link>
           </div>
         </section>

@@ -4,8 +4,8 @@ import { Link, NavLink } from 'react-router-dom'
 const navItems = [
   { to: '/overview', label: 'Overview' },
   { to: '/platform', label: 'Platform' },
+  { to: '/demo', label: 'Demo' },
   { to: '/plans', label: 'Pricing' },
-  { to: '/trust', label: 'Trust' },
   { to: '/contact', label: 'Contact' },
 ]
 
