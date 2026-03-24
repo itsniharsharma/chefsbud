@@ -80,13 +80,25 @@ export async function createInventorySupplier(req, res, next) {
       address: req.body.address || '',
     })
 
-    await invalidateCacheByTags([`inventory:suppliers:${String(restaurant._id)}`])
+    try {
+      await invalidateCacheByTags([`inventory:suppliers:${String(restaurant._id)}`])
+    } catch (cacheError) {
+      console.warn('[Inventory] Cache invalidation warning for suppliers:', cacheError.message)
+    }
 
     return res.status(201).json(supplier)
   } catch (error) {
     if (error?.code === 11000) {
       return res.status(409).json({ message: 'Supplier already exists' })
     }
+    if (error?.name === 'ValidationError') {
+      const messages = Object.entries(error.errors)
+        .map(([field, err]) => `${field}: ${err.message}`)
+        .join(', ')
+      console.warn('[Inventory] Supplier validation error:', messages)
+      return res.status(400).json({ message: `Validation failed: ${messages}` })
+    }
+    console.error('[Inventory] Error creating supplier:', error.message, error.stack)
     next(error)
   }
 }
@@ -136,13 +148,25 @@ export async function createInventoryItem(req, res, next) {
       defaultUnit: req.body.defaultUnit || 'Unit',
     })
 
-    await invalidateCacheByTags([`inventory:items:${String(restaurant._id)}`])
+    try {
+      await invalidateCacheByTags([`inventory:items:${String(restaurant._id)}`])
+    } catch (cacheError) {
+      console.warn('[Inventory] Cache invalidation warning for items:', cacheError.message)
+    }
 
     return res.status(201).json(item)
   } catch (error) {
     if (error?.code === 11000) {
       return res.status(409).json({ message: 'Item already exists' })
     }
+    if (error?.name === 'ValidationError') {
+      const messages = Object.entries(error.errors)
+        .map(([field, err]) => `${field}: ${err.message}`)
+        .join(', ')
+      console.warn('[Inventory] Item validation error:', messages)
+      return res.status(400).json({ message: `Validation failed: ${messages}` })
+    }
+    console.error('[Inventory] Error creating item:', error.message, error.stack)
     next(error)
   }
 }

@@ -252,16 +252,18 @@ export default function PurchaseForm() {
           </div>
         </MotionSection>
 
-        <MotionSection variants={sectionAnimation} initial="hidden" animate="visible" custom={1} className="mt-5 rounded-2xl border border-rose-100 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-5">
-          <SupplierDropdown
-            suppliers={suppliers}
-            value={form.supplierId}
-            onChange={(nextSupplierId) => setField('supplierId', nextSupplierId)}
-            onCreateSupplier={handleAddSupplier}
-            isCreating={createSupplierMutation.isPending}
-          />
-          {suppliersLoading ? <p className="mt-2 text-xs text-slate-500">Loading suppliers...</p> : null}
-        </MotionSection>
+        {form.sourceType === 'Supplier' && (
+          <MotionSection variants={sectionAnimation} initial="hidden" animate="visible" custom={1} className="mt-5 rounded-2xl border border-rose-100 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-5">
+            <SupplierDropdown
+              suppliers={suppliers}
+              value={form.supplierId}
+              onChange={(nextSupplierId) => setField('supplierId', nextSupplierId)}
+              onCreateSupplier={handleAddSupplier}
+              isCreating={createSupplierMutation.isPending}
+            />
+            {suppliersLoading ? <p className="mt-2 text-xs text-slate-500">Loading suppliers...</p> : null}
+          </MotionSection>
+        )}
 
         <MotionSection variants={sectionAnimation} initial="hidden" animate="visible" custom={2} className="mt-5 rounded-2xl border border-rose-100 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.06)] md:p-5">
           <h3 className="mb-4 text-sm font-bold uppercase tracking-[0.12em] text-slate-600">Invoice Details</h3>
