@@ -22,9 +22,8 @@ const inventoryItemSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-inventoryItemSchema.pre('validate', function inventoryItemPreValidate(next) {
+inventoryItemSchema.pre('validate', async function inventoryItemPreValidate() {
   this.normalizedName = normalizeName(this.name)
-  next()
 })
 
 inventoryItemSchema.index({ restaurantId: 1, normalizedName: 1 }, { unique: true })

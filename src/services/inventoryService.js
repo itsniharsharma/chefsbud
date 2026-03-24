@@ -16,4 +16,28 @@ export const inventoryService = {
   createPurchase(payload) {
     return api.post('/inventory/purchases', payload).then((response) => response.data)
   },
+  listPurchaseRows(params = {}) {
+    const sanitizedParams = {}
+    const limit = Number(params?.limit)
+    if (Number.isInteger(limit) && limit > 0) {
+      sanitizedParams.limit = limit
+    }
+
+    const paymentType = String(params?.paymentType || '').trim()
+    if (paymentType) {
+      sanitizedParams.paymentType = paymentType
+    }
+
+    const sourceType = String(params?.sourceType || '').trim()
+    if (sourceType) {
+      sanitizedParams.sourceType = sourceType
+    }
+
+    return api.get('/inventory/purchases', { params: sanitizedParams }).then((response) => response.data)
+  },
+  updatePurchaseItemRow({ purchaseId, itemIndex, payload }) {
+    return api
+      .patch(`/inventory/purchases/${purchaseId}/items/${itemIndex}`, payload)
+      .then((response) => response.data)
+  },
 }

@@ -7,9 +7,12 @@ import {
   useCreatePurchase,
   useCreateSupplier,
   useInventoryItems,
+  useInventoryPurchaseRows,
   useInventorySuppliers,
+  useUpdateInventoryPurchaseItem,
 } from '../../../hooks/useInventoryPurchaseQueries'
 import PurchaseItemsTable from './PurchaseItemsTable'
+import PurchaseRowsTable from './PurchaseRowsTable'
 import SupplierDropdown from './SupplierDropdown'
 
 const sectionAnimation = {
@@ -40,6 +43,24 @@ function toNumber(value) {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
+function getTodayDateString() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getApiErrorMessage(error, fallback) {
+  const responseData = error?.response?.data
+  const validationErrors = Array.isArray(responseData?.errors) ? responseData.errors : []
+
+  if (validationErrors.length > 0) {
+    const first = validationErrors[0]
+    const fieldName = String(first?.path || first?.param || '').trim()
+    const msg = String(first?.msg || '').trim() || 'Invalid value'
+    return fieldName ? `${fieldName}: ${msg}` : msg
+  }
+
+  return responseData?.message || fallback
+}
+
 export default function PurchaseForm() {
   const navigate = useNavigate()
   const MotionSection = motion.section
@@ -51,13 +72,15 @@ export default function PurchaseForm() {
   const createSupplierMutation = useCreateSupplier({ restaurantId })
   const createItemMutation = useCreateInventoryItem({ restaurantId })
   const createPurchaseMutation = useCreatePurchase({ restaurantId })
+  const updatePurchaseItemMutation = useUpdateInventoryPurchaseItem({ restaurantId })
+  const { data: purchaseRows = [], isLoading: purchaseRowsLoading } = useInventoryPurchaseRows({ restaurantId })
 
   const [statusMessage, setStatusMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [form, setForm] = useState({
     sourceType: 'Supplier',
     supplierId: '',
-    invoiceDate: '',
+    invoiceDate: getTodayDateString(),
     gstNo: '',
     cgst: '',
     igst: '',
@@ -190,6 +213,40 @@ export default function PurchaseForm() {
     setErrorMessage('')
     setStatusMessage('')
 
+    if (form.sourceType === 'Supplier' && !String(form.supplierId || '').trim()) {
+      setErrorMessage('Please select a supplier for source type Supplier.')
+      return
+    }
+
+    if (!String(form.invoiceDate || '').trim()) {
+      setErrorMessage('Please select an invoice date.')
+      return
+    }
+
+    if (!String(form.invoiceNumber || '').trim()) {
+      setErrorMessage('Please enter an invoice number.')
+      return
+    }
+
+    if (!Array.isArray(form.items) || form.items.length === 0) {
+      setErrorMessage('At least one purchase item is required.')
+      return
+    }
+
+    const invalidItemIndex = form.items.findIndex((row) => {
+      const hasItemId = Boolean(String(row?.itemId || '').trim())
+      const quantity = toNumber(row?.quantity)
+      const rate = toNumber(row?.rate)
+      return !hasItemId || quantity <= 0 || rate < 0
+    })
+
+    if (invalidItemIndex >= 0) {
+      setErrorMessage(
+        `Item row ${invalidItemIndex + 1} is invalid. Select item, set quantity > 0, and rate >= 0.`,
+      )
+      return
+    }
+
     const payload = {
       sourceType: form.sourceType,
       supplierId: form.sourceType === 'Supplier' ? form.supplierId || undefined : undefined,
@@ -216,6 +273,8 @@ export default function PurchaseForm() {
       setStatusMessage(`Purchase saved successfully with id ${String(saved?._id || '').slice(-6)}.`)
       setForm((prev) => ({
         ...prev,
+        supplierId: '',
+        invoiceDate: getTodayDateString(),
         invoiceNumber: '',
         gstNo: '',
         cgst: '',
@@ -226,7 +285,19 @@ export default function PurchaseForm() {
         items: [initialRow()],
       }))
     } catch (error) {
-      setErrorMessage(error?.response?.data?.message || 'Failed to save purchase')
+      setErrorMessage(getApiErrorMessage(error, 'Failed to save purchase'))
+    }
+  }
+
+  const onSavePurchaseRow = async ({ purchaseId, itemIndex, payload }) => {
+    setErrorMessage('')
+    setStatusMessage('')
+    try {
+      await updatePurchaseItemMutation.mutateAsync({ purchaseId, itemIndex, payload })
+      setStatusMessage('Purchase row updated successfully.')
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, 'Failed to update purchase row'))
+      throw error
     }
   }
 
@@ -365,6 +436,15 @@ export default function PurchaseForm() {
               {createPurchaseMutation.isPending ? 'Saving...' : 'Save Purchase'}
             </button>
           </div>
+        </MotionSection>
+
+        <MotionSection variants={sectionAnimation} initial="hidden" animate="visible" custom={5} className="mt-5">
+          <PurchaseRowsTable
+            rows={purchaseRows}
+            onSaveRow={onSavePurchaseRow}
+            isSaving={updatePurchaseItemMutation.isPending}
+          />
+          {purchaseRowsLoading ? <p className="mt-2 text-xs text-slate-500">Loading saved purchase rows...</p> : null}
         </MotionSection>
       </div>
     </form>

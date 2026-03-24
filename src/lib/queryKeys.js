@@ -35,6 +35,13 @@ export const queryKeys = {
   inventory: {
     suppliers: (restaurantId) => ['inventory', 'suppliers', restaurantId],
     items: (restaurantId) => ['inventory', 'items', restaurantId],
-    purchases: (restaurantId) => ['inventory', 'purchases', restaurantId],
+    purchases: (restaurantId, filters = {}) => [
+      'inventory',
+      'purchases',
+      restaurantId,
+      String(filters.limit || 100),
+      String(filters.paymentType || ''),
+      String(filters.sourceType || ''),
+    ],
   },
 }

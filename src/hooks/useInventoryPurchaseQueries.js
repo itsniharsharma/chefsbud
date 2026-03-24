@@ -2,6 +2,28 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queryKeys'
 import { inventoryService } from '../services/inventoryService'
 
+function mapPurchaseToRows(purchase) {
+  if (!purchase || !Array.isArray(purchase.items)) return []
+
+  return purchase.items.map((item, itemIndex) => ({
+    purchaseId: purchase._id,
+    itemIndex,
+    invoiceDate: purchase.invoiceDate,
+    invoiceNumber: purchase.invoiceNumber,
+    sourceType: purchase.sourceType,
+    supplierName: purchase.supplierNameSnapshot,
+    paymentType: purchase.paymentType,
+    itemId: item.itemId,
+    itemName: item.itemName,
+    quantity: item.quantity,
+    unit: item.unit,
+    rate: item.rate,
+    amount: item.amount,
+    createdAt: purchase.createdAt,
+    updatedAt: purchase.updatedAt,
+  }))
+}
+
 export function useInventorySuppliers({ restaurantId }) {
   return useQuery({
     queryKey: queryKeys.inventory.suppliers(restaurantId),
@@ -63,8 +85,60 @@ export function useCreatePurchase({ restaurantId }) {
 
   return useMutation({
     mutationFn: (payload) => inventoryService.createPurchase(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.purchases(restaurantId) })
+    onSuccess: (savedPurchase) => {
+      const nextRows = mapPurchaseToRows(savedPurchase)
+      queryClient.setQueryData(
+        queryKeys.inventory.purchases(restaurantId, { limit: 200 }),
+        (current = []) => {
+          const rows = Array.isArray(current) ? current : []
+          const existingKeys = new Set(
+            rows.map((row) => `${String(row?.purchaseId || '')}:${Number(row?.itemIndex || 0)}`),
+          )
+          const dedupedNewRows = nextRows.filter(
+            (row) => !existingKeys.has(`${String(row?.purchaseId || '')}:${Number(row?.itemIndex || 0)}`),
+          )
+          return [...dedupedNewRows, ...rows].slice(0, 200)
+        },
+      )
+    },
+  })
+}
+
+export function useInventoryPurchaseRows({ restaurantId, limit = 200, paymentType = '', sourceType = '' }) {
+  const filters = { limit, paymentType, sourceType }
+
+  return useQuery({
+    queryKey: queryKeys.inventory.purchases(restaurantId, filters),
+    enabled: Boolean(restaurantId),
+    queryFn: () => inventoryService.listPurchaseRows(filters),
+    select: (data) => (Array.isArray(data?.rows) ? data.rows : []),
+    staleTime: 120_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+}
+
+export function useUpdateInventoryPurchaseItem({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ purchaseId, itemIndex, payload }) =>
+      inventoryService.updatePurchaseItemRow({ purchaseId, itemIndex, payload }),
+    onSuccess: (result) => {
+      const nextRow = result?.row
+      if (!nextRow) return
+
+      const queries = queryClient.getQueriesData({ queryKey: ['inventory', 'purchases', restaurantId] })
+      for (const [queryKey] of queries) {
+        queryClient.setQueryData(queryKey, (current = []) => {
+          const rows = Array.isArray(current) ? current : []
+          return rows.map((row) => {
+            const samePurchase = String(row?.purchaseId) === String(nextRow?.purchaseId)
+            const sameIndex = Number(row?.itemIndex) === Number(nextRow?.itemIndex)
+            return samePurchase && sameIndex ? nextRow : row
+          })
+        })
+      }
     },
   })
 }

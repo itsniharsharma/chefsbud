@@ -49,5 +49,6 @@ const inventoryPurchaseSchema = new mongoose.Schema(
 inventoryPurchaseSchema.index({ restaurantId: 1, createdAt: -1 })
 inventoryPurchaseSchema.index({ restaurantId: 1, invoiceDate: -1, _id: -1 })
 inventoryPurchaseSchema.index({ restaurantId: 1, invoiceNumber: 1 })
+inventoryPurchaseSchema.index({ restaurantId: 1, paymentType: 1, sourceType: 1, createdAt: -1 })
 
 export default mongoose.model('InventoryPurchase', inventoryPurchaseSchema)

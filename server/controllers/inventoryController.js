@@ -32,6 +32,15 @@ function parseLimit(value, fallback = 250, max = 500) {
   return Math.min(parsed, max)
 }
 
+function sanitizeEnum(value, allowed = [], fallback = '') {
+  const normalized = String(value || '').trim()
+  return allowed.includes(normalized) ? normalized : fallback
+}
+
+function toObjectId(value) {
+  return String(value || '').trim()
+}
+
 export async function listInventorySuppliers(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
@@ -264,7 +273,206 @@ export async function createInventoryPurchase(req, res, next) {
       .select(purchaseProjection)
       .lean()
 
+    try {
+      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
+    } catch (cacheError) {
+      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+    }
+
     return res.status(201).json(responsePayload)
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function listInventoryPurchaseRows(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const limit = parseLimit(req.query?.limit, 100, 300)
+    const paymentType = sanitizeEnum(req.query?.paymentType, ['Unpaid', 'Paid'])
+    const sourceType = sanitizeEnum(req.query?.sourceType, ['Supplier', 'Restaurant', 'Kitchen'])
+
+    const match = { restaurantId: restaurant._id }
+    if (paymentType) {
+      match.paymentType = paymentType
+    }
+    if (sourceType) {
+      match.sourceType = sourceType
+    }
+
+    const purchaseWindow = Math.min(limit * 4, 1200)
+
+    const rows = await InventoryPurchase.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1, _id: -1 } },
+      { $limit: purchaseWindow },
+      {
+        $project: {
+          _id: 1,
+          invoiceDate: 1,
+          invoiceNumber: 1,
+          sourceType: 1,
+          supplierNameSnapshot: 1,
+          paymentType: 1,
+          items: 1,
+          updatedAt: 1,
+          createdAt: 1,
+        },
+      },
+      { $unwind: { path: '$items', includeArrayIndex: 'itemIndex' } },
+      {
+        $project: {
+          _id: 0,
+          purchaseId: '$_id',
+          itemIndex: '$itemIndex',
+          invoiceDate: '$invoiceDate',
+          invoiceNumber: '$invoiceNumber',
+          sourceType: '$sourceType',
+          supplierName: '$supplierNameSnapshot',
+          paymentType: '$paymentType',
+          itemId: '$items.itemId',
+          itemName: '$items.itemName',
+          quantity: '$items.quantity',
+          unit: '$items.unit',
+          rate: '$items.rate',
+          amount: '$items.amount',
+          updatedAt: '$updatedAt',
+          createdAt: '$createdAt',
+        },
+      },
+      { $limit: limit },
+    ])
+
+    return res.json({ rows })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function updateInventoryPurchaseItem(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const purchaseId = toObjectId(req.params?.purchaseId)
+    const itemIndex = Number(req.params?.itemIndex)
+
+    if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+      return res.status(400).json({ message: 'Invalid item index' })
+    }
+
+    const purchase = await InventoryPurchase.findOne({
+      _id: purchaseId,
+      restaurantId: restaurant._id,
+    }).select(
+      '_id restaurantId sourceType supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount',
+    )
+
+    if (!purchase) {
+      return res.status(404).json({ message: 'Purchase not found' })
+    }
+
+    const currentItems = Array.isArray(purchase.items) ? purchase.items : []
+    if (itemIndex >= currentItems.length) {
+      return res.status(400).json({ message: 'Item row not found for update' })
+    }
+
+    const quantity = req.body?.quantity == null ? currentItems[itemIndex].quantity : Number(req.body.quantity)
+    const rate = req.body?.rate == null ? currentItems[itemIndex].rate : Number(req.body.rate)
+    const unit = String(req.body?.unit || currentItems[itemIndex].unit || 'Unit').trim()
+    const paymentType = String(req.body?.paymentType || purchase.paymentType || 'Unpaid').trim()
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ message: 'Quantity must be greater than 0' })
+    }
+
+    if (!Number.isFinite(rate) || rate < 0) {
+      return res.status(400).json({ message: 'Rate must be greater than or equal to 0' })
+    }
+
+    const draftItems = currentItems.map((row, index) => {
+      if (index !== itemIndex) return row
+      return {
+        itemId: String(row.itemId || ''),
+        itemName: row.itemName,
+        quantity,
+        unit,
+        rate,
+      }
+    })
+
+    const composed = composePurchasePayload({
+      payload: {
+        sourceType: purchase.sourceType,
+        invoiceDate: purchase.invoiceDate,
+        invoiceNumber: purchase.invoiceNumber,
+        gstNo: purchase.gstNo,
+        cgstPercent: purchase.cgstPercent,
+        sgstPercent: purchase.sgstPercent,
+        igstPercent: purchase.igstPercent,
+        deliveryCharge: purchase.deliveryCharge,
+        discountType: purchase.discountType,
+        discountValue: purchase.discountValue,
+        paymentType,
+        items: draftItems,
+      },
+      itemById: new Map(),
+      supplierName: purchase.supplierNameSnapshot,
+    })
+
+    purchase.paymentType = composed.paymentType
+    purchase.items = composed.items
+    purchase.subtotalAmount = composed.subtotalAmount
+    purchase.taxableAmount = composed.taxableAmount
+    purchase.cgstAmount = composed.cgstAmount
+    purchase.sgstAmount = composed.sgstAmount
+    purchase.igstAmount = composed.igstAmount
+    purchase.grandTotalAmount = composed.grandTotalAmount
+    purchase.totalDiscountAmount = composed.totalDiscountAmount
+    purchase.discountType = composed.discountType
+    purchase.discountValue = composed.discountValue
+    purchase.cgstPercent = composed.cgstPercent
+    purchase.sgstPercent = composed.sgstPercent
+    purchase.igstPercent = composed.igstPercent
+    purchase.deliveryCharge = composed.deliveryCharge
+
+    await purchase.save()
+
+    try {
+      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
+    } catch (cacheError) {
+      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+    }
+
+    const updatedRow = purchase.items?.[itemIndex]
+
+    return res.json({
+      purchaseId: purchase._id,
+      itemIndex,
+      row: {
+        purchaseId: purchase._id,
+        itemIndex,
+        invoiceDate: purchase.invoiceDate,
+        invoiceNumber: purchase.invoiceNumber,
+        sourceType: purchase.sourceType,
+        supplierName: purchase.supplierNameSnapshot,
+        paymentType: purchase.paymentType,
+        itemId: updatedRow?.itemId,
+        itemName: updatedRow?.itemName,
+        quantity: updatedRow?.quantity,
+        unit: updatedRow?.unit,
+        rate: updatedRow?.rate,
+        amount: updatedRow?.amount,
+        updatedAt: purchase.updatedAt,
+        createdAt: purchase.createdAt,
+      },
+    })
   } catch (error) {
     next(error)
   }

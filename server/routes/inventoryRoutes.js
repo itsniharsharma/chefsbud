@@ -1,12 +1,15 @@
 import { Router } from 'express'
 import { body } from 'express-validator'
+import { param } from 'express-validator'
 import { query } from 'express-validator'
 import {
   createInventoryItem,
   createInventoryPurchase,
   createInventorySupplier,
+  listInventoryPurchaseRows,
   listInventoryItems,
   listInventorySuppliers,
+  updateInventoryPurchaseItem,
 } from '../controllers/inventoryController.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireActiveBilling } from '../middleware/billing.js'
@@ -103,6 +106,42 @@ router.post(
   ],
   validateRequest,
   createInventoryPurchase,
+)
+
+router.get(
+  '/purchases',
+  [
+    query('limit').optional().isInt({ min: 1, max: 300 }),
+    query('paymentType').optional().isIn(['Unpaid', 'Paid']),
+    query('sourceType').optional().isIn(['Supplier', 'Restaurant', 'Kitchen']),
+  ],
+  validateRequest,
+  cacheResponse({
+    ttlSeconds: 20,
+    keyBuilder: (req) => {
+      const restaurantId = String(req.restaurant?._id || req.user?._id || '')
+      const limit = Number(req.query?.limit || 100)
+      const paymentType = String(req.query?.paymentType || '').trim()
+      const sourceType = String(req.query?.sourceType || '').trim()
+      return `inventory:purchases:${restaurantId}:l:${limit}:p:${paymentType}:s:${sourceType}`
+    },
+    tagsBuilder: (req) => [`inventory:purchases:${String(req.restaurant?._id || req.user?._id || '')}`],
+  }),
+  listInventoryPurchaseRows,
+)
+
+router.patch(
+  '/purchases/:purchaseId/items/:itemIndex',
+  [
+    param('purchaseId').isMongoId(),
+    param('itemIndex').isInt({ min: 0, max: 999 }),
+    body('quantity').optional().isFloat({ min: 0.0001, max: 100000000 }),
+    body('rate').optional().isFloat({ min: 0, max: 100000000 }),
+    body('unit').optional().isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet']),
+    body('paymentType').optional().isIn(['Unpaid', 'Paid']),
+  ],
+  validateRequest,
+  updateInventoryPurchaseItem,
 )
 
 export default router
