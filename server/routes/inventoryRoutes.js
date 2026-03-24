@@ -6,6 +6,7 @@ import {
   createInventoryItem,
   createInventoryPurchase,
   createInventorySupplier,
+  deleteInventoryPurchaseItem,
   listInventoryPurchaseRows,
   listInventoryItems,
   listInventorySuppliers,
@@ -142,6 +143,13 @@ router.patch(
   ],
   validateRequest,
   updateInventoryPurchaseItem,
+)
+
+router.delete(
+  '/purchases/:purchaseId/items/:itemIndex',
+  [param('purchaseId').isMongoId(), param('itemIndex').isInt({ min: 0, max: 999 })],
+  validateRequest,
+  deleteInventoryPurchaseItem,
 )
 
 export default router

@@ -477,3 +477,114 @@ export async function updateInventoryPurchaseItem(req, res, next) {
     next(error)
   }
 }
+
+export async function deleteInventoryPurchaseItem(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const purchaseId = toObjectId(req.params?.purchaseId)
+    const itemIndex = Number(req.params?.itemIndex)
+
+    if (!Number.isInteger(itemIndex) || itemIndex < 0) {
+      return res.status(400).json({ message: 'Invalid item index' })
+    }
+
+    const purchase = await InventoryPurchase.findOne({
+      _id: purchaseId,
+      restaurantId: restaurant._id,
+    }).select(
+      '_id restaurantId sourceType supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount',
+    )
+
+    if (!purchase) {
+      return res.status(404).json({ message: 'Purchase not found' })
+    }
+
+    const currentItems = Array.isArray(purchase.items) ? purchase.items : []
+    if (itemIndex >= currentItems.length) {
+      return res.status(400).json({ message: 'Item row not found for deletion' })
+    }
+
+    const remainingItems = currentItems
+      .filter((_row, index) => index !== itemIndex)
+      .map((row) => ({
+        itemId: String(row.itemId || ''),
+        itemName: String(row.itemName || '').trim(),
+        quantity: Number(row.quantity || 0),
+        unit: String(row.unit || 'Unit').trim() || 'Unit',
+        rate: Number(row.rate || 0),
+      }))
+
+    if (remainingItems.length === 0) {
+      await InventoryPurchase.deleteOne({ _id: purchase._id, restaurantId: restaurant._id })
+
+      try {
+        await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
+      } catch (cacheError) {
+        console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+      }
+
+      return res.json({
+        deleted: true,
+        purchaseDeleted: true,
+        purchaseId: purchase._id,
+        itemIndex,
+      })
+    }
+
+    const composed = composePurchasePayload({
+      payload: {
+        sourceType: purchase.sourceType,
+        invoiceDate: purchase.invoiceDate,
+        invoiceNumber: purchase.invoiceNumber,
+        gstNo: purchase.gstNo,
+        cgstPercent: purchase.cgstPercent,
+        sgstPercent: purchase.sgstPercent,
+        igstPercent: purchase.igstPercent,
+        deliveryCharge: purchase.deliveryCharge,
+        discountType: purchase.discountType,
+        discountValue: purchase.discountValue,
+        paymentType: purchase.paymentType,
+        items: remainingItems,
+      },
+      itemById: new Map(),
+      supplierName: purchase.supplierNameSnapshot,
+    })
+
+    purchase.items = composed.items
+    purchase.subtotalAmount = composed.subtotalAmount
+    purchase.taxableAmount = composed.taxableAmount
+    purchase.cgstAmount = composed.cgstAmount
+    purchase.sgstAmount = composed.sgstAmount
+    purchase.igstAmount = composed.igstAmount
+    purchase.grandTotalAmount = composed.grandTotalAmount
+    purchase.totalDiscountAmount = composed.totalDiscountAmount
+    purchase.discountType = composed.discountType
+    purchase.discountValue = composed.discountValue
+    purchase.cgstPercent = composed.cgstPercent
+    purchase.sgstPercent = composed.sgstPercent
+    purchase.igstPercent = composed.igstPercent
+    purchase.deliveryCharge = composed.deliveryCharge
+
+    await purchase.save()
+
+    try {
+      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
+    } catch (cacheError) {
+      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+    }
+
+    return res.json({
+      deleted: true,
+      purchaseDeleted: false,
+      purchaseId: purchase._id,
+      itemIndex,
+      remainingItemCount: purchase.items.length,
+    })
+  } catch (error) {
+    next(error)
+  }
+}

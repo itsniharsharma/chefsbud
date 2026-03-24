@@ -1,4 +1,4 @@
-import { Pencil, Save, X } from 'lucide-react'
+import { Pencil, Save, Trash2, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 function toNumber(value) {
@@ -24,7 +24,9 @@ function rowKey(row) {
 export default function PurchaseRowsTable({
   rows = [],
   onSaveRow,
+  onDeleteRow,
   isSaving = false,
+  isDeleting = false,
 }) {
   const [editingKey, setEditingKey] = useState('')
   const [draft, setDraft] = useState({ quantity: '0', rate: '0', unit: 'Unit', paymentType: 'Unpaid' })
@@ -62,6 +64,21 @@ export default function PurchaseRowsTable({
       },
     })
     setEditingKey('')
+  }
+
+  const deleteRow = async (row) => {
+    if (!onDeleteRow) return
+    const canDelete = window.confirm('Delete this purchase item row permanently? This will remove it from database.')
+    if (!canDelete) return
+
+    await onDeleteRow({
+      purchaseId: String(row?.purchaseId || ''),
+      itemIndex: Number(row?.itemIndex || 0),
+    })
+
+    if (editingKey === rowKey(row)) {
+      cancelEdit()
+    }
   }
 
   return (
@@ -199,21 +216,43 @@ export default function PurchaseRowsTable({
                           <button
                             type="button"
                             onClick={cancelEdit}
+                            disabled={isDeleting}
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700"
                           >
                             <X size={13} />
                             Cancel
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteRow(row)}
+                            disabled={isSaving || isDeleting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-600 bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            <Trash2 size={13} />
+                            {isDeleting ? 'Deleting' : 'Delete'}
+                          </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => startEdit(row)}
-                          className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700"
-                        >
-                          <Pencil size={13} />
-                          Edit
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => startEdit(row)}
+                            disabled={isDeleting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            <Pencil size={13} />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteRow(row)}
+                            disabled={isDeleting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-600 bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            <Trash2 size={13} />
+                            {isDeleting ? 'Deleting' : 'Delete'}
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

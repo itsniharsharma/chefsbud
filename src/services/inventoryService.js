@@ -40,4 +40,9 @@ export const inventoryService = {
       .patch(`/inventory/purchases/${purchaseId}/items/${itemIndex}`, payload)
       .then((response) => response.data)
   },
+  deletePurchaseItemRow({ purchaseId, itemIndex }) {
+    return api
+      .delete(`/inventory/purchases/${purchaseId}/items/${itemIndex}`)
+      .then((response) => response.data)
+  },
 }

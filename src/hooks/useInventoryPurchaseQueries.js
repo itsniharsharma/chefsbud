@@ -142,3 +142,38 @@ export function useUpdateInventoryPurchaseItem({ restaurantId }) {
     },
   })
 }
+
+export function useDeleteInventoryPurchaseItem({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ purchaseId, itemIndex }) =>
+      inventoryService.deletePurchaseItemRow({ purchaseId, itemIndex }),
+    onSuccess: (result, variables) => {
+      const deletedPurchaseId = String(result?.purchaseId || variables?.purchaseId || '')
+      const deletedItemIndex = Number(result?.itemIndex ?? variables?.itemIndex ?? -1)
+      if (!deletedPurchaseId || deletedItemIndex < 0) return
+
+      const queries = queryClient.getQueriesData({ queryKey: ['inventory', 'purchases', restaurantId] })
+      for (const [queryKey] of queries) {
+        queryClient.setQueryData(queryKey, (current = []) => {
+          const rows = Array.isArray(current) ? current : []
+
+          return rows
+            .filter((row) => {
+              const samePurchase = String(row?.purchaseId) === deletedPurchaseId
+              const sameIndex = Number(row?.itemIndex) === deletedItemIndex
+              return !(samePurchase && sameIndex)
+            })
+            .map((row) => {
+              const samePurchase = String(row?.purchaseId) === deletedPurchaseId
+              const index = Number(row?.itemIndex)
+              if (!samePurchase || index < 0) return row
+              if (index <= deletedItemIndex) return row
+              return { ...row, itemIndex: index - 1 }
+            })
+        })
+      }
+    },
+  })
+}

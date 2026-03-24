@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../../hooks/useAuth'
 import {
+  useDeleteInventoryPurchaseItem,
   useCreateInventoryItem,
   useCreatePurchase,
   useCreateSupplier,
@@ -73,6 +74,7 @@ export default function PurchaseForm() {
   const createItemMutation = useCreateInventoryItem({ restaurantId })
   const createPurchaseMutation = useCreatePurchase({ restaurantId })
   const updatePurchaseItemMutation = useUpdateInventoryPurchaseItem({ restaurantId })
+  const deletePurchaseItemMutation = useDeleteInventoryPurchaseItem({ restaurantId })
   const { data: purchaseRows = [], isLoading: purchaseRowsLoading } = useInventoryPurchaseRows({ restaurantId })
 
   const [statusMessage, setStatusMessage] = useState('')
@@ -301,6 +303,18 @@ export default function PurchaseForm() {
     }
   }
 
+  const onDeletePurchaseRow = async ({ purchaseId, itemIndex }) => {
+    setErrorMessage('')
+    setStatusMessage('')
+    try {
+      await deletePurchaseItemMutation.mutateAsync({ purchaseId, itemIndex })
+      setStatusMessage('Purchase row deleted successfully.')
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error, 'Failed to delete purchase row'))
+      throw error
+    }
+  }
+
   return (
     <form onSubmit={onSubmit} className="space-y-5">
       <div className="rounded-2xl border border-rose-100 bg-[linear-gradient(165deg,#ffffff_0%,#fff8f9_72%,#ffffff_100%)] p-6 shadow-[0_18px_36px_rgba(15,23,42,0.08)] md:p-8">
@@ -443,6 +457,8 @@ export default function PurchaseForm() {
             rows={purchaseRows}
             onSaveRow={onSavePurchaseRow}
             isSaving={updatePurchaseItemMutation.isPending}
+            onDeleteRow={onDeletePurchaseRow}
+            isDeleting={deletePurchaseItemMutation.isPending}
           />
           {purchaseRowsLoading ? <p className="mt-2 text-xs text-slate-500">Loading saved purchase rows...</p> : null}
         </MotionSection>
