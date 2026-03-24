@@ -1,0 +1,108 @@
+import { Router } from 'express'
+import { body } from 'express-validator'
+import { query } from 'express-validator'
+import {
+  createInventoryItem,
+  createInventoryPurchase,
+  createInventorySupplier,
+  listInventoryItems,
+  listInventorySuppliers,
+} from '../controllers/inventoryController.js'
+import { requireAuth } from '../middleware/auth.js'
+import { requireActiveBilling } from '../middleware/billing.js'
+import { validateRequest } from '../middleware/validateRequest.js'
+import { cacheResponse } from '../services/responseCache.js'
+
+const router = Router()
+
+router.use(requireAuth, requireActiveBilling)
+
+router.get(
+  '/suppliers',
+  [
+    query('q').optional().isString().trim().isLength({ max: 120 }),
+    query('limit').optional().isInt({ min: 1, max: 500 }),
+  ],
+  validateRequest,
+  cacheResponse({
+    ttlSeconds: 30,
+    keyBuilder: (req) => {
+      const restaurantId = String(req.restaurant?._id || req.user?._id || '')
+      const q = String(req.query?.q || '').trim().toLowerCase()
+      const limit = Number(req.query?.limit || 250)
+      return `inventory:suppliers:${restaurantId}:q:${q}:l:${limit}`
+    },
+    tagsBuilder: (req) => [
+      `inventory:suppliers:${String(req.restaurant?._id || req.user?._id || '')}`,
+    ],
+  }),
+  listInventorySuppliers,
+)
+router.post(
+  '/suppliers',
+  [
+    body('name').isString().trim().isLength({ min: 2, max: 160 }),
+    body('gstNo').optional().isString().trim().isLength({ max: 32 }),
+    body('phone').optional().isString().trim().isLength({ max: 20 }),
+    body('email').optional().isString().trim().isLength({ max: 160 }),
+    body('address').optional().isString().trim().isLength({ max: 400 }),
+  ],
+  validateRequest,
+  createInventorySupplier,
+)
+
+router.get(
+  '/items',
+  [
+    query('q').optional().isString().trim().isLength({ max: 120 }),
+    query('limit').optional().isInt({ min: 1, max: 500 }),
+  ],
+  validateRequest,
+  cacheResponse({
+    ttlSeconds: 30,
+    keyBuilder: (req) => {
+      const restaurantId = String(req.restaurant?._id || req.user?._id || '')
+      const q = String(req.query?.q || '').trim().toLowerCase()
+      const limit = Number(req.query?.limit || 250)
+      return `inventory:items:${restaurantId}:q:${q}:l:${limit}`
+    },
+    tagsBuilder: (req) => [`inventory:items:${String(req.restaurant?._id || req.user?._id || '')}`],
+  }),
+  listInventoryItems,
+)
+router.post(
+  '/items',
+  [
+    body('name').isString().trim().isLength({ min: 2, max: 160 }),
+    body('defaultUnit').optional().isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet']),
+  ],
+  validateRequest,
+  createInventoryItem,
+)
+
+router.post(
+  '/purchases',
+  [
+    body('sourceType').isIn(['Supplier', 'Restaurant', 'Kitchen']),
+    body('supplierId').optional({ values: 'falsy' }).isMongoId(),
+    body('invoiceDate').isISO8601(),
+    body('invoiceNumber').isString().trim().isLength({ min: 1, max: 80 }),
+    body('gstNo').optional().isString().trim().isLength({ max: 32 }),
+    body('cgstPercent').optional().isFloat({ min: 0, max: 100 }),
+    body('sgstPercent').optional().isFloat({ min: 0, max: 100 }),
+    body('igstPercent').optional().isFloat({ min: 0, max: 100 }),
+    body('deliveryCharge').optional().isFloat({ min: 0, max: 100000000 }),
+    body('discountType').optional().isIn(['Fixed', 'Percentage']),
+    body('discountValue').optional().isFloat({ min: 0, max: 100000000 }),
+    body('paymentType').optional().isIn(['Unpaid', 'Paid']),
+    body('items').isArray({ min: 1, max: 200 }),
+    body('items.*.itemId').isMongoId(),
+    body('items.*.quantity').isFloat({ min: 0.0001, max: 100000000 }),
+    body('items.*.unit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet']),
+    body('items.*.rate').isFloat({ min: 0, max: 100000000 }),
+  ],
+  validateRequest,
+  createInventoryPurchase,
+)
+
+export default router

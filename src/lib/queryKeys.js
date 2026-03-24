@@ -32,4 +32,9 @@ export const queryKeys = {
     tables: (restaurantId) => ['dashboard', 'tables', restaurantId],
     menu: (restaurantId) => ['dashboard', 'menu', restaurantId],
   },
+  inventory: {
+    suppliers: (restaurantId) => ['inventory', 'suppliers', restaurantId],
+    items: (restaurantId) => ['inventory', 'items', restaurantId],
+    purchases: (restaurantId) => ['inventory', 'purchases', restaurantId],
+  },
 }

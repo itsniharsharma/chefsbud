@@ -20,6 +20,9 @@ const OffersPage = lazy(importers.offers)
 const AnalyticsPage = lazy(importers.analytics)
 const RecentOrdersPage = lazy(importers.recentOrders)
 const SettingsPage = lazy(importers.settings)
+const InventoryPage = lazy(importers.inventory)
+const InventoryModulePage = lazy(importers.inventoryModule)
+const AddPurchasePage = lazy(importers.addPurchase)
 const CustomerMenuPage = lazy(importers.customerMenu)
 const CustomerCheckoutPage = lazy(importers.customerCheckout)
 const CustomerStatusPage = lazy(importers.customerStatus)
@@ -90,6 +93,25 @@ function App() {
             <Route path="recent-orders" element={<RecentOrdersPage />} />
             <Route path="billing" element={<Navigate to="/dashboard/recent-orders" replace />} />
             <Route path="settings" element={<SettingsPage />} />
+          </Route>
+
+          <Route
+            path="/inventory"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<InventoryPage />} />
+            <Route path="indent" element={<InventoryModulePage moduleKey="indent" />} />
+            <Route path="wastage" element={<InventoryModulePage moduleKey="wastage" />} />
+            <Route path="stock" element={<InventoryModulePage moduleKey="stock" />} />
+            <Route path="reports" element={<InventoryModulePage moduleKey="reports" />} />
+            <Route path="purchase" element={<InventoryModulePage moduleKey="purchase" />} />
+            <Route path="purchase/add" element={<AddPurchasePage />} />
+            <Route path="conversion" element={<InventoryModulePage moduleKey="conversion" />} />
+            <Route path="request" element={<InventoryModulePage moduleKey="request" />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

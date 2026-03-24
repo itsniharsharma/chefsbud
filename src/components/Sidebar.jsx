@@ -6,6 +6,7 @@ const links = [
   { label: 'Dashboard', to: '/dashboard', roles: ['owner'] },
   { label: 'Orders', to: '/dashboard/orders', roles: ['owner', 'staff'] },
   { label: 'Menu', to: '/dashboard/menu', roles: ['owner', 'staff'] },
+  { label: 'Inventory', to: '/inventory', roles: ['owner', 'staff'] },
   { label: 'Tables', to: '/dashboard/tables', roles: ['owner'] },
   { label: 'Offers (Dev)', to: '/dashboard/offers', roles: ['owner', 'staff'] },
   { label: 'Analytics (Dev)', to: '/dashboard/analytics', roles: ['owner'] },

@@ -9,6 +9,7 @@ import orderRoutes from './routes/orderRoutes.js'
 import offerRoutes from './routes/offerRoutes.js'
 import analyticsRoutes from './routes/analyticsRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
+import inventoryRoutes from './routes/inventoryRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { requestContext } from './middleware/requestContext.js'
 import { securityHeaders } from './middleware/securityHeaders.js'
@@ -89,6 +90,7 @@ app.use('/api/orders', orderRoutes)
 app.use('/api/offers', offerRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/payments', paymentRoutes)
+app.use('/api/inventory', inventoryRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)

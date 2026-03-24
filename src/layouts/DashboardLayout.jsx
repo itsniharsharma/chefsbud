@@ -20,6 +20,15 @@ const titles = {
   '/dashboard/analytics': 'Analytics (Under Development)',
   '/dashboard/recent-orders': 'Recent Orders',
   '/dashboard/settings': 'Settings',
+  '/inventory': 'Inventory',
+  '/inventory/indent': 'Indent Management',
+  '/inventory/wastage': 'Wastage',
+  '/inventory/stock': 'Current Stock',
+  '/inventory/reports': 'Stock Report',
+  '/inventory/purchase': 'Purchase Management',
+  '/inventory/purchase/add': 'Add Purchase',
+  '/inventory/conversion': 'Convert Raw Material',
+  '/inventory/request': 'Request For Purchase',
 }
 
 export default function DashboardLayout() {
@@ -28,6 +37,7 @@ export default function DashboardLayout() {
   const { restaurant, user } = useAuth()
   const queryClient = useQueryClient()
   const isOwner = user?.role === 'owner'
+  const shouldPrefetchDashboardData = location.pathname.startsWith('/dashboard')
 
   useOrderRealtimeSync({
     restaurantId: restaurant?._id,
@@ -35,6 +45,7 @@ export default function DashboardLayout() {
   })
 
   useEffect(() => {
+    if (!shouldPrefetchDashboardData) return
     if (!restaurant?._id || !restaurant?.slug) return
 
     queryClient.prefetchQuery({
@@ -69,7 +80,7 @@ export default function DashboardLayout() {
         queryFn: () => tableService.list(restaurant._id),
       })
     }
-  }, [restaurant?._id, restaurant?.slug, queryClient, isOwner])
+  }, [restaurant?._id, restaurant?.slug, queryClient, isOwner, shouldPrefetchDashboardData])
 
   return (
     <div className="owner-shell">

@@ -15,13 +15,16 @@ export const importers = {
   analytics: () => import('../pages/AnalyticsPage'),
   recentOrders: () => import('../pages/RecentOrdersPage'),
   settings: () => import('../pages/SettingsPage'),
+  inventory: () => import('../pages/InventoryPage'),
+  inventoryModule: () => import('../pages/InventoryModulePage'),
+  addPurchase: () => import('../pages/AddPurchasePage'),
   customerMenu: () => import('../pages/CustomerMenuPage'),
   customerCheckout: () => import('../pages/CustomerCheckoutPage'),
   customerStatus: () => import('../pages/CustomerStatusPage'),
   customerTracking: () => import('../pages/CustomerOrderTrackingPage'),
 }
 
-const dashboardPathImporters = {
+const routePathImporters = {
   '/dashboard': importers.dashboard,
   '/dashboard/orders': importers.orders,
   '/dashboard/menu': importers.menu,
@@ -30,11 +33,20 @@ const dashboardPathImporters = {
   '/dashboard/analytics': importers.analytics,
   '/dashboard/recent-orders': importers.recentOrders,
   '/dashboard/settings': importers.settings,
+  '/inventory': importers.inventory,
+  '/inventory/indent': importers.inventoryModule,
+  '/inventory/wastage': importers.inventoryModule,
+  '/inventory/stock': importers.inventoryModule,
+  '/inventory/reports': importers.inventoryModule,
+  '/inventory/purchase': importers.inventoryModule,
+  '/inventory/purchase/add': importers.addPurchase,
+  '/inventory/conversion': importers.inventoryModule,
+  '/inventory/request': importers.inventoryModule,
 }
 
 export function preloadRouteByPath(path) {
   if (!path) return
-  const importer = dashboardPathImporters[path]
+  const importer = routePathImporters[path]
   if (importer) {
     importer()
   }
@@ -45,6 +57,7 @@ export function warmCriticalRoutes() {
   importers.dashboard()
   importers.orders()
   importers.menu()
+  importers.inventory()
 }
 
 export function warmCustomerRoutes() {
