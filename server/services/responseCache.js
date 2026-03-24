@@ -9,6 +9,7 @@ const MAX_CACHE_ENTRIES = 500
 const MAX_INFLIGHT_MS = 30000
 const MAX_REDIS_TAG_MEMBERSHIP_ENTRIES = 5000
 const REDIS_TAG_REFRESH_BUFFER_MS = 5000
+const REDIS_INVALIDATION_BATCH_SIZE = Math.max(10, Number(process.env.REDIS_INVALIDATION_BATCH_SIZE || 50))
 const CACHE_NS = 'response-cache'
 let requestCounter = 0
 
@@ -175,16 +176,21 @@ async function invalidateRedisByTags(tags) {
   await withRedis(
     'cache_invalidate_tags',
     async (redis) => {
-      for (const tag of tags) {
-        const tagKey = redisTagKey(tag)
-        const keys = await redis.smembers(tagKey)
-        const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : []
+      for (let index = 0; index < tags.length; index += REDIS_INVALIDATION_BATCH_SIZE) {
+        const batch = tags.slice(index, index + REDIS_INVALIDATION_BATCH_SIZE)
+        await Promise.all(
+          batch.map(async (tag) => {
+            const tagKey = redisTagKey(tag)
+            const keys = await redis.smembers(tagKey)
+            const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : []
 
-        if (normalizedKeys.length > 0) {
-          await redis.del(...normalizedKeys)
-        }
+            if (normalizedKeys.length > 0) {
+              await redis.del(...normalizedKeys)
+            }
 
-        await redis.del(tagKey)
+            await redis.del(tagKey)
+          }),
+        )
       }
     },
     null,

@@ -16,12 +16,64 @@ import { logger } from '../utils/logger.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
+const ORDER_STATUS_ALLOWED = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
+const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
 
 const orderListProjection =
   '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
+function respondRestaurantNotFound(res) {
+  return res.status(404).json({ message: 'Restaurant not found' })
+}
+
+function buildOrderCacheTags({ restaurant, tableNumber, orderId, includeAnalytics = false }) {
+  const tags = [
+    `orders:board:${String(restaurant._id)}`,
+    `orders:table:${restaurant.slug}:${tableNumber}`,
+    `orders:order:${String(orderId)}`,
+  ]
+
+  if (includeAnalytics) {
+    tags.unshift(`analytics:${String(restaurant._id)}`)
+  }
+
+  return tags
+}
+
+function publishOrderChange({ restaurantId, type, orderId, extra = {} }) {
+  emitOrderChanged(restaurantId, {
+    type,
+    orderId: String(orderId),
+    ...extra,
+  })
+}
+
+function runNonCriticalTask(taskName, taskFn) {
+  if (typeof taskFn !== 'function') return
+
+  setImmediate(async () => {
+    try {
+      await taskFn()
+    } catch (error) {
+      logger.warn('non_critical_task_failed', {
+        taskName,
+        message: error?.message || 'unknown_error',
+      })
+    }
+  })
+}
+
+async function runMetricsTask(taskName, taskFn) {
+  if (!METRICS_ASYNC_ENABLED) {
+    return taskFn()
+  }
+
+  runNonCriticalTask(taskName, taskFn)
+  return null
 }
 
 function buildOrderQuery({ restaurantId, view, status, scope }) {
@@ -116,7 +168,7 @@ export async function getOrders(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
+      return respondRestaurantNotFound(res)
     }
 
     if (String(restaurant._id) !== req.params.restaurantId) {
@@ -153,12 +205,11 @@ export async function updateOrderStatus(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
+      return respondRestaurantNotFound(res)
     }
 
     const { orderStatus } = req.body
-    const allowed = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
-    if (!allowed.includes(orderStatus)) {
+    if (!ORDER_STATUS_ALLOWED.includes(orderStatus)) {
       return res.status(400).json({ message: 'Invalid order status' })
     }
 
@@ -184,7 +235,7 @@ export async function updateOrderStatus(req, res, next) {
     }
 
     if (wasCompleted && !isCompleted && existingOrder.analyticsTrackedAt) {
-      await revertCompletedOrderAnalytics(existingOrder)
+      await runMetricsTask('revert_completed_order_analytics', () => revertCompletedOrderAnalytics(existingOrder))
     }
 
     const order = await Order.findOneAndUpdate(
@@ -194,19 +245,22 @@ export async function updateOrderStatus(req, res, next) {
     )
 
     if (isCompleted && !wasCompleted) {
-      await syncCompletedOrderAnalytics(order._id)
+      await runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id))
     }
 
-    invalidateCacheByTags([
-      `analytics:${String(restaurant._id)}`,
-      `orders:board:${String(restaurant._id)}`,
-      `orders:table:${restaurant.slug}:${order.tableNumber}`,
-      `orders:order:${String(order._id)}`,
-    ])
-    emitOrderChanged(restaurant._id, {
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant,
+        tableNumber: order.tableNumber,
+        orderId: order._id,
+        includeAnalytics: true,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: restaurant._id,
       type: 'status-updated',
-      orderId: String(order._id),
-      orderStatus: order.orderStatus,
+      orderId: order._id,
+      extra: { orderStatus: order.orderStatus },
     })
     return res.json(order)
   } catch (error) {
@@ -218,12 +272,10 @@ export async function deleteOrder(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
+      return respondRestaurantNotFound(res)
     }
 
-    const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
-      .select('_id orderStatus tableNumber createdAt')
-      .lean()
+    const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id }).lean()
 
     if (!order) {
       return res.status(404).json({ message: 'Order not found' })
@@ -233,26 +285,30 @@ export async function deleteOrder(req, res, next) {
       return res.status(400).json({ message: 'Order can be deleted only after Served or Completed' })
     }
 
-    const fullOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id }).lean()
-    if (fullOrder?.analyticsTrackedAt) {
-      await revertCompletedOrderAnalytics(fullOrder)
+    if (order.analyticsTrackedAt) {
+      await runMetricsTask('revert_completed_order_analytics_on_delete', () => revertCompletedOrderAnalytics(order))
     }
 
     await Order.deleteOne({ _id: req.params.orderId, restaurantId: restaurant._id })
-    await rebuildOrderMetricsForDate({
-      restaurantId: restaurant._id,
-      date: order.createdAt || new Date(),
-    })
+    await runMetricsTask('rebuild_order_metrics_on_delete', () =>
+      rebuildOrderMetricsForDate({
+        restaurantId: restaurant._id,
+        date: order.createdAt || new Date(),
+      }),
+    )
 
-    invalidateCacheByTags([
-      `analytics:${String(restaurant._id)}`,
-      `orders:board:${String(restaurant._id)}`,
-      `orders:table:${restaurant.slug}:${order.tableNumber}`,
-      `orders:order:${String(req.params.orderId)}`,
-    ])
-    emitOrderChanged(restaurant._id, {
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant,
+        tableNumber: order.tableNumber,
+        orderId: req.params.orderId,
+        includeAnalytics: true,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: restaurant._id,
       type: 'deleted',
-      orderId: String(req.params.orderId),
+      orderId: req.params.orderId,
     })
     return res.json({ success: true, deleted: true })
   } catch (error) {
@@ -289,21 +345,26 @@ export async function createOrder(req, res, next) {
       hiddenFromActive: false,
     })
 
-    await rebuildOrderMetricsForDate({
-      restaurantId: draft.restaurant._id,
-      date: order.createdAt || new Date(),
-    })
+    await runMetricsTask('rebuild_order_metrics_on_create', () =>
+      rebuildOrderMetricsForDate({
+        restaurantId: draft.restaurant._id,
+        date: order.createdAt || new Date(),
+      }),
+    )
 
-    invalidateCacheByTags([`analytics:${String(draft.restaurant._id)}`])
-    invalidateCacheByTags([
-      `orders:board:${String(draft.restaurant._id)}`,
-      `orders:table:${restaurantSlug}:${draft.tableNumber}`,
-      `orders:order:${String(order._id)}`,
-    ])
-    emitOrderChanged(draft.restaurant._id, {
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant: draft.restaurant,
+        tableNumber: draft.tableNumber,
+        orderId: order._id,
+        includeAnalytics: true,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: draft.restaurant._id,
       type: 'created',
-      orderId: String(order._id),
-      orderStatus: order.orderStatus,
+      orderId: order._id,
+      extra: { orderStatus: order.orderStatus },
     })
 
     return res.status(201).json(order)
@@ -364,7 +425,7 @@ export async function markOrderKotPrinted(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
+      return respondRestaurantNotFound(res)
     }
 
     const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
@@ -443,16 +504,18 @@ export async function markOrderKotPrinted(req, res, next) {
       })
     }
 
-    invalidateCacheByTags([
-      `orders:board:${String(restaurant._id)}`,
-      `orders:table:${restaurant.slug}:${order.tableNumber}`,
-      `orders:order:${String(order._id)}`,
-    ])
-    emitOrderChanged(restaurant._id, {
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant,
+        tableNumber: order.tableNumber,
+        orderId: order._id,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: restaurant._id,
       type: 'kot-printed',
-      orderId: String(order._id),
-      kotPrinted: true,
-      kotPrintedAt: order.kotPrintedAt,
+      orderId: order._id,
+      extra: { kotPrinted: true, kotPrintedAt: order.kotPrintedAt },
     })
 
     return res.json(order)
@@ -465,7 +528,7 @@ export async function markOrderBillPrinted(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
-      return res.status(404).json({ message: 'Restaurant not found' })
+      return respondRestaurantNotFound(res)
     }
 
     const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
@@ -509,16 +572,18 @@ export async function markOrderBillPrinted(req, res, next) {
       { new: true, runValidators: true },
     )
 
-    invalidateCacheByTags([
-      `orders:board:${String(restaurant._id)}`,
-      `orders:table:${restaurant.slug}:${order.tableNumber}`,
-      `orders:order:${String(order._id)}`,
-    ])
-    emitOrderChanged(restaurant._id, {
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant,
+        tableNumber: order.tableNumber,
+        orderId: order._id,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: restaurant._id,
       type: 'bill-printed',
-      orderId: String(order._id),
-      billPrinted: true,
-      billPrintedAt: order.billPrintedAt,
+      orderId: order._id,
+      extra: { billPrinted: true, billPrintedAt: order.billPrintedAt },
     })
 
     return res.json(order)

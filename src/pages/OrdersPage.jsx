@@ -33,6 +33,13 @@ export default function OrdersPage() {
   })
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
+  const boardQueryKey = ['dashboard', 'orders-board', restaurant?._id]
+
+  const restorePreviousBoards = (previousBoards = []) => {
+    for (const [key, value] of previousBoards) {
+      queryClient.setQueryData(key, value)
+    }
+  }
 
   const applyOrderUpdateToBoard = (boardData, orderId, nextStatus) => {
     if (!boardData) return boardData
@@ -98,12 +105,10 @@ export default function OrdersPage() {
   const updateStatusMutation = useMutation({
     mutationFn: ({ id, status }) => orderService.updateStatus(id, status),
     onMutate: async ({ id, status }) => {
-      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
-      const previousBoards = queryClient.getQueriesData({
-        queryKey: ['dashboard', 'orders-board', restaurant?._id],
-      })
+      await queryClient.cancelQueries({ queryKey: boardQueryKey })
+      const previousBoards = queryClient.getQueriesData({ queryKey: boardQueryKey })
 
-      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+      queryClient.setQueriesData({ queryKey: boardQueryKey }, (boardData) =>
         applyOrderUpdateToBoard(boardData, id, status),
       )
 
@@ -115,9 +120,7 @@ export default function OrdersPage() {
     },
     onError: (requestError, _variables, context) => {
       if (context?.previousBoards) {
-        for (const [key, value] of context.previousBoards) {
-          queryClient.setQueryData(key, value)
-        }
+        restorePreviousBoards(context.previousBoards)
       }
       setError(requestError?.response?.data?.message || 'Failed to update status')
     },
@@ -126,12 +129,10 @@ export default function OrdersPage() {
   const markKotPrintedMutation = useMutation({
     mutationFn: ({ id, payload }) => orderService.markKotPrinted(id, payload),
     onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
-      const previousBoards = queryClient.getQueriesData({
-        queryKey: ['dashboard', 'orders-board', restaurant?._id],
-      })
+      await queryClient.cancelQueries({ queryKey: boardQueryKey })
+      const previousBoards = queryClient.getQueriesData({ queryKey: boardQueryKey })
 
-      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+      queryClient.setQueriesData({ queryKey: boardQueryKey }, (boardData) =>
         applyKotPrintedUpdateToBoard(boardData, id),
       )
 
@@ -143,9 +144,7 @@ export default function OrdersPage() {
     },
     onError: (requestError, _variables, context) => {
       if (context?.previousBoards) {
-        for (const [key, value] of context.previousBoards) {
-          queryClient.setQueryData(key, value)
-        }
+        restorePreviousBoards(context.previousBoards)
       }
       setError(requestError?.response?.data?.message || 'Failed to update KOT status')
     },
@@ -154,12 +153,10 @@ export default function OrdersPage() {
   const markBillPrintedMutation = useMutation({
     mutationFn: ({ id, payload }) => orderService.markBillPrinted(id, payload),
     onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ['dashboard', 'orders-board', restaurant?._id] })
-      const previousBoards = queryClient.getQueriesData({
-        queryKey: ['dashboard', 'orders-board', restaurant?._id],
-      })
+      await queryClient.cancelQueries({ queryKey: boardQueryKey })
+      const previousBoards = queryClient.getQueriesData({ queryKey: boardQueryKey })
 
-      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+      queryClient.setQueriesData({ queryKey: boardQueryKey }, (boardData) =>
         applyUpdatedOrderToBoard(boardData, {
           _id: id,
           billPrinted: true,
@@ -171,16 +168,14 @@ export default function OrdersPage() {
     },
     onSuccess: (updatedOrder) => {
       setError('')
-      queryClient.setQueriesData({ queryKey: ['dashboard', 'orders-board', restaurant?._id] }, (boardData) =>
+      queryClient.setQueriesData({ queryKey: boardQueryKey }, (boardData) =>
         applyUpdatedOrderToBoard(boardData, updatedOrder),
       )
       refreshBoard()
     },
     onError: (requestError, _variables, context) => {
       if (context?.previousBoards) {
-        for (const [key, value] of context.previousBoards) {
-          queryClient.setQueryData(key, value)
-        }
+        restorePreviousBoards(context.previousBoards)
       }
       setError(requestError?.response?.data?.message || 'Failed to update bill print status')
     },
