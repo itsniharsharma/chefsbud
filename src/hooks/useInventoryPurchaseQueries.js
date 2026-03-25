@@ -2,6 +2,35 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queryKeys'
 import { inventoryService } from '../services/inventoryService'
 
+function withListContainer(current, listKey, fallback = []) {
+  const baseList = Array.isArray(fallback) ? fallback : []
+
+  if (Array.isArray(current)) {
+    return {
+      list: current,
+      write: (nextList) => (Array.isArray(nextList) ? nextList : baseList),
+    }
+  }
+
+  if (current && typeof current === 'object') {
+    const list = Array.isArray(current[listKey]) ? current[listKey] : baseList
+    return {
+      list,
+      write: (nextList) => ({
+        ...current,
+        [listKey]: Array.isArray(nextList) ? nextList : baseList,
+      }),
+    }
+  }
+
+  return {
+    list: baseList,
+    write: (nextList) => ({
+      [listKey]: Array.isArray(nextList) ? nextList : baseList,
+    }),
+  }
+}
+
 function mapPurchaseToRows(purchase) {
   if (!purchase || !Array.isArray(purchase.items)) return []
 
@@ -54,11 +83,13 @@ export function useCreateSupplier({ restaurantId }) {
   return useMutation({
     mutationFn: (payload) => inventoryService.createSupplier(payload),
     onSuccess: (created) => {
-      queryClient.setQueryData(queryKeys.inventory.suppliers(restaurantId), (current = []) => {
-        const items = Array.isArray(current) ? current : []
+      queryClient.setQueryData(queryKeys.inventory.suppliers(restaurantId), (current) => {
+        const { list, write } = withListContainer(current, 'suppliers')
+        const items = Array.isArray(list) ? list : []
         const exists = items.some((item) => String(item?._id) === String(created?._id))
-        if (exists) return items
-        return [created, ...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
+        if (exists) return write(items)
+        const nextItems = [created, ...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
+        return write(nextItems)
       })
     },
   })
@@ -70,11 +101,13 @@ export function useCreateInventoryItem({ restaurantId }) {
   return useMutation({
     mutationFn: (payload) => inventoryService.createItem(payload),
     onSuccess: (created) => {
-      queryClient.setQueryData(queryKeys.inventory.items(restaurantId), (current = []) => {
-        const items = Array.isArray(current) ? current : []
+      queryClient.setQueryData(queryKeys.inventory.items(restaurantId), (current) => {
+        const { list, write } = withListContainer(current, 'items')
+        const items = Array.isArray(list) ? list : []
         const exists = items.some((item) => String(item?._id) === String(created?._id))
-        if (exists) return items
-        return [created, ...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
+        if (exists) return write(items)
+        const nextItems = [created, ...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
+        return write(nextItems)
       })
     },
   })
@@ -87,19 +120,26 @@ export function useCreatePurchase({ restaurantId }) {
     mutationFn: (payload) => inventoryService.createPurchase(payload),
     onSuccess: (savedPurchase) => {
       const nextRows = mapPurchaseToRows(savedPurchase)
-      queryClient.setQueryData(
-        queryKeys.inventory.purchases(restaurantId, { limit: 200 }),
-        (current = []) => {
-          const rows = Array.isArray(current) ? current : []
+
+      const queries = queryClient.getQueriesData({ queryKey: ['inventory', 'purchases', restaurantId] })
+      for (const [queryKey] of queries) {
+        queryClient.setQueryData(queryKey, (current) => {
+          const { list, write } = withListContainer(current, 'rows')
+          const rows = Array.isArray(list) ? list : []
           const existingKeys = new Set(
             rows.map((row) => `${String(row?.purchaseId || '')}:${Number(row?.itemIndex || 0)}`),
           )
           const dedupedNewRows = nextRows.filter(
             (row) => !existingKeys.has(`${String(row?.purchaseId || '')}:${Number(row?.itemIndex || 0)}`),
           )
-          return [...dedupedNewRows, ...rows].slice(0, 200)
-        },
-      )
+          return write([...dedupedNewRows, ...rows].slice(0, 200))
+        })
+      }
+
+      queryClient.invalidateQueries({
+        queryKey: ['inventory', 'purchases', restaurantId],
+        refetchType: 'active',
+      })
     },
   })
 }
@@ -130,13 +170,16 @@ export function useUpdateInventoryPurchaseItem({ restaurantId }) {
 
       const queries = queryClient.getQueriesData({ queryKey: ['inventory', 'purchases', restaurantId] })
       for (const [queryKey] of queries) {
-        queryClient.setQueryData(queryKey, (current = []) => {
-          const rows = Array.isArray(current) ? current : []
-          return rows.map((row) => {
+        queryClient.setQueryData(queryKey, (current) => {
+          const { list, write } = withListContainer(current, 'rows')
+          const rows = Array.isArray(list) ? list : []
+          const nextRows = rows.map((row) => {
             const samePurchase = String(row?.purchaseId) === String(nextRow?.purchaseId)
             const sameIndex = Number(row?.itemIndex) === Number(nextRow?.itemIndex)
             return samePurchase && sameIndex ? nextRow : row
           })
+
+          return write(nextRows)
         })
       }
     },
@@ -156,10 +199,11 @@ export function useDeleteInventoryPurchaseItem({ restaurantId }) {
 
       const queries = queryClient.getQueriesData({ queryKey: ['inventory', 'purchases', restaurantId] })
       for (const [queryKey] of queries) {
-        queryClient.setQueryData(queryKey, (current = []) => {
-          const rows = Array.isArray(current) ? current : []
+        queryClient.setQueryData(queryKey, (current) => {
+          const { list, write } = withListContainer(current, 'rows')
+          const rows = Array.isArray(list) ? list : []
 
-          return rows
+          const nextRows = rows
             .filter((row) => {
               const samePurchase = String(row?.purchaseId) === deletedPurchaseId
               const sameIndex = Number(row?.itemIndex) === deletedItemIndex
@@ -172,6 +216,8 @@ export function useDeleteInventoryPurchaseItem({ restaurantId }) {
               if (index <= deletedItemIndex) return row
               return { ...row, itemIndex: index - 1 }
             })
+
+          return write(nextRows)
         })
       }
     },
