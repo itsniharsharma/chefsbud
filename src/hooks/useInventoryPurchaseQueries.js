@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queryKeys'
+import { menuService } from '../services/menuService'
 import { inventoryService } from '../services/inventoryService'
 
 function withListContainer(current, listKey, fallback = []) {
@@ -77,6 +78,42 @@ export function useInventoryItems({ restaurantId }) {
   })
 }
 
+export function useInventoryItemStock({ restaurantId, inventoryItemId, source = 'cache' }) {
+  return useQuery({
+    queryKey: queryKeys.inventory.stock(restaurantId, inventoryItemId),
+    enabled: Boolean(restaurantId && inventoryItemId),
+    queryFn: () => inventoryService.getItemStock(inventoryItemId, { source }),
+    staleTime: 10_000,
+    refetchInterval: 10_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+}
+
+export function useInventoryRecipes({ restaurantId }) {
+  return useQuery({
+    queryKey: queryKeys.inventory.recipes(restaurantId),
+    enabled: Boolean(restaurantId),
+    queryFn: () => inventoryService.listRecipes(),
+    select: (data) => (Array.isArray(data?.recipes) ? data.recipes : []),
+    staleTime: 20_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+}
+
+export function useManagedMenuItems({ restaurantId }) {
+  return useQuery({
+    queryKey: ['inventory', 'menu-items', restaurantId],
+    enabled: Boolean(restaurantId),
+    queryFn: () => menuService.getManagedMenu(restaurantId),
+    select: (data) => (Array.isArray(data?.items) ? data.items : []),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+}
+
 export function useCreateSupplier({ restaurantId }) {
   const queryClient = useQueryClient()
 
@@ -109,6 +146,74 @@ export function useCreateInventoryItem({ restaurantId }) {
         const nextItems = [created, ...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')))
         return write(nextItems)
       })
+    },
+  })
+}
+
+export function useUpdateInventoryItemDefaultUnit({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ inventoryItemId, payload }) =>
+      inventoryService.updateItemDefaultUnit(inventoryItemId, payload),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(queryKeys.inventory.items(restaurantId), (current) => {
+        const { list, write } = withListContainer(current, 'items')
+        const items = Array.isArray(list) ? list : []
+        const next = items.map((item) =>
+          String(item?._id) === String(updated?._id) ? { ...item, ...updated } : item,
+        )
+        return write(next)
+      })
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'stock', restaurantId], refetchType: 'active' })
+    },
+  })
+}
+
+export function useCreateInventoryWastage({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload) => inventoryService.createWastage(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.items(restaurantId), refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'stock', restaurantId], refetchType: 'active' })
+    },
+  })
+}
+
+export function useCreateInventoryConversion({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload) => inventoryService.createConversion(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.items(restaurantId), refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'stock', restaurantId], refetchType: 'active' })
+    },
+  })
+}
+
+export function useBootstrapInventoryStock({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload) => inventoryService.bootstrapStock(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.items(restaurantId), refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'stock', restaurantId], refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: ['inventory', 'purchases', restaurantId], refetchType: 'active' })
+    },
+  })
+}
+
+export function useUpsertInventoryRecipe({ restaurantId }) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload) => inventoryService.upsertRecipe(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.recipes(restaurantId), refetchType: 'active' })
     },
   })
 }

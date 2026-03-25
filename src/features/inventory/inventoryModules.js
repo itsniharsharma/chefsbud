@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  BookOpen,
   Boxes,
   ClipboardList,
   FileChartColumn,
@@ -50,6 +51,13 @@ export const inventoryModules = [
     description: 'Convert raw -> semi-cooked -> cooked items',
     icon: ArrowRightLeft,
     route: '/inventory/conversion',
+  },
+  {
+    key: 'recipes',
+    title: 'Recipe Builder',
+    description: 'Map menu items to inventory ingredients for auto consumption',
+    icon: BookOpen,
+    route: '/inventory/recipes',
   },
   {
     key: 'request',

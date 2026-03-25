@@ -1,14 +1,53 @@
+import mongoose from 'mongoose'
 import InventoryItem from '../models/InventoryItem.js'
 import InventoryPurchase from '../models/InventoryPurchase.js'
 import InventorySupplier from '../models/InventorySupplier.js'
+import MenuItem from '../models/MenuItem.js'
+import Recipe from '../models/Recipe.js'
+import {
+  addLedgerEntries,
+  bootstrapStockFromSavedPurchases,
+  getCurrentStock,
+} from '../services/inventoryService.js'
 import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const supplierProjection = '_id name gstNo phone email address isActive createdAt updatedAt'
-const itemProjection = '_id name defaultUnit isActive createdAt updatedAt'
+const itemProjection = '_id name defaultUnit currentStock currentStockUnit isActive createdAt updatedAt'
 const purchaseProjection =
   '_id sourceType supplierId supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue totalDiscountAmount paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount createdAt updatedAt'
+
+function purchaseCacheTags(restaurantId) {
+  const id = String(restaurantId)
+  return [`inventory:purchases:${id}`, `inventory:items:${id}`]
+}
+
+async function invalidateInventoryCaches(restaurantId) {
+  try {
+    await invalidateCacheByTags(purchaseCacheTags(restaurantId))
+  } catch (cacheError) {
+    console.warn('[Inventory] Cache invalidation warning:', cacheError.message)
+  }
+}
+
+function applyComposedPurchaseToDoc(purchase, composed) {
+  purchase.paymentType = composed.paymentType
+  purchase.items = composed.items
+  purchase.subtotalAmount = composed.subtotalAmount
+  purchase.taxableAmount = composed.taxableAmount
+  purchase.cgstAmount = composed.cgstAmount
+  purchase.sgstAmount = composed.sgstAmount
+  purchase.igstAmount = composed.igstAmount
+  purchase.grandTotalAmount = composed.grandTotalAmount
+  purchase.totalDiscountAmount = composed.totalDiscountAmount
+  purchase.discountType = composed.discountType
+  purchase.discountValue = composed.discountValue
+  purchase.cgstPercent = composed.cgstPercent
+  purchase.sgstPercent = composed.sgstPercent
+  purchase.igstPercent = composed.igstPercent
+  purchase.deliveryCharge = composed.deliveryCharge
+}
 
 function isValidDate(value) {
   const date = new Date(value)
@@ -39,6 +78,119 @@ function sanitizeEnum(value, allowed = [], fallback = '') {
 
 function toObjectId(value) {
   return String(value || '').trim()
+}
+
+function safeNumber(value, fallback = 0) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
+function round6(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 1_000_000) / 1_000_000
+}
+
+function resolveBaseUnit(unit = 'Unit') {
+  const normalized = String(unit || 'Unit').trim().toLowerCase()
+  if (normalized === 'kg' || normalized === 'gram' || normalized === 'g') return 'g'
+  if (normalized === 'litre' || normalized === 'liter' || normalized === 'ml') return 'ml'
+  return 'unit'
+}
+
+function buildPurchaseLedgerEntries({ restaurantId, purchase, createdBy, referenceType = 'purchase' }) {
+  const rows = Array.isArray(purchase?.items) ? purchase.items : []
+  return rows
+    .map((row, index) => {
+      const itemId = String(row?.itemId || '').trim()
+      const quantity = safeNumber(row?.quantity)
+      const unit = String(row?.unit || '').trim()
+      if (!itemId || quantity <= 0 || !unit) return null
+
+      return {
+        restaurantId,
+        inventoryItemId: itemId,
+        type: 'PURCHASE',
+        quantity,
+        direction: 1,
+        unit,
+        referenceType,
+        referenceId: purchase?._id || null,
+        metadata: {
+          purchaseId: String(purchase?._id || ''),
+          invoiceNumber: String(purchase?.invoiceNumber || ''),
+          sourceType: String(purchase?.sourceType || ''),
+          itemIndex: index,
+        },
+        createdBy,
+        idempotencyKey: purchase?._id
+          ? `purchase:${String(purchase._id)}:item:${itemId}:${index}`
+          : '',
+      }
+    })
+    .filter(Boolean)
+}
+
+function buildPurchaseAdjustmentEntries({
+  restaurantId,
+  purchaseId,
+  oldRow,
+  newRow,
+  itemIndex,
+  createdBy,
+}) {
+  const result = []
+
+  const oldQty = safeNumber(oldRow?.quantity)
+  const newQty = safeNumber(newRow?.quantity)
+
+  if (oldRow?.itemId && oldQty > 0 && oldRow?.unit) {
+    result.push({
+      restaurantId,
+      inventoryItemId: String(oldRow.itemId),
+      type: 'ADJUSTMENT',
+      quantity: oldQty,
+      direction: -1,
+      unit: String(oldRow.unit),
+      referenceType: 'purchase_update',
+      referenceId: purchaseId,
+      metadata: {
+        purchaseId: String(purchaseId || ''),
+        itemIndex,
+        mode: 'revert_old_row',
+      },
+      createdBy,
+    })
+  }
+
+  if (newRow?.itemId && newQty > 0 && newRow?.unit) {
+    result.push({
+      restaurantId,
+      inventoryItemId: String(newRow.itemId),
+      type: 'ADJUSTMENT',
+      quantity: newQty,
+      direction: 1,
+      unit: String(newRow.unit),
+      referenceType: 'purchase_update',
+      referenceId: purchaseId,
+      metadata: {
+        purchaseId: String(purchaseId || ''),
+        itemIndex,
+        mode: 'apply_new_row',
+      },
+      createdBy,
+    })
+  }
+
+  return result
+}
+
+function normalizeRecipeIngredientRows(rows = []) {
+  return rows
+    .map((row) => ({
+      inventoryItemId: String(row?.inventoryItemId || '').trim(),
+      quantity: round6(Math.max(0, safeNumber(row?.quantity))),
+      unit: String(row?.unit || '').trim(),
+    }))
+    .filter((row) => row.inventoryItemId && row.quantity > 0 && row.unit)
 }
 
 export async function listInventorySuppliers(req, res, next) {
@@ -180,6 +332,56 @@ export async function createInventoryItem(req, res, next) {
   }
 }
 
+export async function updateInventoryItemDefaultUnit(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const inventoryItemId = String(req.params?.inventoryItemId || '').trim()
+    const defaultUnit = String(req.body?.defaultUnit || '').trim()
+
+    if (!inventoryItemId) {
+      return res.status(400).json({ message: 'inventoryItemId is required' })
+    }
+
+    if (!defaultUnit) {
+      return res.status(400).json({ message: 'defaultUnit is required' })
+    }
+
+    const item = await InventoryItem.findOne({
+      _id: inventoryItemId,
+      restaurantId: restaurant._id,
+    })
+
+    if (!item) {
+      return res.status(404).json({ message: 'Inventory item not found' })
+    }
+
+    const currentStock = Number(item.currentStock || 0)
+    const nextBaseUnit = resolveBaseUnit(defaultUnit)
+    const currentBaseUnit = String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))
+
+    // Prevent changing dimensional family while stock exists (mass -> volume, etc.).
+    if (Math.abs(currentStock) > 0.000001 && nextBaseUnit !== currentBaseUnit) {
+      return res.status(400).json({
+        message:
+          'Cannot change default unit across measurement dimensions while stock is non-zero. Please consume/adjust stock first.',
+      })
+    }
+
+    item.defaultUnit = defaultUnit
+    await item.save()
+
+    await invalidateInventoryCaches(restaurant._id)
+
+    return res.json(item)
+  } catch (error) {
+    next(error)
+  }
+}
+
 export async function createInventoryPurchase(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
@@ -242,42 +444,64 @@ export async function createInventoryPurchase(req, res, next) {
       supplierName: supplier?.name || '',
     })
 
-    const purchase = await InventoryPurchase.create({
-      restaurantId: restaurant._id,
-      sourceType: composed.sourceType,
-      supplierId: supplier?._id || null,
-      supplierNameSnapshot: composed.supplierNameSnapshot,
-      invoiceDate: composed.invoiceDate,
-      invoiceNumber: composed.invoiceNumber,
-      gstNo: composed.gstNo,
-      cgstPercent: composed.cgstPercent,
-      sgstPercent: composed.sgstPercent,
-      igstPercent: composed.igstPercent,
-      deliveryCharge: composed.deliveryCharge,
-      discountType: composed.discountType,
-      discountValue: composed.discountValue,
-      totalDiscountAmount: composed.totalDiscountAmount,
-      paymentType: composed.paymentType,
-      items: composed.items,
-      subtotalAmount: composed.subtotalAmount,
-      taxableAmount: composed.taxableAmount,
-      cgstAmount: composed.cgstAmount,
-      sgstAmount: composed.sgstAmount,
-      igstAmount: composed.igstAmount,
-      grandTotalAmount: composed.grandTotalAmount,
-      createdByUserId: req.user?._id,
-      createdByRole: req.user?.role === 'staff' ? 'staff' : 'owner',
-    })
+    const session = await mongoose.startSession()
+    let purchase = null
+
+    try {
+      await session.withTransaction(async () => {
+        purchase = await InventoryPurchase.create(
+          [
+            {
+              restaurantId: restaurant._id,
+              sourceType: composed.sourceType,
+              supplierId: supplier?._id || null,
+              supplierNameSnapshot: composed.supplierNameSnapshot,
+              invoiceDate: composed.invoiceDate,
+              invoiceNumber: composed.invoiceNumber,
+              gstNo: composed.gstNo,
+              cgstPercent: composed.cgstPercent,
+              sgstPercent: composed.sgstPercent,
+              igstPercent: composed.igstPercent,
+              deliveryCharge: composed.deliveryCharge,
+              discountType: composed.discountType,
+              discountValue: composed.discountValue,
+              totalDiscountAmount: composed.totalDiscountAmount,
+              paymentType: composed.paymentType,
+              items: composed.items,
+              subtotalAmount: composed.subtotalAmount,
+              taxableAmount: composed.taxableAmount,
+              cgstAmount: composed.cgstAmount,
+              sgstAmount: composed.sgstAmount,
+              igstAmount: composed.igstAmount,
+              grandTotalAmount: composed.grandTotalAmount,
+              createdByUserId: req.user?._id,
+              createdByRole: req.user?.role === 'staff' ? 'staff' : 'owner',
+            },
+          ],
+          { session },
+        )
+
+        purchase = purchase[0]
+
+        const ledgerEntries = buildPurchaseLedgerEntries({
+          restaurantId: restaurant._id,
+          purchase,
+          createdBy: req.user?._id || null,
+        })
+
+        if (ledgerEntries.length) {
+          await addLedgerEntries(ledgerEntries, { session })
+        }
+      })
+    } finally {
+      session.endSession()
+    }
 
     const responsePayload = await InventoryPurchase.findOne({ _id: purchase._id })
       .select(purchaseProjection)
       .lean()
 
-    try {
-      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
-    } catch (cacheError) {
-      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
-    }
+    await invalidateInventoryCaches(restaurant._id)
 
     return res.status(201).json(responsePayload)
   } catch (error) {
@@ -426,31 +650,37 @@ export async function updateInventoryPurchaseItem(req, res, next) {
       supplierName: purchase.supplierNameSnapshot,
     })
 
-    purchase.paymentType = composed.paymentType
-    purchase.items = composed.items
-    purchase.subtotalAmount = composed.subtotalAmount
-    purchase.taxableAmount = composed.taxableAmount
-    purchase.cgstAmount = composed.cgstAmount
-    purchase.sgstAmount = composed.sgstAmount
-    purchase.igstAmount = composed.igstAmount
-    purchase.grandTotalAmount = composed.grandTotalAmount
-    purchase.totalDiscountAmount = composed.totalDiscountAmount
-    purchase.discountType = composed.discountType
-    purchase.discountValue = composed.discountValue
-    purchase.cgstPercent = composed.cgstPercent
-    purchase.sgstPercent = composed.sgstPercent
-    purchase.igstPercent = composed.igstPercent
-    purchase.deliveryCharge = composed.deliveryCharge
+    const previousRow = currentItems[itemIndex]
+    const updatedRow = composed.items?.[itemIndex]
 
-    await purchase.save()
+    const session = await mongoose.startSession()
 
     try {
-      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
-    } catch (cacheError) {
-      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+      await session.withTransaction(async () => {
+        applyComposedPurchaseToDoc(purchase, composed)
+
+        await purchase.save({ session })
+
+        const adjustmentEntries = buildPurchaseAdjustmentEntries({
+          restaurantId: restaurant._id,
+          purchaseId: purchase._id,
+          oldRow: previousRow,
+          newRow: updatedRow,
+          itemIndex,
+          createdBy: req.user?._id || null,
+        })
+
+        if (adjustmentEntries.length) {
+          await addLedgerEntries(adjustmentEntries, { session })
+        }
+      })
+    } finally {
+      session.endSession()
     }
 
-    const updatedRow = purchase.items?.[itemIndex]
+    await invalidateInventoryCaches(restaurant._id)
+
+    const updatedRowResponse = purchase.items?.[itemIndex]
 
     return res.json({
       purchaseId: purchase._id,
@@ -463,12 +693,12 @@ export async function updateInventoryPurchaseItem(req, res, next) {
         sourceType: purchase.sourceType,
         supplierName: purchase.supplierNameSnapshot,
         paymentType: purchase.paymentType,
-        itemId: updatedRow?.itemId,
-        itemName: updatedRow?.itemName,
-        quantity: updatedRow?.quantity,
-        unit: updatedRow?.unit,
-        rate: updatedRow?.rate,
-        amount: updatedRow?.amount,
+        itemId: updatedRowResponse?.itemId,
+        itemName: updatedRowResponse?.itemName,
+        quantity: updatedRowResponse?.quantity,
+        unit: updatedRowResponse?.unit,
+        rate: updatedRowResponse?.rate,
+        amount: updatedRowResponse?.amount,
         updatedAt: purchase.updatedAt,
         createdAt: purchase.createdAt,
       },
@@ -518,14 +748,33 @@ export async function deleteInventoryPurchaseItem(req, res, next) {
         rate: Number(row.rate || 0),
       }))
 
+    const removedRow = currentItems[itemIndex]
+
     if (remainingItems.length === 0) {
-      await InventoryPurchase.deleteOne({ _id: purchase._id, restaurantId: restaurant._id })
+      const session = await mongoose.startSession()
 
       try {
-        await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
-      } catch (cacheError) {
-        console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+        await session.withTransaction(async () => {
+          await InventoryPurchase.deleteOne({ _id: purchase._id, restaurantId: restaurant._id }).session(session)
+
+          const adjustmentEntries = buildPurchaseAdjustmentEntries({
+            restaurantId: restaurant._id,
+            purchaseId: purchase._id,
+            oldRow: removedRow,
+            newRow: null,
+            itemIndex,
+            createdBy: req.user?._id || null,
+          })
+
+          if (adjustmentEntries.length) {
+            await addLedgerEntries(adjustmentEntries, { session })
+          }
+        })
+      } finally {
+        session.endSession()
       }
+
+      await invalidateInventoryCaches(restaurant._id)
 
       return res.json({
         deleted: true,
@@ -554,28 +803,32 @@ export async function deleteInventoryPurchaseItem(req, res, next) {
       supplierName: purchase.supplierNameSnapshot,
     })
 
-    purchase.items = composed.items
-    purchase.subtotalAmount = composed.subtotalAmount
-    purchase.taxableAmount = composed.taxableAmount
-    purchase.cgstAmount = composed.cgstAmount
-    purchase.sgstAmount = composed.sgstAmount
-    purchase.igstAmount = composed.igstAmount
-    purchase.grandTotalAmount = composed.grandTotalAmount
-    purchase.totalDiscountAmount = composed.totalDiscountAmount
-    purchase.discountType = composed.discountType
-    purchase.discountValue = composed.discountValue
-    purchase.cgstPercent = composed.cgstPercent
-    purchase.sgstPercent = composed.sgstPercent
-    purchase.igstPercent = composed.igstPercent
-    purchase.deliveryCharge = composed.deliveryCharge
-
-    await purchase.save()
+    const session = await mongoose.startSession()
 
     try {
-      await invalidateCacheByTags([`inventory:purchases:${String(restaurant._id)}`])
-    } catch (cacheError) {
-      console.warn('[Inventory] Cache invalidation warning for purchases:', cacheError.message)
+      await session.withTransaction(async () => {
+        applyComposedPurchaseToDoc(purchase, composed)
+
+        await purchase.save({ session })
+
+        const adjustmentEntries = buildPurchaseAdjustmentEntries({
+          restaurantId: restaurant._id,
+          purchaseId: purchase._id,
+          oldRow: removedRow,
+          newRow: null,
+          itemIndex,
+          createdBy: req.user?._id || null,
+        })
+
+        if (adjustmentEntries.length) {
+          await addLedgerEntries(adjustmentEntries, { session })
+        }
+      })
+    } finally {
+      session.endSession()
     }
+
+    await invalidateInventoryCaches(restaurant._id)
 
     return res.json({
       deleted: true,
@@ -583,6 +836,263 @@ export async function deleteInventoryPurchaseItem(req, res, next) {
       purchaseId: purchase._id,
       itemIndex,
       remainingItemCount: purchase.items.length,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function upsertRecipe(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const menuItemId = String(req.body?.menuItemId || '').trim()
+    const ingredients = normalizeRecipeIngredientRows(req.body?.ingredients)
+
+    if (!menuItemId) {
+      return res.status(400).json({ message: 'menuItemId is required' })
+    }
+
+    const menuItem = await MenuItem.findOne({
+      _id: menuItemId,
+      restaurantId: restaurant._id,
+    })
+      .select('_id name')
+      .lean()
+
+    if (!menuItem) {
+      return res.status(400).json({ message: 'Menu item not found for this restaurant' })
+    }
+
+    if (!ingredients.length) {
+      return res.status(400).json({ message: 'At least one ingredient is required' })
+    }
+
+    const inventoryIds = [...new Set(ingredients.map((row) => row.inventoryItemId))]
+    const validInventoryItems = await InventoryItem.find({
+      _id: { $in: inventoryIds },
+      restaurantId: restaurant._id,
+      isActive: true,
+    })
+      .select('_id')
+      .lean()
+
+    if (validInventoryItems.length !== inventoryIds.length) {
+      return res.status(400).json({ message: 'One or more ingredients are invalid for this restaurant' })
+    }
+
+    const existingRecipe = await Recipe.findOne({
+      restaurantId: restaurant._id,
+      menuItemId,
+    })
+
+    let recipe = null
+    if (!existingRecipe) {
+      recipe = await Recipe.create({
+        restaurantId: restaurant._id,
+        menuItemId,
+        ingredients,
+        version: 1,
+      })
+    } else {
+      existingRecipe.ingredients = ingredients
+      existingRecipe.version = Math.max(1, Number(existingRecipe.version || 1) + 1)
+      recipe = await existingRecipe.save()
+    }
+
+    return res.status(201).json(recipe)
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function listRecipes(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const recipes = await Recipe.find({ restaurantId: restaurant._id })
+      .sort({ updatedAt: -1 })
+      .select('_id menuItemId ingredients version createdAt updatedAt')
+      .lean()
+
+    return res.json({ recipes })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function createInventoryWastage(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const inventoryItemId = String(req.body?.inventoryItemId || '').trim()
+    const quantity = safeNumber(req.body?.quantity)
+    const unit = String(req.body?.unit || '').trim()
+    const reason = String(req.body?.reason || '').trim()
+
+    if (!inventoryItemId || quantity <= 0 || !unit) {
+      return res.status(400).json({ message: 'inventoryItemId, quantity and unit are required' })
+    }
+
+    await addLedgerEntries(
+      [
+        {
+          restaurantId: restaurant._id,
+          inventoryItemId,
+          type: 'WASTAGE',
+          quantity,
+          direction: -1,
+          unit,
+          referenceType: 'wastage',
+          referenceId: null,
+          metadata: { reason },
+          createdBy: req.user?._id || null,
+        },
+      ],
+      {},
+    )
+
+    await invalidateInventoryCaches(restaurant._id)
+
+    return res.status(201).json({ success: true })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function createInventoryConversion(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const fromInventoryItemId = String(req.body?.fromInventoryItemId || '').trim()
+    const fromQuantity = safeNumber(req.body?.fromQuantity)
+    const fromUnit = String(req.body?.fromUnit || '').trim()
+
+    const toInventoryItemId = String(req.body?.toInventoryItemId || '').trim()
+    const toQuantity = safeNumber(req.body?.toQuantity)
+    const toUnit = String(req.body?.toUnit || '').trim()
+
+    const note = String(req.body?.note || '').trim()
+
+    if (!fromInventoryItemId || !toInventoryItemId) {
+      return res.status(400).json({ message: 'fromInventoryItemId and toInventoryItemId are required' })
+    }
+
+    if (fromQuantity <= 0 || toQuantity <= 0) {
+      return res.status(400).json({ message: 'fromQuantity and toQuantity must be greater than 0' })
+    }
+
+    if (!fromUnit || !toUnit) {
+      return res.status(400).json({ message: 'fromUnit and toUnit are required' })
+    }
+
+    const conversionReference = new mongoose.Types.ObjectId()
+
+    await addLedgerEntries(
+      [
+        {
+          restaurantId: restaurant._id,
+          inventoryItemId: fromInventoryItemId,
+          type: 'CONVERSION_OUT',
+          quantity: fromQuantity,
+          direction: -1,
+          unit: fromUnit,
+          referenceType: 'conversion',
+          referenceId: conversionReference,
+          metadata: {
+            direction: 'from',
+            toInventoryItemId,
+            toQuantity,
+            toUnit,
+            note,
+          },
+          createdBy: req.user?._id || null,
+        },
+        {
+          restaurantId: restaurant._id,
+          inventoryItemId: toInventoryItemId,
+          type: 'CONVERSION_IN',
+          quantity: toQuantity,
+          direction: 1,
+          unit: toUnit,
+          referenceType: 'conversion',
+          referenceId: conversionReference,
+          metadata: {
+            direction: 'to',
+            fromInventoryItemId,
+            fromQuantity,
+            fromUnit,
+            note,
+          },
+          createdBy: req.user?._id || null,
+        },
+      ],
+      {},
+    )
+
+    await invalidateInventoryCaches(restaurant._id)
+
+    return res.status(201).json({ success: true, conversionId: conversionReference })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function getInventoryItemStock(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const inventoryItemId = String(req.params?.inventoryItemId || '').trim()
+    if (!inventoryItemId) {
+      return res.status(400).json({ message: 'inventoryItemId is required' })
+    }
+
+    const stock = await getCurrentStock({
+      inventoryItemId,
+      restaurantId: restaurant._id,
+      preferCached: req.query?.source !== 'ledger',
+    })
+
+    return res.json(stock)
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function bootstrapInventoryStock(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const result = await bootstrapStockFromSavedPurchases({
+      restaurantId: restaurant._id,
+      createdBy: req.user?._id || null,
+      batchSize: Number(req.body?.batchSize || 200),
+    })
+
+    await invalidateInventoryCaches(restaurant._id)
+
+    return res.json({
+      success: true,
+      summary: result,
+      message: 'Inventory stock bootstrap completed',
     })
   } catch (error) {
     next(error)

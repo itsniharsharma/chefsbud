@@ -3,16 +3,24 @@ import { body } from 'express-validator'
 import { param } from 'express-validator'
 import { query } from 'express-validator'
 import {
+  bootstrapInventoryStock,
+  createInventoryConversion,
   createInventoryItem,
   createInventoryPurchase,
   createInventorySupplier,
+  createInventoryWastage,
   deleteInventoryPurchaseItem,
+  getInventoryItemStock,
   listInventoryPurchaseRows,
   listInventoryItems,
+  listRecipes,
   listInventorySuppliers,
+  upsertRecipe,
+  updateInventoryItemDefaultUnit,
   updateInventoryPurchaseItem,
 } from '../controllers/inventoryController.js'
 import { requireAuth } from '../middleware/auth.js'
+import { requireOwner } from '../middleware/authorize.js'
 import { requireActiveBilling } from '../middleware/billing.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
@@ -82,6 +90,72 @@ router.post(
   ],
   validateRequest,
   createInventoryItem,
+)
+
+router.patch(
+  '/items/:inventoryItemId/default-unit',
+  [
+    param('inventoryItemId').isMongoId(),
+    body('defaultUnit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet']),
+  ],
+  validateRequest,
+  updateInventoryItemDefaultUnit,
+)
+
+router.get(
+  '/items/:inventoryItemId/stock',
+  [param('inventoryItemId').isMongoId(), query('source').optional().isIn(['cache', 'ledger'])],
+  validateRequest,
+  getInventoryItemStock,
+)
+
+router.post(
+  '/stock/bootstrap',
+  [body('batchSize').optional().isInt({ min: 25, max: 1000 })],
+  validateRequest,
+  requireOwner,
+  bootstrapInventoryStock,
+)
+
+router.get('/recipes', listRecipes)
+router.post(
+  '/recipes',
+  [
+    body('menuItemId').isMongoId(),
+    body('ingredients').isArray({ min: 1, max: 200 }),
+    body('ingredients.*.inventoryItemId').isMongoId(),
+    body('ingredients.*.quantity').isFloat({ min: 0.000001, max: 100000000 }),
+    body('ingredients.*.unit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet', 'g', 'ml', 'unit']),
+  ],
+  validateRequest,
+  upsertRecipe,
+)
+
+router.post(
+  '/wastage',
+  [
+    body('inventoryItemId').isMongoId(),
+    body('quantity').isFloat({ min: 0.000001, max: 100000000 }),
+    body('unit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet', 'g', 'ml', 'unit']),
+    body('reason').optional().isString().trim().isLength({ max: 280 }),
+  ],
+  validateRequest,
+  createInventoryWastage,
+)
+
+router.post(
+  '/convert',
+  [
+    body('fromInventoryItemId').isMongoId(),
+    body('fromQuantity').isFloat({ min: 0.000001, max: 100000000 }),
+    body('fromUnit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet', 'g', 'ml', 'unit']),
+    body('toInventoryItemId').isMongoId(),
+    body('toQuantity').isFloat({ min: 0.000001, max: 100000000 }),
+    body('toUnit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet', 'g', 'ml', 'unit']),
+    body('note').optional().isString().trim().isLength({ max: 280 }),
+  ],
+  validateRequest,
+  createInventoryConversion,
 )
 
 router.post(

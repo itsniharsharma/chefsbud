@@ -112,6 +112,7 @@ function App() {
             <Route path="purchase" element={<InventoryModulePage moduleKey="purchase" />} />
             <Route path="purchase/add" element={<AddPurchasePage />} />
             <Route path="conversion" element={<InventoryModulePage moduleKey="conversion" />} />
+            <Route path="recipes" element={<InventoryModulePage moduleKey="recipes" />} />
             <Route path="request" element={<InventoryModulePage moduleKey="request" />} />
           </Route>
 

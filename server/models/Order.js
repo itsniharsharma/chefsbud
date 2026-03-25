@@ -73,6 +73,8 @@ const orderSchema = new mongoose.Schema(
       enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],
       default: 'Pending',
     },
+    inventoryConsumptionCycle: { type: Number, default: 0, min: 0 },
+    inventoryProcessedAt: { type: Date, default: null, index: true },
     completedAt: { type: Date, default: null },
     analyticsTrackedAt: { type: Date, default: null, index: true },
     hiddenFromActive: { type: Boolean, default: false, index: true },

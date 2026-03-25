@@ -1,3 +1,4 @@
+import mongoose from 'mongoose'
 import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
@@ -5,6 +6,10 @@ import bcrypt from 'bcrypt'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import { buildValidatedBillAdjustments } from '../services/orderBillComposerService.js'
 import { sendKotReprintAuditEmail } from '../services/emailService.js'
+import {
+  processOrderConsumption,
+  reverseOrderConsumption,
+} from '../services/inventoryService.js'
 import {
   revertCompletedOrderAnalytics,
   syncCompletedOrderAnalytics,
@@ -20,7 +25,7 @@ const ORDER_STATUS_ALLOWED = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Ser
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
@@ -217,7 +222,7 @@ export async function updateOrderStatus(req, res, next) {
       _id: req.params.orderId,
       restaurantId: restaurant._id,
     })
-      .select('_id restaurantId items subtotalAmount totalAmount orderStatus completedAt createdAt updatedAt analyticsTrackedAt')
+      .select('_id restaurantId items subtotalAmount totalAmount orderStatus inventoryConsumptionCycle inventoryProcessedAt completedAt createdAt updatedAt analyticsTrackedAt')
       .lean()
 
     if (!existingOrder) {
@@ -238,11 +243,47 @@ export async function updateOrderStatus(req, res, next) {
       await runMetricsTask('revert_completed_order_analytics', () => revertCompletedOrderAnalytics(existingOrder))
     }
 
-    const order = await Order.findOneAndUpdate(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
-      { $set: update },
-      { new: true, runValidators: true },
-    )
+    const session = await mongoose.startSession()
+    let order = null
+
+    try {
+      await session.withTransaction(async () => {
+        order = await Order.findOneAndUpdate(
+          { _id: req.params.orderId, restaurantId: restaurant._id },
+          { $set: update },
+          { new: true, runValidators: true, session },
+        )
+
+        if (!order) {
+          throw new Error('Order not found')
+        }
+
+        if (isCompleted && !wasCompleted && !existingOrder.inventoryProcessedAt) {
+          const cycle = Math.max(0, Number(existingOrder.inventoryConsumptionCycle || 0)) + 1
+          await processOrderConsumption(order, {
+            session,
+            createdBy: req.user?._id || null,
+            cycle,
+          })
+          order.inventoryConsumptionCycle = cycle
+          order.inventoryProcessedAt = new Date()
+          await order.save({ session })
+        }
+
+        if (!isCompleted && wasCompleted && existingOrder.inventoryProcessedAt) {
+          const cycle = Math.max(1, Number(existingOrder.inventoryConsumptionCycle || 1))
+          await reverseOrderConsumption(existingOrder, {
+            session,
+            createdBy: req.user?._id || null,
+            cycle,
+          })
+          order.inventoryProcessedAt = null
+          await order.save({ session })
+        }
+      })
+    } finally {
+      session.endSession()
+    }
 
     if (isCompleted && !wasCompleted) {
       await runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id))

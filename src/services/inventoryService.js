@@ -13,6 +13,29 @@ export const inventoryService = {
   createItem(payload) {
     return api.post('/inventory/items', payload).then((response) => response.data)
   },
+  updateItemDefaultUnit(inventoryItemId, payload) {
+    return api
+      .patch(`/inventory/items/${inventoryItemId}/default-unit`, payload)
+      .then((response) => response.data)
+  },
+  getItemStock(inventoryItemId, params = {}) {
+    return api.get(`/inventory/items/${inventoryItemId}/stock`, { params }).then((response) => response.data)
+  },
+  listRecipes() {
+    return api.get('/inventory/recipes').then((response) => response.data)
+  },
+  upsertRecipe(payload) {
+    return api.post('/inventory/recipes', payload).then((response) => response.data)
+  },
+  createWastage(payload) {
+    return api.post('/inventory/wastage', payload).then((response) => response.data)
+  },
+  createConversion(payload) {
+    return api.post('/inventory/convert', payload).then((response) => response.data)
+  },
+  bootstrapStock(payload = {}) {
+    return api.post('/inventory/stock/bootstrap', payload).then((response) => response.data)
+  },
   createPurchase(payload) {
     return api.post('/inventory/purchases', payload).then((response) => response.data)
   },

@@ -28,6 +28,7 @@ const titles = {
   '/inventory/purchase': 'Purchase Management',
   '/inventory/purchase/add': 'Add Purchase',
   '/inventory/conversion': 'Convert Raw Material',
+  '/inventory/recipes': 'Recipe Builder',
   '/inventory/request': 'Request For Purchase',
 }
 

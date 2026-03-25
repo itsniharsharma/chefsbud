@@ -1,9 +1,23 @@
 import { ArrowLeft, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { getInventoryModuleByKey } from '../features/inventory/inventoryModules'
+import ConversionModule from '../features/inventory/modules/ConversionModule'
+import CurrentStockModule from '../features/inventory/modules/CurrentStockModule'
+import RecipeBuilderModule from '../features/inventory/modules/RecipeBuilderModule'
+import WastageModule from '../features/inventory/modules/WastageModule'
 
 export default function InventoryModulePage({ moduleKey }) {
   const moduleItem = getInventoryModuleByKey(moduleKey)
+
+  const renderOperationalModule = () => {
+    if (moduleKey === 'stock') return <CurrentStockModule />
+    if (moduleKey === 'wastage') return <WastageModule />
+    if (moduleKey === 'conversion') return <ConversionModule />
+    if (moduleKey === 'recipes') return <RecipeBuilderModule />
+    return null
+  }
+
+  const operationalModule = renderOperationalModule()
 
   if (!moduleItem) {
     return (
@@ -33,25 +47,29 @@ export default function InventoryModulePage({ moduleKey }) {
         </span>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-dashed border-rose-200 bg-white/80 p-5 md:p-6">
-        <div className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
-          <Sparkles size={14} />
-          Coming Soon
-        </div>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          This screen is route-ready and designed for future inventory analytics, workflows, and operational actions.
-          Existing dashboard functionality remains unchanged.
-        </p>
+      {operationalModule ? (
+        <div className="mt-6">{operationalModule}</div>
+      ) : (
+        <div className="mt-6 rounded-2xl border border-dashed border-rose-200 bg-white/80 p-5 md:p-6">
+          <div className="inline-flex items-center gap-2 rounded-full border border-rose-100 bg-rose-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--primary)]">
+            <Sparkles size={14} />
+            Coming Soon
+          </div>
+          <p className="mt-3 text-sm leading-6 text-slate-600">
+            This screen is route-ready and designed for future inventory analytics, workflows, and operational actions.
+            Existing dashboard functionality remains unchanged.
+          </p>
 
-        {moduleItem.key === 'purchase' ? (
-          <Link
-            to="/inventory/purchase/add"
-            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-rose-700 bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(220,38,38,0.25)] transition hover:bg-rose-700"
-          >
-            Open Add Purchase
-          </Link>
-        ) : null}
-      </div>
+          {moduleItem.key === 'purchase' ? (
+            <Link
+              to="/inventory/purchase/add"
+              className="mt-4 inline-flex items-center gap-2 rounded-xl border border-rose-700 bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(220,38,38,0.25)] transition hover:bg-rose-700"
+            >
+              Open Add Purchase
+            </Link>
+          ) : null}
+        </div>
+      )}
 
       <Link to="/inventory" className="mt-6 inline-flex items-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-sm font-semibold text-[var(--primary)] hover:bg-rose-50">
         <ArrowLeft size={16} />
