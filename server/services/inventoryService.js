@@ -551,3 +551,148 @@ export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy
     duplicateBatches,
   }
 }
+
+export async function reconcileStockFromSavedPurchases({ restaurantId, createdBy = null } = {}) {
+  const tenantId = toObjectIdString(restaurantId)
+  if (!tenantId) {
+    throw new Error('restaurantId is required for reconciliation')
+  }
+
+  const EPSILON = 0.000001
+  const aggregateRows = await InventoryPurchase.aggregate([
+    { $match: { restaurantId: new mongoose.Types.ObjectId(tenantId) } },
+    { $unwind: '$items' },
+    {
+      $project: {
+        _id: 0,
+        inventoryItemId: '$items.itemId',
+        quantity: '$items.quantity',
+        unit: '$items.unit',
+      },
+    },
+    {
+      $group: {
+        _id: { inventoryItemId: '$inventoryItemId', unit: '$unit' },
+        quantity: { $sum: '$quantity' },
+      },
+    },
+  ])
+
+  const expectedByItem = new Map()
+  for (const row of aggregateRows) {
+    const itemId = toObjectIdString(row?._id?.inventoryItemId)
+    if (!itemId) continue
+
+    const qty = Number(row?.quantity)
+    if (!Number.isFinite(qty) || qty <= 0) continue
+
+    const base = unitToBase(String(row?._id?.unit || ''))
+    const convertedQty = round6(qty * base.factor)
+    const current = expectedByItem.get(itemId)
+
+    if (!current) {
+      expectedByItem.set(itemId, { quantity: convertedQty, unit: base.unit, conflict: false })
+      continue
+    }
+
+    if (current.unit !== base.unit) {
+      current.conflict = true
+      expectedByItem.set(itemId, current)
+      continue
+    }
+
+    current.quantity = round6(current.quantity + convertedQty)
+    expectedByItem.set(itemId, current)
+  }
+
+  const items = await InventoryItem.find({ restaurantId: tenantId })
+    .select('_id currentStock currentStockUnit')
+    .lean()
+
+  const conflictItemIds = []
+  const unitAlignOps = []
+  const adjustmentEntries = []
+  const runReference = new mongoose.Types.ObjectId()
+
+  for (const item of items) {
+    const itemId = toObjectIdString(item._id)
+    const expected = expectedByItem.get(itemId)
+    const currentQty = Number(item.currentStock || 0)
+    const currentUnit = String(item.currentStockUnit || 'unit')
+
+    if (expected?.conflict) {
+      conflictItemIds.push(itemId)
+      continue
+    }
+
+    const expectedUnit = String(expected?.unit || currentUnit)
+
+    if (Math.abs(currentQty) <= EPSILON && expectedUnit !== currentUnit) {
+      unitAlignOps.push({
+        updateOne: {
+          filter: { _id: item._id },
+          update: { $set: { currentStockUnit: expectedUnit } },
+        },
+      })
+    }
+  }
+
+  if (unitAlignOps.length) {
+    await InventoryItem.bulkWrite(unitAlignOps, { ordered: false })
+  }
+
+  const refreshedItems = unitAlignOps.length
+    ? await InventoryItem.find({ restaurantId: tenantId }).select('_id currentStock currentStockUnit').lean()
+    : items
+
+  for (const item of refreshedItems) {
+    const itemId = toObjectIdString(item._id)
+    const expected = expectedByItem.get(itemId)
+    const currentQty = Number(item.currentStock || 0)
+    const currentUnit = String(item.currentStockUnit || 'unit')
+
+    if (expected?.conflict) continue
+
+    const expectedQty = Number(expected?.quantity || 0)
+    const expectedUnit = String(expected?.unit || currentUnit)
+
+    if (expectedUnit !== currentUnit) {
+      conflictItemIds.push(itemId)
+      continue
+    }
+
+    const delta = round6(expectedQty - currentQty)
+    if (Math.abs(delta) <= EPSILON) continue
+
+    adjustmentEntries.push({
+      restaurantId: tenantId,
+      inventoryItemId: itemId,
+      type: 'ADJUSTMENT',
+      quantity: Math.abs(delta),
+      direction: delta > 0 ? 1 : -1,
+      unit: expectedUnit,
+      referenceType: 'stock_reconcile',
+      referenceId: runReference,
+      metadata: {
+        reason: 'saved_purchases_reconcile',
+        expectedQty,
+        previousQty: currentQty,
+      },
+      createdBy,
+      idempotencyKey: `reconcile:${String(runReference)}:${itemId}`,
+    })
+  }
+
+  let insertedAdjustments = 0
+  if (adjustmentEntries.length) {
+    const result = await addLedgerEntries(adjustmentEntries)
+    insertedAdjustments = Number(result?.insertedCount || 0)
+  }
+
+  return {
+    scannedPurchases: await InventoryPurchase.countDocuments({ restaurantId: tenantId }),
+    adjustedItems: insertedAdjustments,
+    conflictItems: conflictItemIds.length,
+    conflictItemIds,
+  }
+}

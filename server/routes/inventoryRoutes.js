@@ -111,7 +111,10 @@ router.get(
 
 router.post(
   '/stock/bootstrap',
-  [body('batchSize').optional().isInt({ min: 25, max: 1000 })],
+  [
+    body('batchSize').optional().isInt({ min: 25, max: 1000 }),
+    body('mode').optional().isIn(['bootstrap_only', 'reconcile_only', 'bootstrap_and_reconcile']),
+  ],
   validateRequest,
   requireOwner,
   bootstrapInventoryStock,

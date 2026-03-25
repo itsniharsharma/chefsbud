@@ -35,9 +35,19 @@ export default function CurrentStockModule() {
     try {
       const response = await bootstrapMutation.mutateAsync({ batchSize: 250 })
       const summary = response?.summary || {}
-      const inserted = Number(summary.insertedLedgerRows || 0)
-      const scanned = Number(summary.scannedPurchases || 0)
-      setStatus(`Stock sync complete. Purchases scanned: ${scanned}, ledger rows inserted: ${inserted}.`)
+      const bootstrap = summary?.bootstrap || summary
+      const reconcile = summary?.reconcile || null
+      const inserted = Number(bootstrap?.insertedLedgerRows || 0)
+      const scanned = Number(bootstrap?.scannedPurchases || 0)
+      const adjusted = Number(reconcile?.adjustedItems || 0)
+
+      if (reconcile) {
+        setStatus(
+          `Stock sync complete. Purchases scanned: ${scanned}, ledger inserted: ${inserted}, reconciled items: ${adjusted}.`,
+        )
+      } else {
+        setStatus(`Stock sync complete. Purchases scanned: ${scanned}, ledger rows inserted: ${inserted}.`)
+      }
       await refetch()
     } catch (requestError) {
       setError(requestError?.response?.data?.message || 'Stock sync failed. Please retry.')

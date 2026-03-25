@@ -8,6 +8,7 @@ import {
   addLedgerEntries,
   bootstrapStockFromSavedPurchases,
   getCurrentStock,
+  reconcileStockFromSavedPurchases,
 } from '../services/inventoryService.js'
 import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
@@ -1081,18 +1082,35 @@ export async function bootstrapInventoryStock(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const result = await bootstrapStockFromSavedPurchases({
-      restaurantId: restaurant._id,
-      createdBy: req.user?._id || null,
-      batchSize: Number(req.body?.batchSize || 200),
-    })
+    const mode = String(req.body?.mode || 'bootstrap_and_reconcile').trim()
+    let bootstrapResult = null
+    let reconcileResult = null
+
+    if (mode !== 'reconcile_only') {
+      bootstrapResult = await bootstrapStockFromSavedPurchases({
+        restaurantId: restaurant._id,
+        createdBy: req.user?._id || null,
+        batchSize: Number(req.body?.batchSize || 200),
+      })
+    }
+
+    if (mode !== 'bootstrap_only') {
+      reconcileResult = await reconcileStockFromSavedPurchases({
+        restaurantId: restaurant._id,
+        createdBy: req.user?._id || null,
+      })
+    }
 
     await invalidateInventoryCaches(restaurant._id)
 
     return res.json({
       success: true,
-      summary: result,
-      message: 'Inventory stock bootstrap completed',
+      summary: {
+        mode,
+        bootstrap: bootstrapResult,
+        reconcile: reconcileResult,
+      },
+      message: 'Inventory stock sync completed',
     })
   } catch (error) {
     next(error)
