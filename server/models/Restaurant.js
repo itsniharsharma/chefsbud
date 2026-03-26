@@ -25,7 +25,7 @@ const restaurantSchema = new mongoose.Schema(
     gstin: { type: String, trim: true, uppercase: true, unique: true, sparse: true, index: true },
     address: { type: String, default: '' },
     phone: { type: String, default: '' },
-    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     paymentConfig: { type: paymentConfigSchema, default: () => ({ provider: 'razorpay_me', enabled: false }) },
     kotReprintConfig: { type: kotReprintConfigSchema, default: () => ({ passkeyHash: '', updatedAt: null }) },
   },

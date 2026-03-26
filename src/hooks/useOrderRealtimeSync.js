@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { getDashboardSocket } from '../services/socketService'
 import { queryKeys } from '../lib/queryKeys'
 
+const ORDER_INVALIDATION_DEBOUNCE_MS = 250
+
 export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
   const queryClient = useQueryClient()
 
@@ -19,9 +21,11 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
       restaurantId,
     }
 
-    const invalidateOrders = (payload = {}) => {
-      const eventType = String(payload?.type || '').trim()
-      const nextStatus = String(payload?.orderStatus || '').trim()
+    let invalidationTimer = null
+    let shouldRefreshAnalyticsCards = false
+
+    const flushInvalidations = () => {
+      invalidationTimer = null
 
       queryClient.invalidateQueries({
         queryKey: ['dashboard', 'orders-board', restaurantId],
@@ -30,11 +34,28 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
         queryKey: ['dashboard', 'recent-orders', restaurantId],
       })
 
-      if (eventType === 'created' || eventType === 'deleted' || nextStatus === 'Completed') {
+      if (shouldRefreshAnalyticsCards) {
         queryClient.invalidateQueries({
           queryKey: queryKeys.dashboard.analyticsCards(restaurantId),
         })
       }
+
+      shouldRefreshAnalyticsCards = false
+    }
+
+    const invalidateOrders = (payload = {}) => {
+      const eventType = String(payload?.type || '').trim()
+      const nextStatus = String(payload?.orderStatus || '').trim()
+
+      if (eventType === 'created' || eventType === 'deleted' || nextStatus === 'Completed') {
+        shouldRefreshAnalyticsCards = true
+      }
+
+      if (invalidationTimer) {
+        return
+      }
+
+      invalidationTimer = setTimeout(flushInvalidations, ORDER_INVALIDATION_DEBOUNCE_MS)
     }
 
     const onConnected = () => {
@@ -53,6 +74,10 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
     }
 
     return () => {
+      if (invalidationTimer) {
+        clearTimeout(invalidationTimer)
+        invalidationTimer = null
+      }
       socket.emit('dashboard:leave-restaurant', roomPayload)
       socket.off('connect', onConnected)
       socket.off('order:changed', onOrderChanged)

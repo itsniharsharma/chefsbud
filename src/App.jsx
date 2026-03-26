@@ -41,10 +41,22 @@ function App() {
 
     const id = idleCallback(() => {
       const currentPath = String(window.location.pathname || '')
+      const hasAuthToken = Boolean(localStorage.getItem('chefs_bud_token'))
+
       if (currentPath.startsWith('/r/')) {
         warmCustomerRoutes()
-      } else {
+        return
+      }
+
+      if (currentPath.startsWith('/dashboard') || currentPath.startsWith('/inventory')) {
         warmCriticalRoutes()
+        return
+      }
+
+      // Keep public landing experience lightweight; only warm owner shell when a session exists.
+      if (hasAuthToken) {
+        importers.dashboardLayout()
+        importers.dashboard()
       }
     })
 
