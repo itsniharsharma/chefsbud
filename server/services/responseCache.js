@@ -5,11 +5,12 @@ const tagIndex = new Map()
 const inflightStore = new Map()
 const redisTagMembershipStore = new Map()
 const redisTagMembershipIndex = new Map()
-const MAX_CACHE_ENTRIES = 500
+const MAX_CACHE_ENTRIES = Math.max(50, Number(process.env.RESPONSE_CACHE_MAX_ENTRIES || 500))
 const MAX_INFLIGHT_MS = 30000
 const MAX_REDIS_TAG_MEMBERSHIP_ENTRIES = 5000
 const REDIS_TAG_REFRESH_BUFFER_MS = 5000
 const REDIS_INVALIDATION_BATCH_SIZE = Math.max(10, Number(process.env.REDIS_INVALIDATION_BATCH_SIZE || 50))
+const CACHE_CLEANUP_EVERY_REQUESTS = Math.max(10, Number(process.env.RESPONSE_CACHE_CLEANUP_EVERY || 100))
 const CACHE_NS = 'response-cache'
 let requestCounter = 0
 
@@ -173,6 +174,10 @@ async function writeToRedisCache({ key, status, payload, tags, ttlSeconds }) {
 }
 
 async function invalidateRedisByTags(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) {
+    return
+  }
+
   await withRedis(
     'cache_invalidate_tags',
     async (redis) => {
@@ -199,6 +204,9 @@ async function invalidateRedisByTags(tags) {
 
 export function invalidateCacheByTags(tags = []) {
   const normalizedTags = normalizeTags(tags)
+  if (!normalizedTags.length) {
+    return
+  }
 
   for (const tag of normalizedTags) {
     const membershipKeys = redisTagMembershipIndex.get(tag)
@@ -234,7 +242,7 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip }
     }
 
     requestCounter += 1
-    if (requestCounter % 100 === 0) {
+    if (requestCounter % CACHE_CLEANUP_EVERY_REQUESTS === 0) {
       cleanupExpiredEntries()
       cleanupStaleInflight()
       cleanupRedisTagMembership()

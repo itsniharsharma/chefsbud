@@ -43,7 +43,7 @@ export const inventoryModules = [
     title: 'Purchase Management',
     description: 'Manage supplier purchases and inward entries',
     icon: Truck,
-    route: '/inventory/purchase',
+    route: '/inventory/purchase/add',
   },
   {
     key: 'conversion',

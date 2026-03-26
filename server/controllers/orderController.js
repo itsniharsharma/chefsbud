@@ -87,7 +87,7 @@ function buildOrderQuery({ restaurantId, view, status, scope }) {
   if (view === 'completed') {
     query.orderStatus = 'Completed'
   } else {
-    query.hiddenFromActive = { $ne: true }
+    query.hiddenFromActive = false
     if (status && status !== 'All') {
       query.orderStatus = status
     }

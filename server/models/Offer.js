@@ -29,5 +29,7 @@ const offerSchema = new mongoose.Schema(
 )
 
 offerSchema.index({ restaurantId: 1, active: 1 })
+offerSchema.index({ restaurantId: 1, active: 1, priority: 1, createdAt: 1 })
+offerSchema.index({ restaurantId: 1, couponCode: 1 })
 
 export default mongoose.model('Offer', offerSchema)

@@ -131,6 +131,10 @@ export async function trackPublicMenuExposure(req, res, next) {
       .select('_id categoryId name')
       .lean()
 
+    if (!validItemIds.length) {
+      return res.status(202).json({ tracked: 0 })
+    }
+
     const result = await trackMenuExposure({
       restaurantId: restaurant._id,
       sessionId,

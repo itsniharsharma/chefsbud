@@ -641,9 +641,22 @@ export async function reconcileStockFromSavedPurchases({ restaurantId, createdBy
     await InventoryItem.bulkWrite(unitAlignOps, { ordered: false })
   }
 
-  const refreshedItems = unitAlignOps.length
-    ? await InventoryItem.find({ restaurantId: tenantId }).select('_id currentStock currentStockUnit').lean()
-    : items
+  const alignedUnitByItemId = new Map(
+    unitAlignOps.map((op) => [
+      toObjectIdString(op?.updateOne?.filter?._id),
+      String(op?.updateOne?.update?.$set?.currentStockUnit || ''),
+    ]),
+  )
+
+  const refreshedItems = items.map((item) => {
+    const itemId = toObjectIdString(item._id)
+    const alignedUnit = alignedUnitByItemId.get(itemId)
+    if (!alignedUnit) return item
+    return {
+      ...item,
+      currentStockUnit: alignedUnit,
+    }
+  })
 
   for (const item of refreshedItems) {
     const itemId = toObjectIdString(item._id)

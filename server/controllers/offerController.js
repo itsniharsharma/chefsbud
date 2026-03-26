@@ -5,6 +5,14 @@ import { parseOfferPrompt, validateOfferDraft } from '../services/offerDraftPars
 import { applyOffersToOrder } from '../services/offerEngine.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
+const offerPreviewProjection =
+  '_id name ruleType stackingPolicy active startTime endTime priority createdAt couponCode conditions actions'
+
+async function loadRestaurantMenuItemIds(restaurantId) {
+  const ids = await MenuItem.distinct('_id', { restaurantId })
+  return ids.map((id) => String(id))
+}
+
 export async function getOffers(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
@@ -16,7 +24,7 @@ export async function getOffers(req, res, next) {
       return res.status(403).json({ message: 'Forbidden' })
     }
 
-    const offers = await Offer.find({ restaurantId: req.params.restaurantId }).sort({ createdAt: -1 }).lean()
+    const offers = await Offer.find({ restaurantId: restaurant._id }).sort({ createdAt: -1 }).lean()
     return res.json(offers)
   } catch (error) {
     next(error)
@@ -169,10 +177,10 @@ export async function validateOfferDraftPayload(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const menuItems = await MenuItem.find({ restaurantId: restaurant._id }).select('_id').lean()
+    const restaurantMenuItemIds = await loadRestaurantMenuItemIds(restaurant._id)
     const validation = validateOfferDraft({
       draft: req.body?.draft,
-      restaurantMenuItemIds: menuItems.map((item) => String(item._id)),
+      restaurantMenuItemIds,
     })
 
     return res.json(validation)
@@ -189,10 +197,10 @@ export async function publishOfferDraft(req, res, next) {
     }
 
     const draft = req.body?.draft
-    const menuItems = await MenuItem.find({ restaurantId: restaurant._id }).select('_id').lean()
+    const restaurantMenuItemIds = await loadRestaurantMenuItemIds(restaurant._id)
     const validation = validateOfferDraft({
       draft,
-      restaurantMenuItemIds: menuItems.map((item) => String(item._id)),
+      restaurantMenuItemIds,
     })
 
     if (!validation.valid) {
@@ -266,7 +274,9 @@ export async function previewOfferPricing(req, res, next) {
       })
     }
 
-    const offers = await Offer.find({ restaurantId: restaurant._id, active: true }).lean()
+    const offers = await Offer.find({ restaurantId: restaurant._id, active: true })
+      .select(offerPreviewProjection)
+      .lean()
     const preview = applyOffersToOrder({
       orderItems,
       offers,

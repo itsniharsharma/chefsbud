@@ -109,7 +109,7 @@ function App() {
             <Route path="wastage" element={<InventoryModulePage moduleKey="wastage" />} />
             <Route path="stock" element={<InventoryModulePage moduleKey="stock" />} />
             <Route path="reports" element={<InventoryModulePage moduleKey="reports" />} />
-            <Route path="purchase" element={<InventoryModulePage moduleKey="purchase" />} />
+            <Route path="purchase" element={<Navigate to="/inventory/purchase/add" replace />} />
             <Route path="purchase/add" element={<AddPurchasePage />} />
             <Route path="conversion" element={<InventoryModulePage moduleKey="conversion" />} />
             <Route path="recipes" element={<InventoryModulePage moduleKey="recipes" />} />
