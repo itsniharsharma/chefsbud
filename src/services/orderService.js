@@ -36,4 +36,9 @@ export const orderService = {
   trackTable(restaurantSlug, tableNumber) {
     return api.get(`/orders/track/${restaurantSlug}/${tableNumber}`).then((response) => response.data)
   },
+  ratePublicOrder({ restaurantSlug, tableNumber, orderId, rating }) {
+    return api
+      .post(`/orders/track/${restaurantSlug}/${tableNumber}/${orderId}/rating`, { rating })
+      .then((response) => response.data)
+  },
 }

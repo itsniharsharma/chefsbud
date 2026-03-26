@@ -8,6 +8,7 @@ import {
 	markOrderKotPrinted,
 	getPublicTableOrders,
 	getPublicOrderStatus,
+	ratePublicOrder,
 	shiftTableOrders,
 	updateOrderStatus,
 } from '../controllers/orderController.js'
@@ -54,6 +55,14 @@ router.get(
 		],
 	}),
 	getPublicOrderStatus,
+)
+router.post(
+	'/track/:restaurantSlug/:tableNumber/:orderId/rating',
+	[
+		body('rating').isInt({ min: 1, max: 5 }),
+	],
+	validateRequest,
+	ratePublicOrder,
 )
 router.get(
 	'/:restaurantId',

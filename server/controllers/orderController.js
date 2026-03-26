@@ -21,6 +21,7 @@ import { logger } from '../utils/logger.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
+const CUSTOMER_FEEDBACK_WINDOW_MINUTES = Math.max(5, Math.min(Number(process.env.CUSTOMER_FEEDBACK_WINDOW_MINUTES || 60), 24 * 60))
 const ORDER_STATUS_ALLOWED = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
 
@@ -119,6 +120,33 @@ function buildPagination({ page, limit }) {
     page: safePage,
     limit: safeLimit,
     skip: (safePage - 1) * safeLimit,
+  }
+}
+
+function getFeedbackWindowStartDate() {
+  return new Date(Date.now() - CUSTOMER_FEEDBACK_WINDOW_MINUTES * 60 * 1000)
+}
+
+function isOrderInFeedbackWindow(order) {
+  if (!order || String(order.orderStatus || '') !== 'Completed') {
+    return false
+  }
+
+  const completedAt = order.completedAt ? new Date(order.completedAt) : null
+  const ts = completedAt?.getTime()
+  if (!Number.isFinite(ts)) {
+    return false
+  }
+
+  return ts >= getFeedbackWindowStartDate().getTime()
+}
+
+function toPublicOrderPayload(order) {
+  const customerCanRate = isOrderInFeedbackWindow(order) && !Number.isFinite(Number(order?.customerRating))
+
+  return {
+    ...order,
+    customerCanRate,
   }
 }
 
@@ -599,7 +627,7 @@ export async function getPublicOrderStatus(req, res, next) {
       isArchived: false,
     })
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
       )
       .lean()
 
@@ -607,7 +635,11 @@ export async function getPublicOrderStatus(req, res, next) {
       return res.status(404).json({ message: 'Order not found' })
     }
 
-    return res.json(order)
+    if (String(order.orderStatus || '') === 'Completed' && !isOrderInFeedbackWindow(order)) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    return res.json(toPublicOrderPayload(order))
   } catch (error) {
     next(error)
   }
@@ -616,21 +648,112 @@ export async function getPublicOrderStatus(req, res, next) {
 export async function getPublicTableOrders(req, res, next) {
   try {
     const { restaurantSlug, tableNumber } = req.params
+    const feedbackWindowStart = getFeedbackWindowStartDate()
 
     const orders = await Order.find({
       restaurantSlug,
       tableNumber: Number(tableNumber),
       isArchived: false,
       paymentStatus: { $in: ['Paid', 'Unpaid'] },
+      $or: [
+        { orderStatus: { $ne: 'Completed' } },
+        { orderStatus: 'Completed', completedAt: { $gte: feedbackWindowStart } },
+      ],
     })
       .sort({ createdAt: -1 })
       .limit(PUBLIC_TABLE_ORDER_LIMIT)
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
       )
       .lean()
 
-    return res.json(orders)
+    return res.json(orders.map(toPublicOrderPayload))
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function ratePublicOrder(req, res, next) {
+  try {
+    const { restaurantSlug, tableNumber, orderId } = req.params
+    const rating = Number(req.body?.rating)
+
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      return res.status(400).json({ message: 'Rating must be an integer between 1 and 5' })
+    }
+
+    const order = await Order.findOne({
+      _id: orderId,
+      restaurantSlug,
+      tableNumber: Number(tableNumber),
+      isArchived: false,
+    })
+      .select('_id restaurantId restaurantSlug tableNumber orderStatus completedAt customerRating customerRatedAt')
+      .lean()
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    if (String(order.orderStatus || '') !== 'Completed') {
+      return res.status(409).json({ message: 'Rating is only allowed for completed orders' })
+    }
+
+    if (!isOrderInFeedbackWindow(order)) {
+      return res.status(410).json({ message: 'Rating window has expired for this order' })
+    }
+
+    if (Number.isFinite(Number(order.customerRating))) {
+      return res.status(409).json({ message: 'Rating already submitted for this order' })
+    }
+
+    const ratedAt = new Date()
+
+    const updated = await Order.findOneAndUpdate(
+      {
+        _id: orderId,
+        restaurantSlug,
+        tableNumber: Number(tableNumber),
+        isArchived: false,
+        orderStatus: 'Completed',
+        customerRating: null,
+      },
+      {
+        $set: {
+          customerRating: rating,
+          customerRatedAt: ratedAt,
+        },
+      },
+      {
+        new: true,
+        projection: '_id customerRating customerRatedAt orderStatus completedAt restaurantId restaurantSlug tableNumber',
+      },
+    ).lean()
+
+    if (!updated) {
+      return res.status(409).json({ message: 'Rating already submitted for this order' })
+    }
+
+    invalidateCacheByTags([
+      `orders:table:${restaurantSlug}:${tableNumber}`,
+      `orders:order:${orderId}`,
+    ])
+
+    if (updated.restaurantId) {
+      publishOrderChange({
+        restaurantId: updated.restaurantId,
+        type: 'customer-rated',
+        orderId,
+        extra: { customerRating: rating },
+      })
+    }
+
+    return res.json({
+      success: true,
+      orderId: String(updated._id),
+      customerRating: updated.customerRating,
+      customerRatedAt: updated.customerRatedAt,
+    })
   } catch (error) {
     next(error)
   }

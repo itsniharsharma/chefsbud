@@ -73,6 +73,8 @@ const orderSchema = new mongoose.Schema(
       enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],
       default: 'Pending',
     },
+    customerRating: { type: Number, min: 1, max: 5, default: null },
+    customerRatedAt: { type: Date, default: null },
     inventoryConsumptionCycle: { type: Number, default: 0, min: 0 },
     inventoryProcessedAt: { type: Date, default: null, index: true },
     completedAt: { type: Date, default: null },
@@ -95,6 +97,7 @@ orderSchema.index({ restaurantId: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, orderStatus: 1, analyticsTrackedAt: 1, createdAt: 1 })
 orderSchema.index({ restaurantId: 1, orderStatus: 1, completedAt: -1 })
+orderSchema.index({ restaurantSlug: 1, tableNumber: 1, orderStatus: 1, completedAt: -1 })
 orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })

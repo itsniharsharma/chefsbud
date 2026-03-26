@@ -1,10 +1,11 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerTableOrdersQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl } from '../utils/customerUrl'
+import { orderService } from '../services/orderService'
 
 const statusTone = {
   Pending: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -25,7 +26,10 @@ export default function CustomerStatusPage() {
     error,
     isLoading,
     isFetching,
+    refetch,
   } = useCustomerTableOrdersQuery({ restaurantSlug, tableNumber })
+  const [ratingInFlightOrderId, setRatingInFlightOrderId] = useState('')
+  const [ratingFeedback, setRatingFeedback] = useState('')
 
   const activeOrders = useMemo(
     () => orders.filter((order) => !['Served', 'Completed'].includes(order.orderStatus)),
@@ -33,6 +37,25 @@ export default function CustomerStatusPage() {
   )
 
   const errorMessage = error?.response?.data?.message || error?.message || ''
+
+  const submitRating = async (orderId, rating) => {
+    try {
+      setRatingFeedback('')
+      setRatingInFlightOrderId(String(orderId))
+      await orderService.ratePublicOrder({
+        restaurantSlug,
+        tableNumber,
+        orderId,
+        rating,
+      })
+      await refetch()
+      setRatingFeedback('Thanks for your feedback!')
+    } catch (requestError) {
+      setRatingFeedback(requestError?.response?.data?.message || 'Unable to submit rating right now')
+    } finally {
+      setRatingInFlightOrderId('')
+    }
+  }
 
   if (isLoading && !orders.length) {
     return <div className="customer-shell p-4 pb-32 text-sm royal-muted">Loading your orders...</div>
@@ -57,6 +80,7 @@ export default function CustomerStatusPage() {
 
       {isFetching ? <p className="mb-3 text-xs royal-muted">Refreshing order status...</p> : null}
       {errorMessage ? <p className="mb-3 text-sm text-red-500">{errorMessage}</p> : null}
+      {ratingFeedback ? <p className="mb-3 text-sm text-emerald-700">{ratingFeedback}</p> : null}
 
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
         <div className="customer-kpi p-3">
@@ -121,6 +145,31 @@ export default function CustomerStatusPage() {
                   View Details
                 </Button>
               </div>
+
+              {order.orderStatus === 'Completed' ? (
+                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Order Feedback</p>
+                  {Number.isFinite(Number(order.customerRating)) ? (
+                    <p className="mt-1 text-sm font-medium text-slate-700">Rated: {Number(order.customerRating)}/5</p>
+                  ) : order.customerCanRate ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {[1, 2, 3, 4, 5].map((rating) => (
+                        <button
+                          key={`${order._id}-rating-${rating}`}
+                          type="button"
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+                          onClick={() => submitRating(order._id, rating)}
+                          disabled={String(ratingInFlightOrderId || '') === String(order._id)}
+                        >
+                          {rating}★
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-sm text-slate-600">Feedback window closed.</p>
+                  )}
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
