@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queryKeys'
 import { menuService } from '../services/menuService'
 import { inventoryService } from '../services/inventoryService'
+import { useDashboardRealtimeStatus } from './useDashboardRealtimeStatus'
 
 function withListContainer(current, listKey, fallback = []) {
   const baseList = Array.isArray(fallback) ? fallback : []
@@ -97,6 +98,21 @@ export function useInventoryRecipes({ restaurantId }) {
     queryFn: () => inventoryService.listRecipes(),
     select: (data) => (Array.isArray(data?.recipes) ? data.recipes : []),
     staleTime: 20_000,
+    refetchOnWindowFocus: false,
+    retry: 1,
+  })
+}
+
+export function useInventoryAnalyticsOverview({ restaurantId }) {
+  const hasRealtimeConnection = useDashboardRealtimeStatus(Boolean(restaurantId))
+
+  return useQuery({
+    queryKey: queryKeys.inventory.analyticsOverview(restaurantId),
+    enabled: Boolean(restaurantId),
+    queryFn: () => inventoryService.getAnalyticsOverview(),
+    staleTime: 60_000,
+    refetchInterval: hasRealtimeConnection ? false : 90_000,
+    refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     retry: 1,
   })

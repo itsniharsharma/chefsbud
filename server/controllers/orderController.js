@@ -294,7 +294,7 @@ export async function updateOrderStatus(req, res, next) {
         restaurant,
         tableNumber: order.tableNumber,
         orderId: order._id,
-        includeAnalytics: true,
+        includeAnalytics: wasCompleted !== isCompleted,
       }),
     )
     publishOrderChange({
@@ -343,7 +343,7 @@ export async function deleteOrder(req, res, next) {
         restaurant,
         tableNumber: order.tableNumber,
         orderId: req.params.orderId,
-        includeAnalytics: true,
+        includeAnalytics: Boolean(order.analyticsTrackedAt),
       }),
     )
     publishOrderChange({

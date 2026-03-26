@@ -36,6 +36,7 @@ export const queryKeys = {
     suppliers: (restaurantId) => ['inventory', 'suppliers', restaurantId],
     items: (restaurantId) => ['inventory', 'items', restaurantId],
     recipes: (restaurantId) => ['inventory', 'recipes', restaurantId],
+    analyticsOverview: (restaurantId) => ['inventory', 'analytics-overview', restaurantId],
     stock: (restaurantId, inventoryItemId) => ['inventory', 'stock', restaurantId, String(inventoryItemId || '')],
     purchases: (restaurantId, filters = {}) => [
       'inventory',

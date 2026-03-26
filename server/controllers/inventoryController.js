@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import InventoryItem from '../models/InventoryItem.js'
+import InventoryLedger from '../models/InventoryLedger.js'
 import InventoryPurchase from '../models/InventoryPurchase.js'
 import InventorySupplier from '../models/InventorySupplier.js'
 import MenuItem from '../models/MenuItem.js'
@@ -12,6 +13,7 @@ import {
 } from '../services/inventoryService.js'
 import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
+import { emitInventoryChanged } from '../realtime/inventoryEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const supplierProjection = '_id name gstNo phone email address isActive createdAt updatedAt'
@@ -19,17 +21,41 @@ const itemProjection = '_id name defaultUnit currentStock currentStockUnit isAct
 const purchaseProjection =
   '_id sourceType supplierId supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue totalDiscountAmount paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount createdAt updatedAt'
 
-function purchaseCacheTags(restaurantId) {
+function inventoryCacheTags(restaurantId, options = {}) {
   const id = String(restaurantId)
-  return [`inventory:purchases:${id}`, `inventory:items:${id}`]
+  const {
+    suppliers = false,
+    items = false,
+    purchases = false,
+    recipes = false,
+    analytics = false,
+  } = options
+
+  const tags = []
+  if (suppliers) tags.push(`inventory:suppliers:${id}`)
+  if (items) tags.push(`inventory:items:${id}`)
+  if (purchases) tags.push(`inventory:purchases:${id}`)
+  if (recipes) tags.push(`inventory:recipes:${id}`)
+  if (analytics) tags.push(`inventory:analytics:${id}`)
+
+  return tags
 }
 
-async function invalidateInventoryCaches(restaurantId) {
+async function invalidateInventoryCaches(restaurantId, options = {}) {
+  const normalizedRestaurantId = String(restaurantId || '').trim()
+  const tags = inventoryCacheTags(normalizedRestaurantId, options)
+
   try {
-    await invalidateCacheByTags(purchaseCacheTags(restaurantId))
+    if (tags.length) {
+      await invalidateCacheByTags(tags)
+    }
   } catch (cacheError) {
     console.warn('[Inventory] Cache invalidation warning:', cacheError.message)
   }
+
+  emitInventoryChanged(normalizedRestaurantId, {
+    reason: 'inventory-write',
+  })
 }
 
 function applyComposedPurchaseToDoc(purchase, composed) {
@@ -90,11 +116,80 @@ function round6(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 1_000_000) / 1_000_000
 }
 
+function round2(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
 function resolveBaseUnit(unit = 'Unit') {
   const normalized = String(unit || 'Unit').trim().toLowerCase()
   if (normalized === 'kg' || normalized === 'gram' || normalized === 'g') return 'g'
   if (normalized === 'litre' || normalized === 'liter' || normalized === 'ml') return 'ml'
   return 'unit'
+}
+
+function toPercent(part, total) {
+  const p = Number(part || 0)
+  const t = Number(total || 0)
+  if (t <= 0) return 0
+  return round2((p / t) * 100)
+}
+
+function purchaseUnitFactorExpression() {
+  return {
+    $switch: {
+      branches: [
+        { case: { $in: ['$items.unit', ['Kg', 'Litre']] }, then: 1000 },
+        { case: { $in: ['$items.unit', ['Gram', 'Ml', 'Unit', 'Packet']] }, then: 1 },
+      ],
+      default: 1,
+    },
+  }
+}
+
+function purchaseBaseUnitExpression() {
+  return {
+    $switch: {
+      branches: [
+        { case: { $in: ['$items.unit', ['Kg', 'Gram']] }, then: 'g' },
+        { case: { $in: ['$items.unit', ['Litre', 'Ml']] }, then: 'ml' },
+      ],
+      default: 'unit',
+    },
+  }
+}
+
+function buildStockDistribution(rows = [], metricKey = 'estimatedStockValue', othersUnit = 'mixed') {
+  const candidates = rows.filter((row) => Number(row?.[metricKey] || 0) > 0)
+  const topRows = candidates.slice(0, 8)
+  const topTotal = topRows.reduce((sum, row) => sum + Number(row?.[metricKey] || 0), 0)
+  const remaining = candidates
+    .slice(8)
+    .reduce((sum, row) => sum + Number(row?.[metricKey] || 0), 0)
+  const total = topTotal + remaining
+
+  const distribution = topRows.map((row) => ({
+    itemId: row.itemId,
+    name: row.name,
+    value: round2(Number(row?.[metricKey] || 0)),
+    stockUnit: row.stockUnit,
+    stockQuantity: row.stockQuantity,
+    estimatedStockValue: row.estimatedStockValue,
+    sharePercent: toPercent(row?.[metricKey], total),
+  }))
+
+  if (remaining > 0) {
+    distribution.push({
+      itemId: 'others',
+      name: 'Others',
+      value: round2(remaining),
+      stockUnit: othersUnit,
+      stockQuantity: 0,
+      estimatedStockValue: 0,
+      sharePercent: toPercent(remaining, total),
+    })
+  }
+
+  return distribution
 }
 
 function buildPurchaseLedgerEntries({ restaurantId, purchase, createdBy, referenceType = 'purchase' }) {
@@ -310,11 +405,10 @@ export async function createInventoryItem(req, res, next) {
       defaultUnit: req.body.defaultUnit || 'Unit',
     })
 
-    try {
-      await invalidateCacheByTags([`inventory:items:${String(restaurant._id)}`])
-    } catch (cacheError) {
-      console.warn('[Inventory] Cache invalidation warning for items:', cacheError.message)
-    }
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      analytics: true,
+    })
 
     return res.status(201).json(item)
   } catch (error) {
@@ -373,9 +467,15 @@ export async function updateInventoryItemDefaultUnit(req, res, next) {
     }
 
     item.defaultUnit = defaultUnit
+    if (Math.abs(currentStock) <= 0.000001) {
+      item.currentStockUnit = nextBaseUnit
+    }
     await item.save()
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      analytics: true,
+    })
 
     return res.json(item)
   } catch (error) {
@@ -502,7 +602,11 @@ export async function createInventoryPurchase(req, res, next) {
       .select(purchaseProjection)
       .lean()
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      purchases: true,
+      analytics: true,
+    })
 
     return res.status(201).json(responsePayload)
   } catch (error) {
@@ -679,7 +783,11 @@ export async function updateInventoryPurchaseItem(req, res, next) {
       session.endSession()
     }
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      purchases: true,
+      analytics: true,
+    })
 
     const updatedRowResponse = purchase.items?.[itemIndex]
 
@@ -775,7 +883,11 @@ export async function deleteInventoryPurchaseItem(req, res, next) {
         session.endSession()
       }
 
-      await invalidateInventoryCaches(restaurant._id)
+      await invalidateInventoryCaches(restaurant._id, {
+        items: true,
+        purchases: true,
+        analytics: true,
+      })
 
       return res.json({
         deleted: true,
@@ -829,7 +941,11 @@ export async function deleteInventoryPurchaseItem(req, res, next) {
       session.endSession()
     }
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      purchases: true,
+      analytics: true,
+    })
 
     return res.json({
       deleted: true,
@@ -904,6 +1020,11 @@ export async function upsertRecipe(req, res, next) {
       recipe = await existingRecipe.save()
     }
 
+    await invalidateInventoryCaches(restaurant._id, {
+      recipes: true,
+      analytics: true,
+    })
+
     return res.status(201).json(recipe)
   } catch (error) {
     next(error)
@@ -923,6 +1044,342 @@ export async function listRecipes(req, res, next) {
       .lean()
 
     return res.json({ recipes })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function getInventoryAnalyticsOverview(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return res.status(404).json({ message: 'Restaurant not found' })
+    }
+
+    const now = new Date()
+    const start30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const start14d = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+    const start90d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+
+    const [
+      inventoryItems,
+      menuItemsCount,
+      recipeCount,
+      purchaseRateRows,
+      purchaseSummaryRows,
+      purchaseSourceRows,
+      purchasePaymentRows,
+      ledgerTypeRows,
+      ledgerTrendRows,
+      topWastageRows,
+    ] = await Promise.all([
+      InventoryItem.find({ restaurantId: restaurant._id, isActive: true })
+        .select('_id name currentStock currentStockUnit defaultUnit')
+        .lean(),
+      MenuItem.countDocuments({ restaurantId: restaurant._id }),
+      Recipe.countDocuments({ restaurantId: restaurant._id }),
+      InventoryPurchase.aggregate([
+        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start90d } } },
+        { $unwind: '$items' },
+        {
+          $project: {
+            itemId: '$items.itemId',
+            amount: '$items.amount',
+            baseUnit: purchaseBaseUnitExpression(),
+            baseQuantity: {
+              $multiply: ['$items.quantity', purchaseUnitFactorExpression()],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: { itemId: '$itemId', baseUnit: '$baseUnit' },
+            totalAmount: { $sum: '$amount' },
+            totalBaseQuantity: { $sum: '$baseQuantity' },
+          },
+        },
+      ]),
+      InventoryPurchase.aggregate([
+        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
+        {
+          $group: {
+            _id: null,
+            invoiceCount: { $sum: 1 },
+            totalSpend: { $sum: '$grandTotalAmount' },
+            paidInvoices: {
+              $sum: { $cond: [{ $eq: ['$paymentType', 'Paid'] }, 1, 0] },
+            },
+            unpaidInvoices: {
+              $sum: { $cond: [{ $eq: ['$paymentType', 'Unpaid'] }, 1, 0] },
+            },
+          },
+        },
+      ]),
+      InventoryPurchase.aggregate([
+        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
+        {
+          $group: {
+            _id: '$sourceType',
+            invoices: { $sum: 1 },
+            spend: { $sum: '$grandTotalAmount' },
+          },
+        },
+        { $sort: { spend: -1 } },
+      ]),
+      InventoryPurchase.aggregate([
+        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
+        {
+          $group: {
+            _id: '$paymentType',
+            invoices: { $sum: 1 },
+            spend: { $sum: '$grandTotalAmount' },
+          },
+        },
+        { $sort: { spend: -1 } },
+      ]),
+      InventoryLedger.aggregate([
+        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
+        {
+          $group: {
+            _id: '$type',
+            entries: { $sum: 1 },
+            absoluteQuantity: { $sum: '$quantity' },
+            netQuantity: {
+              $sum: {
+                $multiply: ['$quantity', '$direction'],
+              },
+            },
+          },
+        },
+      ]),
+      InventoryLedger.aggregate([
+        {
+          $match: {
+            restaurantId: restaurant._id,
+            createdAt: { $gte: start14d },
+            type: { $in: ['PURCHASE', 'CONSUMPTION', 'WASTAGE', 'ADJUSTMENT', 'CONVERSION_IN', 'CONVERSION_OUT'] },
+          },
+        },
+        {
+          $group: {
+            _id: {
+              day: {
+                $dateToString: {
+                  format: '%Y-%m-%d',
+                  date: '$createdAt',
+                },
+              },
+              type: '$type',
+            },
+            signedQuantity: {
+              $sum: {
+                $multiply: ['$quantity', '$direction'],
+              },
+            },
+          },
+        },
+        { $sort: { '_id.day': 1 } },
+      ]),
+      InventoryLedger.aggregate([
+        {
+          $match: {
+            restaurantId: restaurant._id,
+            createdAt: { $gte: start30d },
+            type: 'WASTAGE',
+            direction: -1,
+          },
+        },
+        {
+          $group: {
+            _id: { inventoryItemId: '$inventoryItemId', unit: '$unit' },
+            quantity: { $sum: '$quantity' },
+          },
+        },
+        { $sort: { quantity: -1 } },
+        { $limit: 8 },
+      ]),
+    ])
+
+    const itemNamesById = new Map(inventoryItems.map((item) => [String(item._id), String(item.name || '')]))
+    const rateByItemAndUnit = new Map()
+
+    for (const row of purchaseRateRows) {
+      const itemId = String(row?._id?.itemId || '')
+      const baseUnit = String(row?._id?.baseUnit || 'unit')
+      const quantity = Number(row?.totalBaseQuantity || 0)
+      const amount = Number(row?.totalAmount || 0)
+      const avgRate = quantity > 0 ? amount / quantity : 0
+      if (!itemId || !Number.isFinite(avgRate) || avgRate <= 0) continue
+
+      if (!rateByItemAndUnit.has(itemId)) {
+        rateByItemAndUnit.set(itemId, new Map())
+      }
+      rateByItemAndUnit.get(itemId).set(baseUnit, avgRate)
+    }
+
+    const stockByItem = []
+    const stockTotals = { g: 0, ml: 0, unit: 0 }
+    let itemsWithStock = 0
+    let zeroOrNegativeStockItems = 0
+    let estimatedStockValue = 0
+
+    for (const item of inventoryItems) {
+      const itemId = String(item._id)
+      const quantity = Number(item.currentStock || 0)
+      const unit = String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))
+      const avgRatePerBaseUnit = Number(rateByItemAndUnit.get(itemId)?.get(unit) || 0)
+      const value = quantity > 0 && avgRatePerBaseUnit > 0 ? quantity * avgRatePerBaseUnit : 0
+
+      if (quantity > 0) itemsWithStock += 1
+      if (quantity <= 0) zeroOrNegativeStockItems += 1
+
+      if (!stockTotals[unit]) stockTotals[unit] = 0
+      stockTotals[unit] += quantity
+      estimatedStockValue += value
+
+      stockByItem.push({
+        itemId,
+        name: String(item.name || ''),
+        stockQuantity: round6(quantity),
+        stockUnit: unit,
+        avgPurchaseRatePerBaseUnit: round6(avgRatePerBaseUnit),
+        estimatedStockValue: round2(value),
+      })
+    }
+
+    stockByItem.sort((a, b) => {
+      const byValue = Number(b.estimatedStockValue || 0) - Number(a.estimatedStockValue || 0)
+      if (byValue !== 0) return byValue
+      return Number(b.stockQuantity || 0) - Number(a.stockQuantity || 0)
+    })
+
+    const stockValueDistribution = buildStockDistribution(stockByItem, 'estimatedStockValue', 'value')
+    const stockQuantityDistribution = buildStockDistribution(stockByItem, 'stockQuantity', 'mixed')
+    const pieMetric = stockValueDistribution.length ? 'estimatedStockValue' : 'stockQuantity'
+    const stockDistribution = pieMetric === 'estimatedStockValue'
+      ? stockValueDistribution
+      : stockQuantityDistribution
+
+    const purchaseSummary = purchaseSummaryRows[0] || {
+      invoiceCount: 0,
+      totalSpend: 0,
+      paidInvoices: 0,
+      unpaidInvoices: 0,
+    }
+
+    const purchaseBySource = purchaseSourceRows.map((row) => ({
+      sourceType: String(row?._id || 'Unknown'),
+      invoices: Number(row?.invoices || 0),
+      spend: round2(row?.spend || 0),
+      sharePercent: toPercent(row?.spend || 0, purchaseSummary.totalSpend || 0),
+    }))
+
+    const purchaseByPayment = purchasePaymentRows.map((row) => ({
+      paymentType: String(row?._id || 'Unknown'),
+      invoices: Number(row?.invoices || 0),
+      spend: round2(row?.spend || 0),
+      sharePercent: toPercent(row?.spend || 0, purchaseSummary.totalSpend || 0),
+    }))
+
+    const movementByType = ledgerTypeRows
+      .map((row) => ({
+        type: String(row?._id || ''),
+        entries: Number(row?.entries || 0),
+        absoluteQuantity: round6(row?.absoluteQuantity || 0),
+        netQuantity: round6(row?.netQuantity || 0),
+      }))
+      .sort((a, b) => Number(b.absoluteQuantity || 0) - Number(a.absoluteQuantity || 0))
+
+    const trendByDayMap = new Map()
+    const trendTypeToKey = {
+      PURCHASE: 'purchase',
+      CONSUMPTION: 'consumption',
+      WASTAGE: 'wastage',
+      ADJUSTMENT: 'adjustment',
+      CONVERSION_IN: 'conversionIn',
+      CONVERSION_OUT: 'conversionOut',
+    }
+
+    for (const row of ledgerTrendRows) {
+      const day = String(row?._id?.day || '')
+      const type = String(row?._id?.type || '')
+      const key = trendTypeToKey[type]
+      if (!day || !key) continue
+
+      if (!trendByDayMap.has(day)) {
+        trendByDayMap.set(day, {
+          day,
+          purchase: 0,
+          consumption: 0,
+          wastage: 0,
+          adjustment: 0,
+          conversionIn: 0,
+          conversionOut: 0,
+        })
+      }
+
+      const current = trendByDayMap.get(day)
+      current[key] = round6(Number(current[key] || 0) + Number(row?.signedQuantity || 0))
+    }
+
+    const movementTrend = [...trendByDayMap.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)))
+
+    const topWastageItems = topWastageRows.map((row) => {
+      const itemId = String(row?._id?.inventoryItemId || '')
+      return {
+        itemId,
+        name: itemNamesById.get(itemId) || 'Unknown Item',
+        unit: String(row?._id?.unit || 'unit'),
+        quantity: round6(row?.quantity || 0),
+      }
+    })
+
+    return res.json({
+      generatedAt: now.toISOString(),
+      windows: {
+        purchaseRateDays: 90,
+        purchasingDays: 30,
+        movementDays: 30,
+        trendDays: 14,
+      },
+      kpis: {
+        totalInventoryItems: Number(inventoryItems.length || 0),
+        itemsWithStock,
+        zeroOrNegativeStockItems,
+        stockAvailabilityPercent: toPercent(itemsWithStock, inventoryItems.length),
+        estimatedStockValue,
+        averageStockValuePerItem: inventoryItems.length ? round2(estimatedStockValue / inventoryItems.length) : 0,
+        recipeCoveragePercent: toPercent(recipeCount, menuItemsCount),
+        menuItemsCount: Number(menuItemsCount || 0),
+        recipeCount: Number(recipeCount || 0),
+      },
+      stock: {
+        totalsByBaseUnit: {
+          g: round6(stockTotals.g || 0),
+          ml: round6(stockTotals.ml || 0),
+          unit: round6(stockTotals.unit || 0),
+        },
+        pieMetric,
+        stockDistribution,
+        stockValueDistribution,
+        stockQuantityDistribution,
+        topItemsByEstimatedValue: stockByItem.slice(0, 10),
+      },
+      purchasing: {
+        invoiceCount: Number(purchaseSummary.invoiceCount || 0),
+        totalSpend: round2(purchaseSummary.totalSpend || 0),
+        paidInvoices: Number(purchaseSummary.paidInvoices || 0),
+        unpaidInvoices: Number(purchaseSummary.unpaidInvoices || 0),
+        paidInvoicePercent: toPercent(purchaseSummary.paidInvoices || 0, purchaseSummary.invoiceCount || 0),
+        sourceMix: purchaseBySource,
+        paymentMix: purchaseByPayment,
+      },
+      movement: {
+        byType: movementByType,
+        trend14d: movementTrend,
+        topWastageItems,
+      },
+    })
   } catch (error) {
     next(error)
   }
@@ -962,7 +1419,10 @@ export async function createInventoryWastage(req, res, next) {
       {},
     )
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      analytics: true,
+    })
 
     return res.status(201).json({ success: true })
   } catch (error) {
@@ -1043,7 +1503,10 @@ export async function createInventoryConversion(req, res, next) {
       {},
     )
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      analytics: true,
+    })
 
     return res.status(201).json({ success: true, conversionId: conversionReference })
   } catch (error) {
@@ -1101,7 +1564,11 @@ export async function bootstrapInventoryStock(req, res, next) {
       })
     }
 
-    await invalidateInventoryCaches(restaurant._id)
+    await invalidateInventoryCaches(restaurant._id, {
+      items: true,
+      purchases: true,
+      analytics: true,
+    })
 
     return res.json({
       success: true,

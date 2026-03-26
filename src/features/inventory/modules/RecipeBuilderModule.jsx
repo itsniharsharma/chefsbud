@@ -156,8 +156,8 @@ export default function RecipeBuilderModule() {
 
               <input
                 type="number"
-                min="0.000001"
-                step="0.001"
+                min="0"
+                step="any"
                 value={row.quantity}
                 onChange={(event) => onUpdateRow(index, 'quantity', event.target.value)}
                 className="rounded-xl border border-slate-200 px-3 py-2 text-sm md:col-span-3"

@@ -114,6 +114,7 @@ function App() {
             <Route path="conversion" element={<InventoryModulePage moduleKey="conversion" />} />
             <Route path="recipes" element={<InventoryModulePage moduleKey="recipes" />} />
             <Route path="request" element={<InventoryModulePage moduleKey="request" />} />
+            <Route path="analytics" element={<InventoryModulePage moduleKey="analytics" />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

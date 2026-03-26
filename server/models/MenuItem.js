@@ -15,6 +15,7 @@ const menuItemSchema = new mongoose.Schema(
 )
 
 menuItemSchema.index({ restaurantId: 1, name: 1 })
+menuItemSchema.index({ restaurantId: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, categoryId: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, categoryId: 1, isVeg: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, createdAt: -1 })

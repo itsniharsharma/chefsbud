@@ -30,6 +30,7 @@ const titles = {
   '/inventory/conversion': 'Convert Raw Material',
   '/inventory/recipes': 'Recipe Builder',
   '/inventory/request': 'Request For Purchase',
+  '/inventory/analytics': 'Inventory Analytics',
 }
 
 export default function DashboardLayout() {

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getInventoryModuleByKey } from '../features/inventory/inventoryModules'
 import ConversionModule from '../features/inventory/modules/ConversionModule'
 import CurrentStockModule from '../features/inventory/modules/CurrentStockModule'
+import InventoryAnalyticsModule from '../features/inventory/modules/InventoryAnalyticsModule'
 import RecipeBuilderModule from '../features/inventory/modules/RecipeBuilderModule'
 import WastageModule from '../features/inventory/modules/WastageModule'
 
@@ -14,6 +15,7 @@ export default function InventoryModulePage({ moduleKey }) {
     if (moduleKey === 'wastage') return <WastageModule />
     if (moduleKey === 'conversion') return <ConversionModule />
     if (moduleKey === 'recipes') return <RecipeBuilderModule />
+    if (moduleKey === 'analytics') return <InventoryAnalyticsModule />
     return null
   }
 

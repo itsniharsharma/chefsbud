@@ -116,7 +116,7 @@ async function assertTenantOwnership(entries = [], { session } = {}) {
     _id: { $in: itemIds },
     restaurantId,
   })
-    .select('_id restaurantId currentStockUnit')
+    .select('_id restaurantId currentStock currentStockUnit')
     .session(session || null)
     .lean()
 
@@ -131,7 +131,9 @@ async function assertTenantOwnership(entries = [], { session } = {}) {
     if (!item) {
       throw new Error('Inventory item tenant validation failed')
     }
-    if (item.currentStockUnit && item.currentStockUnit !== entry.unit) {
+    const currentStock = Number(item.currentStock || 0)
+    const canRealignBaseUnit = Math.abs(currentStock) <= 0.000001
+    if (item.currentStockUnit && item.currentStockUnit !== entry.unit && !canRealignBaseUnit) {
       throw new Error('Inventory unit mismatch detected for ledger write')
     }
   }

@@ -24,7 +24,7 @@ const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const CUSTOMER_LOOKUP_PAGE_SIZE = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_PAGE_SIZE || 100), 100))
-const CUSTOMER_LOOKUP_MAX_PAGES = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_MAX_PAGES || 10), 50))
+const CUSTOMER_LOOKUP_MAX_PAGES = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_MAX_PAGES || 3), 50))
 const customerIdByEmailCache = new Map()
 
 function normalizeEmail(value) {

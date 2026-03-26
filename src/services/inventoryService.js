@@ -58,6 +58,9 @@ export const inventoryService = {
 
     return api.get('/inventory/purchases', { params: sanitizedParams }).then((response) => response.data)
   },
+  getAnalyticsOverview() {
+    return api.get('/inventory/analytics/overview').then((response) => response.data)
+  },
   updatePurchaseItemRow({ purchaseId, itemIndex, payload }) {
     return api
       .patch(`/inventory/purchases/${purchaseId}/items/${itemIndex}`, payload)

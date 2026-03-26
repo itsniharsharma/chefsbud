@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  ChartPie,
   BookOpen,
   Boxes,
   ClipboardList,
@@ -65,6 +66,13 @@ export const inventoryModules = [
     description: 'Raise purchase requests (PO workflow)',
     icon: ShoppingBasket,
     route: '/inventory/request',
+  },
+  {
+    key: 'analytics',
+    title: 'Inventory Analytics',
+    description: 'Get end-to-end raw inventory health, movement, and value intelligence',
+    icon: ChartPie,
+    route: '/inventory/analytics',
   },
 ]
 

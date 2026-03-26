@@ -33,7 +33,7 @@ const inventoryItemSchema = new mongoose.Schema(
 
 inventoryItemSchema.pre('validate', async function inventoryItemPreValidate() {
   this.normalizedName = normalizeName(this.name)
-  if (!this.currentStockUnit) {
+  if (this.isNew || !this.currentStockUnit) {
     this.currentStockUnit = resolveBaseUnit(this.defaultUnit)
   }
 })

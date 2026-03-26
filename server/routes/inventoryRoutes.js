@@ -10,6 +10,7 @@ import {
   createInventorySupplier,
   createInventoryWastage,
   deleteInventoryPurchaseItem,
+  getInventoryAnalyticsOverview,
   getInventoryItemStock,
   listInventoryPurchaseRows,
   listInventoryItems,
@@ -82,6 +83,20 @@ router.get(
   }),
   listInventoryItems,
 )
+
+router.get(
+  '/analytics/overview',
+  cacheResponse({
+    ttlSeconds: 45,
+    keyBuilder: (req) => {
+      const restaurantId = String(req.restaurant?._id || req.user?._id || '')
+      return `inventory:analytics:${restaurantId}`
+    },
+    tagsBuilder: (req) => [`inventory:analytics:${String(req.restaurant?._id || req.user?._id || '')}`],
+  }),
+  getInventoryAnalyticsOverview,
+)
+
 router.post(
   '/items',
   [
@@ -120,7 +135,18 @@ router.post(
   bootstrapInventoryStock,
 )
 
-router.get('/recipes', listRecipes)
+router.get(
+  '/recipes',
+  cacheResponse({
+    ttlSeconds: 30,
+    keyBuilder: (req) => {
+      const restaurantId = String(req.restaurant?._id || req.user?._id || '')
+      return `inventory:recipes:${restaurantId}`
+    },
+    tagsBuilder: (req) => [`inventory:recipes:${String(req.restaurant?._id || req.user?._id || '')}`],
+  }),
+  listRecipes,
+)
 router.post(
   '/recipes',
   [
