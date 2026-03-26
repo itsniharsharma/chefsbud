@@ -14,10 +14,18 @@ import {
 } from '../controllers/orderController.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireActiveBilling } from '../middleware/billing.js'
+import { createRateLimiter } from '../middleware/rateLimit.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
 
 const router = Router()
+
+const publicOrderRatingLimiter = createRateLimiter({
+	id: 'orders-public-rating',
+	capacity: Number(process.env.RATE_LIMIT_PUBLIC_ORDER_RATING_CAPACITY || 20),
+	windowMs: Number(process.env.RATE_LIMIT_PUBLIC_ORDER_RATING_WINDOW_MS || 60_000),
+	keyFn: (req) => req.ip,
+})
 
 router.post(
 	'/',
@@ -58,6 +66,7 @@ router.get(
 )
 router.post(
 	'/track/:restaurantSlug/:tableNumber/:orderId/rating',
+	publicOrderRatingLimiter,
 	[
 		body('rating').isInt({ min: 1, max: 5 }),
 	],

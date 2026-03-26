@@ -141,8 +141,13 @@ function isOrderInFeedbackWindow(order) {
   return ts >= getFeedbackWindowStartDate().getTime()
 }
 
+function hasCustomerRating(order) {
+  const rating = Number(order?.customerRating)
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5
+}
+
 function toPublicOrderPayload(order) {
-  const customerCanRate = isOrderInFeedbackWindow(order) && !Number.isFinite(Number(order?.customerRating))
+  const customerCanRate = isOrderInFeedbackWindow(order) && !hasCustomerRating(order)
 
   return {
     ...order,
@@ -703,7 +708,7 @@ export async function ratePublicOrder(req, res, next) {
       return res.status(410).json({ message: 'Rating window has expired for this order' })
     }
 
-    if (Number.isFinite(Number(order.customerRating))) {
+    if (hasCustomerRating(order)) {
       return res.status(409).json({ message: 'Rating already submitted for this order' })
     }
 

@@ -16,6 +16,11 @@ const statusTone = {
   Completed: 'border-gray-200 bg-gray-50 text-gray-600',
 }
 
+function hasSubmittedRating(order) {
+  const rating = Number(order?.customerRating)
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5
+}
+
 export default function CustomerStatusPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber } = useParams()
@@ -149,7 +154,7 @@ export default function CustomerStatusPage() {
               {order.orderStatus === 'Completed' ? (
                 <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Order Feedback</p>
-                  {Number.isFinite(Number(order.customerRating)) ? (
+                  {hasSubmittedRating(order) ? (
                     <p className="mt-1 text-sm font-medium text-slate-700">Rated: {Number(order.customerRating)}/5</p>
                   ) : order.customerCanRate ? (
                     <div className="mt-2 flex flex-wrap gap-2">
