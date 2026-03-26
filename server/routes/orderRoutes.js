@@ -8,6 +8,7 @@ import {
 	markOrderKotPrinted,
 	getPublicTableOrders,
 	getPublicOrderStatus,
+	shiftTableOrders,
 	updateOrderStatus,
 } from '../controllers/orderController.js'
 import { requireAuth } from '../middleware/auth.js'
@@ -65,6 +66,19 @@ router.get(
 		tagsBuilder: (req) => [`orders:board:${req.params.restaurantId}`],
 	}),
 	getOrders,
+)
+router.patch(
+	'/shift-table',
+	requireAuth,
+	requireActiveBilling,
+	[
+		body('sourceFloorNumber').isInt({ min: 1, max: 500 }),
+		body('sourceTableNumber').isInt({ min: 1, max: 500 }),
+		body('targetFloorNumber').isInt({ min: 1, max: 500 }),
+		body('targetTableNumber').isInt({ min: 1, max: 500 }),
+	],
+	validateRequest,
+	shiftTableOrders,
 )
 router.patch(
 	'/:orderId/status',

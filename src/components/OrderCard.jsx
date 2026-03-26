@@ -4,7 +4,7 @@ import { formatCurrencyINR } from '../utils/currency'
 
 const statuses = ['Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
 
-function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, printingBillOrderId, printingKotOrderId, showStatusActions = true }) {
+function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, onShiftTable, shiftingTableKey, printingBillOrderId, printingKotOrderId, showStatusActions = true }) {
   const orderId = order._id || order.id
   const label = order.orderStatus || order.status
   const total = order.billFinalTotalAmount ?? order.totalAmount ?? order.total ?? 0
@@ -13,6 +13,8 @@ function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, printingBil
   const isBillPrinted = Boolean(order.billPrinted)
   const isPrintingBill = String(printingBillOrderId || '') === String(orderId)
   const isPrintingKot = String(printingKotOrderId || '') === String(orderId)
+  const tableKey = `${floorNumber}:${Number(order.tableNumber || 0)}`
+  const isShifting = String(shiftingTableKey || '') === tableKey
   const itemText = Array.isArray(order.items)
     ? order.items
         .map((item) => {
@@ -40,6 +42,15 @@ function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, printingBil
         <span>Status: {label}</span>
       </div>
       <div className="mt-3">
+        <Button
+          type="button"
+          variant="secondary"
+          className="mr-2 border border-slate-300 bg-slate-50 text-slate-700 hover:-translate-y-0.5 hover:border-slate-400 hover:bg-slate-100 hover:shadow-md"
+          onClick={() => onShiftTable?.(order)}
+          disabled={isShifting}
+        >
+          {isShifting ? 'Shifting...' : 'Shift Table'}
+        </Button>
         <Button
           type="button"
           variant="custom"

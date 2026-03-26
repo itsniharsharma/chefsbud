@@ -13,6 +13,9 @@ export const orderService = {
   updateStatus(orderId, orderStatus) {
     return api.patch(`/orders/${orderId}/status`, { orderStatus }).then((response) => response.data)
   },
+  shiftTable(payload) {
+    return api.patch('/orders/shift-table', payload).then((response) => response.data)
+  },
   markKotPrinted(orderId, payload = {}) {
     return api.patch(`/orders/${orderId}/kot-printed`, payload).then((response) => response.data)
   },

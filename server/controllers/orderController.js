@@ -325,6 +325,164 @@ export async function updateOrderStatus(req, res, next) {
   }
 }
 
+export async function shiftTableOrders(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return respondRestaurantNotFound(res)
+    }
+
+    const sourceFloorNumber = Number(req.body?.sourceFloorNumber)
+    const sourceTableNumber = Number(req.body?.sourceTableNumber)
+    const targetFloorNumber = Number(req.body?.targetFloorNumber)
+    const targetTableNumber = Number(req.body?.targetTableNumber)
+
+    const hasInvalidNumber =
+      !Number.isInteger(sourceFloorNumber) ||
+      !Number.isInteger(sourceTableNumber) ||
+      !Number.isInteger(targetFloorNumber) ||
+      !Number.isInteger(targetTableNumber) ||
+      sourceFloorNumber < 1 ||
+      sourceTableNumber < 1 ||
+      targetFloorNumber < 1 ||
+      targetTableNumber < 1
+
+    if (hasInvalidNumber) {
+      return res.status(400).json({ message: 'Source and target floor/table numbers must be valid positive integers' })
+    }
+
+    if (sourceFloorNumber === targetFloorNumber && sourceTableNumber === targetTableNumber) {
+      return res.status(400).json({ message: 'Source and target table cannot be the same' })
+    }
+
+    const activeSessionFilter = {
+      restaurantId: restaurant._id,
+      isArchived: false,
+      hiddenFromActive: false,
+      orderStatus: { $ne: 'Completed' },
+    }
+
+    const session = await mongoose.startSession()
+    let movedCount = 0
+
+    try {
+      await session.withTransaction(async () => {
+        const [sourceTable, targetTable] = await Promise.all([
+          Table.findOne({
+            restaurantId: restaurant._id,
+            floorNumber: sourceFloorNumber,
+            tableNumber: sourceTableNumber,
+            active: true,
+          })
+            .select('_id tableNumber floorNumber active')
+            .session(session)
+            .lean(),
+          Table.findOne({
+            restaurantId: restaurant._id,
+            floorNumber: targetFloorNumber,
+            tableNumber: targetTableNumber,
+            active: true,
+          })
+            .select('_id tableNumber floorNumber active')
+            .session(session)
+            .lean(),
+        ])
+
+        if (!sourceTable) {
+          const error = new Error('Source table does not exist or is inactive')
+          error.statusCode = 404
+          throw error
+        }
+
+        if (!targetTable) {
+          const error = new Error('Target table does not exist or is inactive')
+          error.statusCode = 404
+          throw error
+        }
+
+        const targetActiveCount = await Order.countDocuments({
+          ...activeSessionFilter,
+          floorNumber: targetFloorNumber,
+          tableNumber: targetTableNumber,
+        }).session(session)
+
+        if (targetActiveCount > 0) {
+          const error = new Error('Target table is already occupied with an active session')
+          error.statusCode = 409
+          throw error
+        }
+
+        const sourceActiveCount = await Order.countDocuments({
+          ...activeSessionFilter,
+          floorNumber: sourceFloorNumber,
+          tableNumber: sourceTableNumber,
+        }).session(session)
+
+        if (!sourceActiveCount) {
+          const error = new Error('No active orders found on source table')
+          error.statusCode = 404
+          throw error
+        }
+
+        const updateResult = await Order.updateMany(
+          {
+            restaurantId: restaurant._id,
+            isArchived: false,
+            hiddenFromActive: false,
+            orderStatus: { $ne: 'Completed' },
+            floorNumber: sourceFloorNumber,
+            tableNumber: sourceTableNumber,
+          },
+          {
+            $set: {
+              floorNumber: targetFloorNumber,
+              tableNumber: targetTableNumber,
+            },
+          },
+          { session },
+        )
+
+        movedCount = Number(updateResult?.modifiedCount || 0)
+      })
+    } finally {
+      session.endSession()
+    }
+
+    invalidateCacheByTags([
+      `orders:board:${String(restaurant._id)}`,
+      `orders:table:${restaurant.slug}:${sourceTableNumber}`,
+      `orders:table:${restaurant.slug}:${targetTableNumber}`,
+    ])
+
+    publishOrderChange({
+      restaurantId: restaurant._id,
+      type: 'table-shifted',
+      orderId: 'bulk',
+      extra: {
+        sourceFloorNumber,
+        sourceTableNumber,
+        targetFloorNumber,
+        targetTableNumber,
+        movedOrders: movedCount,
+      },
+    })
+
+    return res.json({
+      success: true,
+      movedOrders: movedCount,
+      sourceFloorNumber,
+      sourceTableNumber,
+      targetFloorNumber,
+      targetTableNumber,
+    })
+  } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message })
+    }
+    next(error)
+  }
+}
+
 export async function deleteOrder(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)

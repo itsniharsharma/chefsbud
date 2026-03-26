@@ -6,7 +6,7 @@ import Button from '../components/Button'
 import KotReprintModal from '../components/KotReprintModal'
 import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
-import { useOrdersBoardQuery } from '../hooks/useDashboardQueries'
+import { useOrdersBoardQuery, useTablesQuery } from '../hooks/useDashboardQueries'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
@@ -19,6 +19,10 @@ export default function OrdersPage() {
   const [floorSearch, setFloorSearch] = useState('')
   const [appliedFloor, setAppliedFloor] = useState('')
   const [error, setError] = useState('')
+  const [shiftTargetOrder, setShiftTargetOrder] = useState(null)
+  const [shiftFloorNumber, setShiftFloorNumber] = useState('')
+  const [shiftTableNumber, setShiftTableNumber] = useState('')
+  const [shiftingTableKey, setShiftingTableKey] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
   const [billTargetOrder, setBillTargetOrder] = useState(null)
@@ -33,6 +37,7 @@ export default function OrdersPage() {
   })
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
+  const { data: tables = [] } = useTablesQuery({ restaurantId: restaurant?._id })
   const boardQueryKey = ['dashboard', 'orders-board', restaurant?._id]
 
   const restorePreviousBoards = (previousBoards = []) => {
@@ -181,9 +186,73 @@ export default function OrdersPage() {
     },
   })
 
+  const shiftTableMutation = useMutation({
+    mutationFn: (payload) => orderService.shiftTable(payload),
+    onSuccess: () => {
+      setError('')
+      setShiftTargetOrder(null)
+      setShiftFloorNumber('')
+      setShiftTableNumber('')
+      setShiftingTableKey('')
+      refreshBoard()
+    },
+    onError: (requestError) => {
+      setShiftingTableKey('')
+      setError(requestError?.response?.data?.message || 'Failed to shift table')
+    },
+  })
+
   const onStatusChange = (id, status) => {
     if (!restaurant?._id) return
     updateStatusMutation.mutate({ id, status })
+  }
+
+  const onOpenShiftTable = (order) => {
+    const sourceFloor = Number(order?.floorNumber || 1)
+    setShiftTargetOrder(order)
+    setShiftFloorNumber(String(sourceFloor))
+    setShiftTableNumber('')
+    setError('')
+  }
+
+  const onConfirmShiftTable = () => {
+    if (!shiftTargetOrder) return
+
+    const sourceFloorNumber = Number(shiftTargetOrder?.floorNumber || 1)
+    const sourceTableNumber = Number(shiftTargetOrder?.tableNumber)
+    const targetFloorNumber = Number(shiftFloorNumber)
+    const targetTableNumber = Number(shiftTableNumber)
+
+    if (!Number.isInteger(targetFloorNumber) || targetFloorNumber < 1 || !Number.isInteger(targetTableNumber) || targetTableNumber < 1) {
+      setError('Enter a valid target floor and table number')
+      return
+    }
+
+    if (sourceFloorNumber === targetFloorNumber && sourceTableNumber === targetTableNumber) {
+      setError('Source and target table cannot be same')
+      return
+    }
+
+    const targetExistsAndActive = tables.some((table) =>
+      Number(table.floorNumber || 1) === targetFloorNumber &&
+      Number(table.tableNumber) === targetTableNumber &&
+      Boolean(table.active),
+    )
+
+    if (!targetExistsAndActive) {
+      setError('Target table does not exist or is inactive')
+      return
+    }
+
+    const key = `${sourceFloorNumber}:${sourceTableNumber}`
+    setShiftingTableKey(key)
+    setError('')
+    shiftTableMutation.mutate({
+      sourceFloorNumber,
+      sourceTableNumber,
+      targetFloorNumber,
+      targetTableNumber,
+    })
   }
 
   const applyFloorSearch = (event) => {
@@ -282,6 +351,56 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-5">
+      {shiftTargetOrder ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900">Shift Table Session</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Move all active orders from Floor {Number(shiftTargetOrder.floorNumber || 1)}, Table {Number(shiftTargetOrder.tableNumber)}.
+            </p>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm text-slate-700">
+                <span className="font-medium">Target Floor</span>
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  value={shiftFloorNumber}
+                  onChange={(event) => setShiftFloorNumber(event.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-slate-700">
+                <span className="font-medium">Target Table</span>
+                <input
+                  className="input"
+                  type="number"
+                  min="1"
+                  value={shiftTableNumber}
+                  onChange={(event) => setShiftTableNumber(event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setShiftTargetOrder(null)
+                  setShiftingTableKey('')
+                }}
+                disabled={shiftTableMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={onConfirmShiftTable} disabled={shiftTableMutation.isPending}>
+                {shiftTableMutation.isPending ? 'Shifting...' : 'Confirm Shift'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <BillPrintModal
         open={Boolean(billTargetOrder)}
         order={billTargetOrder}
@@ -348,6 +467,8 @@ export default function OrdersPage() {
                 key={order._id || order.id}
                 order={order}
                 onStatusChange={onStatusChange}
+                onShiftTable={onOpenShiftTable}
+                shiftingTableKey={shiftingTableKey}
                 onPrintBill={printBillForOrder}
                 onPrintKot={printKotForOrder}
                 printingBillOrderId={printingBillOrderId}
