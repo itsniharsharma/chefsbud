@@ -260,25 +260,41 @@ export async function updateOrderStatus(req, res, next) {
 
         if (isCompleted && !wasCompleted && !existingOrder.inventoryProcessedAt) {
           const cycle = Math.max(0, Number(existingOrder.inventoryConsumptionCycle || 0)) + 1
-          await processOrderConsumption(order, {
-            session,
-            createdBy: req.user?._id || null,
-            cycle,
-          })
-          order.inventoryConsumptionCycle = cycle
-          order.inventoryProcessedAt = new Date()
-          await order.save({ session })
+          try {
+            await processOrderConsumption(order, {
+              session,
+              createdBy: req.user?._id || null,
+              cycle,
+            })
+            order.inventoryConsumptionCycle = cycle
+            order.inventoryProcessedAt = new Date()
+            await order.save({ session })
+          } catch (inventoryError) {
+            logger.warn('order_inventory_consumption_failed', {
+              orderId: String(order?._id || req.params.orderId || ''),
+              restaurantId: String(restaurant?._id || ''),
+              message: inventoryError?.message || 'inventory_consumption_failed',
+            })
+          }
         }
 
         if (!isCompleted && wasCompleted && existingOrder.inventoryProcessedAt) {
           const cycle = Math.max(1, Number(existingOrder.inventoryConsumptionCycle || 1))
-          await reverseOrderConsumption(existingOrder, {
-            session,
-            createdBy: req.user?._id || null,
-            cycle,
-          })
-          order.inventoryProcessedAt = null
-          await order.save({ session })
+          try {
+            await reverseOrderConsumption(existingOrder, {
+              session,
+              createdBy: req.user?._id || null,
+              cycle,
+            })
+            order.inventoryProcessedAt = null
+            await order.save({ session })
+          } catch (inventoryError) {
+            logger.warn('order_inventory_reverse_failed', {
+              orderId: String(existingOrder?._id || req.params.orderId || ''),
+              restaurantId: String(restaurant?._id || ''),
+              message: inventoryError?.message || 'inventory_reverse_failed',
+            })
+          }
         }
       })
     } finally {
