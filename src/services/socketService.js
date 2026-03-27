@@ -2,10 +2,18 @@ import { io } from 'socket.io-client'
 
 let socketClient = null
 const connectionListeners = new Set()
+let dashboardRoomReady = false
 
 function notifyDashboardSocketConnection() {
-  const connected = Boolean(socketClient?.connected)
+  const connected = Boolean(socketClient?.connected && dashboardRoomReady)
   connectionListeners.forEach((listener) => listener(connected))
+}
+
+function setDashboardRoomReady(nextValue) {
+  const normalized = Boolean(nextValue)
+  if (dashboardRoomReady === normalized) return
+  dashboardRoomReady = normalized
+  notifyDashboardSocketConnection()
 }
 
 function bindDashboardSocketLifecycle(socket) {
@@ -14,8 +22,14 @@ function bindDashboardSocketLifecycle(socket) {
   }
 
   socket.__chefsBudLifecycleBound = true
-  socket.on('connect', notifyDashboardSocketConnection)
-  socket.on('disconnect', notifyDashboardSocketConnection)
+  socket.on('connect', () => {
+    setDashboardRoomReady(false)
+    notifyDashboardSocketConnection()
+  })
+  socket.on('disconnect', () => {
+    setDashboardRoomReady(false)
+    notifyDashboardSocketConnection()
+  })
   return socket
 }
 
@@ -58,11 +72,16 @@ export function subscribeDashboardSocketConnection(listener) {
 }
 
 export function getDashboardSocketConnected() {
-  return Boolean(socketClient?.connected)
+  return Boolean(socketClient?.connected && dashboardRoomReady)
+}
+
+export function setDashboardSocketRoomReady(isReady) {
+  setDashboardRoomReady(Boolean(isReady))
 }
 
 export function disconnectDashboardSocket() {
   if (!socketClient) return
+  setDashboardRoomReady(false)
   socketClient.disconnect()
   notifyDashboardSocketConnection()
 }

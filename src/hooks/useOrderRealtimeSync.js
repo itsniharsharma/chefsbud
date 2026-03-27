@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { getDashboardSocket } from '../services/socketService'
+import { getDashboardSocket, setDashboardSocketRoomReady } from '../services/socketService'
 import { queryKeys } from '../lib/queryKeys'
 
 const ORDER_INVALIDATION_DEBOUNCE_MS = 250
+const ROOM_JOIN_RETRY_MS = 2500
 
 export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
   const queryClient = useQueryClient()
@@ -22,7 +23,37 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
     }
 
     let invalidationTimer = null
+    let joinRetryTimer = null
     let shouldRefreshAnalyticsCards = false
+
+    const clearJoinRetry = () => {
+      if (!joinRetryTimer) return
+      clearTimeout(joinRetryTimer)
+      joinRetryTimer = null
+    }
+
+    const scheduleJoinRetry = () => {
+      if (joinRetryTimer) return
+      joinRetryTimer = setTimeout(() => {
+        joinRetryTimer = null
+        requestRoomJoin()
+      }, ROOM_JOIN_RETRY_MS)
+    }
+
+    const requestRoomJoin = () => {
+      if (!socket.connected) return
+
+      socket.emit('dashboard:join-restaurant', roomPayload, (ack = {}) => {
+        if (ack?.ok) {
+          setDashboardSocketRoomReady(true)
+          clearJoinRetry()
+          return
+        }
+
+        setDashboardSocketRoomReady(false)
+        scheduleJoinRetry()
+      })
+    }
 
     const flushInvalidations = () => {
       invalidationTimer = null
@@ -59,7 +90,8 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
     }
 
     const onConnected = () => {
-      socket.emit('dashboard:join-restaurant', roomPayload)
+      setDashboardSocketRoomReady(false)
+      requestRoomJoin()
     }
 
     const onOrderChanged = (payload) => {
@@ -78,6 +110,8 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
         clearTimeout(invalidationTimer)
         invalidationTimer = null
       }
+      clearJoinRetry()
+      setDashboardSocketRoomReady(false)
       socket.emit('dashboard:leave-restaurant', roomPayload)
       socket.off('connect', onConnected)
       socket.off('order:changed', onOrderChanged)

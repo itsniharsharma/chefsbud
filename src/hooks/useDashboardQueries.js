@@ -8,6 +8,7 @@ import { useDashboardRealtimeStatus } from './useDashboardRealtimeStatus'
 
 export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNumber }) {
   const hasRealtimeConnection = useDashboardRealtimeStatus(Boolean(restaurantId))
+  const boardRefetchIntervalMs = hasRealtimeConnection ? 180_000 : 90_000
 
   return useQuery({
     queryKey: queryKeys.dashboard.ordersBoard(restaurantId, statusFilter, scope, floorNumber),
@@ -19,7 +20,7 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNu
         ...(floorNumber ? { floorNumber } : {}),
       }),
     staleTime: 20_000,
-    refetchInterval: hasRealtimeConnection ? false : 90_000,
+    refetchInterval: boardRefetchIntervalMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
@@ -28,6 +29,7 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNu
 
 export function useRecentOrdersQuery({ restaurantId, scope }) {
   const hasRealtimeConnection = useDashboardRealtimeStatus(Boolean(restaurantId))
+  const recentRefetchIntervalMs = hasRealtimeConnection ? 240_000 : 120_000
 
   return useQuery({
     queryKey: queryKeys.dashboard.recentOrders(restaurantId, scope),
@@ -39,7 +41,7 @@ export function useRecentOrdersQuery({ restaurantId, scope }) {
         limit: 200,
       }),
     staleTime: 30_000,
-    refetchInterval: hasRealtimeConnection ? false : 120_000,
+    refetchInterval: recentRefetchIntervalMs,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
