@@ -1,7 +1,11 @@
 import mongoose from 'mongoose'
+import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsDailyMetrics from '../models/AnalyticsDailyMetrics.js'
+import AnalyticsEventIngestion from '../models/AnalyticsEventIngestion.js'
 import AnalyticsExposureSession from '../models/AnalyticsExposureSession.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
+import AnalyticsOrderInsightsDaily from '../models/AnalyticsOrderInsightsDaily.js'
+import Category from '../models/Category.js'
 import MenuItem from '../models/MenuItem.js'
 import Order from '../models/Order.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
@@ -12,6 +16,8 @@ import { logger } from '../utils/logger.js'
 const ANALYTICS_BACKFILL_LOCK_SECONDS = Math.max(30, Number(process.env.ANALYTICS_BACKFILL_LOCK_SECONDS || 120))
 const ANALYTICS_BACKFILL_BATCH_SIZE = Math.max(50, Math.min(Number(process.env.ANALYTICS_BACKFILL_BATCH_SIZE || 250), 1000))
 const ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN || 8), 50))
+const ANALYTICS_BACKFILL_CONCURRENCY = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_CONCURRENCY || 6), 20))
+const ANALYTICS_TRACKING_STALE_SECONDS = Math.max(60, Number(process.env.ANALYTICS_TRACKING_STALE_SECONDS || 300))
 const localBackfillLocks = new Map()
 
 function normalizeDate(dateLike = new Date()) {
@@ -46,6 +52,49 @@ function clampNonNegative(value) {
 
 function isValidObjectId(value) {
   return mongoose.Types.ObjectId.isValid(String(value || '').trim())
+}
+
+async function registerAnalyticsEventIdempotency({ restaurantId, eventType, eventId, occurredAt = new Date() }) {
+  const normalizedEventId = String(eventId || '').trim()
+  if (!normalizedEventId) {
+    return { accepted: true, deduplicated: false }
+  }
+
+  const normalizedType = String(eventType || '').trim() || 'unknown'
+  const expiresAt = addDays(normalizeDate(occurredAt), 14)
+
+  let result = null
+  try {
+    result = await AnalyticsEventIngestion.updateOne(
+      {
+        restaurantId,
+        eventType: normalizedType,
+        eventId: normalizedEventId,
+      },
+      {
+        $setOnInsert: {
+          restaurantId,
+          eventType: normalizedType,
+          eventId: normalizedEventId,
+          firstSeenAt: occurredAt,
+          expiresAt,
+        },
+      },
+      { upsert: true },
+    )
+  } catch (error) {
+    // Concurrent duplicate submissions can race on the unique index.
+    if (error?.code === 11000) {
+      return { accepted: false, deduplicated: true }
+    }
+    throw error
+  }
+
+  const inserted = Number(result?.upsertedCount || 0) > 0
+  return {
+    accepted: inserted,
+    deduplicated: !inserted,
+  }
 }
 
 function buildPurchaseBreakdown(order) {
@@ -118,7 +167,6 @@ async function upsertItemDailyMetric({
       $setOnInsert: {
         restaurantId,
         menuItemId,
-        menuItemName: String(menuItemName || '').trim(),
         categoryId,
         date,
         dateKey,
@@ -223,11 +271,210 @@ async function upsertHourlyMetric({ restaurantId, date, dateKey, hour, increment
   }
 }
 
+function buildOrderInsightIncrements(order, multiplier = 1) {
+  const safeMultiplier = Number(multiplier || 1)
+  if (!safeMultiplier) return null
+
+  const items = Array.isArray(order?.items) ? order.items : []
+  const totalQuantity = items.reduce((sum, item) => sum + clampNonNegative(item?.quantity), 0)
+  const uniqueItems = new Set(items.map((item) => String(item?.menuItemId || '').trim()).filter(Boolean)).size
+  const rating = Number(order?.customerRating || 0)
+
+  const increments = {
+    completedOrders: safeMultiplier,
+    totalItemsSold: totalQuantity * safeMultiplier,
+    singleItemOrders: uniqueItems <= 1 ? safeMultiplier : 0,
+    multiItemOrders: uniqueItems > 1 ? safeMultiplier : 0,
+  }
+
+  if (rating >= 1 && rating <= 5) {
+    increments.ratedOrders = safeMultiplier
+    increments.totalRating = rating * safeMultiplier
+    increments[`rating${rating}Count`] = safeMultiplier
+  }
+
+  return increments
+}
+
+function buildPairIncrements(order, multiplier = 1) {
+  const safeMultiplier = Number(multiplier || 1)
+  if (!safeMultiplier) return []
+
+  const itemNames = [...new Set(
+    (Array.isArray(order?.items) ? order.items : [])
+      .map((item) => String(item?.name || '').trim())
+      .filter(Boolean),
+  )]
+
+  const pairs = []
+  for (let indexA = 0; indexA < itemNames.length; indexA += 1) {
+    for (let indexB = indexA + 1; indexB < itemNames.length; indexB += 1) {
+      const sorted = [itemNames[indexA], itemNames[indexB]].sort((a, b) => a.localeCompare(b))
+      pairs.push({
+        pairKey: `${sorted[0]} + ${sorted[1]}`,
+        itemA: sorted[0],
+        itemB: sorted[1],
+        count: safeMultiplier,
+      })
+    }
+  }
+
+  return pairs
+}
+
+async function upsertOrderInsightsDaily({ restaurantId, date, dateKey, increments }) {
+  const safeIncrements = {}
+  Object.entries(increments || {}).forEach(([key, value]) => {
+    const numeric = sanitizeMetricIncrement(value)
+    if (!numeric) return
+    safeIncrements[key] = numeric
+  })
+
+  if (!Object.keys(safeIncrements).length) return
+
+  await AnalyticsOrderInsightsDaily.updateOne(
+    { restaurantId, dateKey },
+    {
+      $setOnInsert: {
+        restaurantId,
+        date,
+        dateKey,
+      },
+      $inc: safeIncrements,
+    },
+    { upsert: true },
+  )
+
+  if (Object.values(safeIncrements).some((value) => value < 0)) {
+    await AnalyticsOrderInsightsDaily.updateOne(
+      { restaurantId, dateKey },
+      [
+        {
+          $set: {
+            completedOrders: { $max: [0, '$completedOrders'] },
+            totalItemsSold: { $max: [0, '$totalItemsSold'] },
+            singleItemOrders: { $max: [0, '$singleItemOrders'] },
+            multiItemOrders: { $max: [0, '$multiItemOrders'] },
+            ratedOrders: { $max: [0, '$ratedOrders'] },
+            totalRating: { $max: [0, '$totalRating'] },
+            rating1Count: { $max: [0, '$rating1Count'] },
+            rating2Count: { $max: [0, '$rating2Count'] },
+            rating3Count: { $max: [0, '$rating3Count'] },
+            rating4Count: { $max: [0, '$rating4Count'] },
+            rating5Count: { $max: [0, '$rating5Count'] },
+          },
+        },
+      ],
+    )
+  }
+}
+
+async function upsertBasketPairDaily({ restaurantId, date, dateKey, pairs = [] }) {
+  if (!Array.isArray(pairs) || !pairs.length) return
+
+  await AnalyticsBasketPairDaily.bulkWrite(
+    pairs.map((pair) => ({
+      updateOne: {
+        filter: {
+          restaurantId,
+          dateKey,
+          pairKey: pair.pairKey,
+        },
+        update: {
+          $setOnInsert: {
+            restaurantId,
+            date,
+            dateKey,
+            pairKey: pair.pairKey,
+            itemA: pair.itemA,
+            itemB: pair.itemB,
+          },
+          $inc: {
+            count: sanitizeMetricIncrement(pair.count),
+          },
+        },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  )
+}
+
+function buildAnalyticsClaimSelector(orderId) {
+  return {
+    _id: orderId,
+    orderStatus: 'Completed',
+    analyticsTrackedAt: null,
+    $or: [
+      { analyticsTrackingState: '' },
+      { analyticsTrackingState: { $exists: false } },
+      {
+        analyticsTrackingState: 'processing',
+        analyticsTrackingStartedAt: {
+          $lte: new Date(Date.now() - ANALYTICS_TRACKING_STALE_SECONDS * 1000),
+        },
+      },
+    ],
+  }
+}
+
+async function claimCompletedOrderForAnalytics(orderId) {
+  return Order.findOneAndUpdate(
+    buildAnalyticsClaimSelector(orderId),
+    {
+      $set: {
+        analyticsTrackingState: 'processing',
+        analyticsTrackingStartedAt: new Date(),
+      },
+    },
+    {
+      new: true,
+    },
+  ).lean()
+}
+
+async function markCompletedOrderAnalyticsTracked(orderId) {
+  const trackedAt = new Date()
+  await Order.updateOne(
+    {
+      _id: orderId,
+      analyticsTrackingState: 'processing',
+      analyticsTrackedAt: null,
+    },
+    {
+      $set: {
+        analyticsTrackedAt: trackedAt,
+        analyticsTrackingState: 'tracked',
+      },
+      $unset: {
+        analyticsTrackingStartedAt: '',
+      },
+    },
+  )
+
+  return trackedAt
+}
+
+async function markCompletedOrderAnalyticsClaimFailed(orderId) {
+  await Order.updateOne(
+    {
+      _id: orderId,
+      analyticsTrackingState: 'processing',
+      analyticsTrackedAt: null,
+    },
+    {
+      $set: { analyticsTrackingState: '' },
+      $unset: { analyticsTrackingStartedAt: '' },
+    },
+  )
+}
+
 export async function trackMenuExposure({
   restaurantId,
   menuItemIds = [],
   resolvedMenuItems = null,
   sessionId,
+  eventId = '',
   occurredAt = new Date(),
 }) {
   const normalizedSessionId = String(sessionId || '').trim()
@@ -236,6 +483,16 @@ export async function trackMenuExposure({
 
   if (!restaurantId || !normalizedSessionId || !uniqueIds.length) {
     return { tracked: 0 }
+  }
+
+  const idempotency = await registerAnalyticsEventIdempotency({
+    restaurantId,
+    eventType: 'menu-view',
+    eventId,
+    occurredAt,
+  })
+  if (!idempotency.accepted) {
+    return { tracked: 0, deduplicated: true }
   }
 
   const date = normalizeDate(occurredAt)
@@ -330,6 +587,7 @@ export async function trackMenuExposure({
 
 export async function trackAddToCart({
   restaurantId,
+  eventId = '',
   menuItemId,
   quantity = 1,
   occurredAt = new Date(),
@@ -337,6 +595,16 @@ export async function trackAddToCart({
   const normalizedMenuItemId = String(menuItemId || '').trim()
   if (!restaurantId || !isValidObjectId(normalizedMenuItemId)) {
     return { tracked: false }
+  }
+
+  const idempotency = await registerAnalyticsEventIdempotency({
+    restaurantId,
+    eventType: 'add-to-cart',
+    eventId,
+    occurredAt,
+  })
+  if (!idempotency.accepted) {
+    return { tracked: false, deduplicated: true }
   }
 
   const menuItem = await MenuItem.findOne({
@@ -388,6 +656,8 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
   const dateKey = toDateKey(date)
   const completedHour = normalizeHour(completedAt)
   const itemBreakdown = buildPurchaseBreakdown(order)
+  const orderInsightIncrements = buildOrderInsightIncrements(order, safeMultiplier)
+  const basketPairs = buildPairIncrements(order, safeMultiplier)
   const menuMap = await loadMenuItemsMap(
     order.restaurantId,
     itemBreakdown.map((entry) => entry.menuItemId),
@@ -427,36 +697,77 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
       hour: completedHour,
       increment: safeMultiplier,
     }),
+    upsertOrderInsightsDaily({
+      restaurantId: order.restaurantId,
+      date,
+      dateKey,
+      increments: orderInsightIncrements,
+    }),
+    upsertBasketPairDaily({
+      restaurantId: order.restaurantId,
+      date,
+      dateKey,
+      pairs: basketPairs,
+    }),
   ])
 }
 
 export async function syncCompletedOrderAnalytics(orderId) {
-  const order = await Order.findById(orderId).lean()
-  if (!order) return null
-
-  if (order.orderStatus !== 'Completed') {
-    return order
+  const claimedOrder = await claimCompletedOrderForAnalytics(orderId)
+  if (!claimedOrder) {
+    return Order.findById(orderId)
+      .select('_id orderStatus analyticsTrackedAt')
+      .lean()
   }
 
-  if (order.analyticsTrackedAt) {
-    return order
+  try {
+    await applyCompletedOrderAnalytics(claimedOrder, 1)
+    const trackedAt = await markCompletedOrderAnalyticsTracked(claimedOrder._id)
+    return { ...claimedOrder, analyticsTrackedAt: trackedAt, analyticsTrackingState: 'tracked' }
+  } catch (error) {
+    await markCompletedOrderAnalyticsClaimFailed(claimedOrder._id)
+    throw error
   }
-
-  await applyCompletedOrderAnalytics(order, 1)
-  const trackedAt = new Date()
-
-  await Order.updateOne(
-    { _id: order._id, analyticsTrackedAt: null },
-    { $set: { analyticsTrackedAt: trackedAt } },
-  )
-
-  return { ...order, analyticsTrackedAt: trackedAt }
 }
 
 export async function revertCompletedOrderAnalytics(order) {
   if (!order?.analyticsTrackedAt) return
 
   await applyCompletedOrderAnalytics(order, -1)
+}
+
+export async function applyOrderRatingAnalytics({
+  restaurantId,
+  completedAt,
+  nextRating,
+  previousRating = null,
+}) {
+  const numericNext = Number(nextRating || 0)
+  const numericPrevious = Number(previousRating || 0)
+  if (!restaurantId || numericNext < 1 || numericNext > 5) {
+    return false
+  }
+
+  const date = normalizeDate(completedAt || new Date())
+  const dateKey = toDateKey(date)
+  const increments = {
+    ratedOrders: numericPrevious >= 1 && numericPrevious <= 5 ? 0 : 1,
+    totalRating: numericNext - (numericPrevious >= 1 && numericPrevious <= 5 ? numericPrevious : 0),
+    [`rating${numericNext}Count`]: 1,
+  }
+
+  if (numericPrevious >= 1 && numericPrevious <= 5) {
+    increments[`rating${numericPrevious}Count`] = -1
+  }
+
+  await upsertOrderInsightsDaily({
+    restaurantId,
+    date,
+    dateKey,
+    increments,
+  })
+
+  return true
 }
 
 export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize = 200 } = {}) {
@@ -473,19 +784,37 @@ export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize 
 
   if (!candidates.length) return 0
 
-  for (const order of candidates) {
-    await applyCompletedOrderAnalytics(order, 1)
+  let processedCount = 0
+  for (let offset = 0; offset < candidates.length; offset += ANALYTICS_BACKFILL_CONCURRENCY) {
+    const batch = candidates.slice(offset, offset + ANALYTICS_BACKFILL_CONCURRENCY)
+
+    const results = await Promise.all(
+      batch.map(async (order) => {
+        const claimedOrder = await claimCompletedOrderForAnalytics(order._id)
+        if (!claimedOrder) {
+          return 0
+        }
+
+        try {
+          await applyCompletedOrderAnalytics(claimedOrder, 1)
+          await markCompletedOrderAnalyticsTracked(claimedOrder._id)
+          return 1
+        } catch (error) {
+          await markCompletedOrderAnalyticsClaimFailed(claimedOrder._id)
+          logger.warn('analytics_backfill_order_failed', {
+            orderId: String(order?._id || ''),
+            restaurantId: String(restaurantId),
+            message: error?.message || 'analytics backfill order failed',
+          })
+          return 0
+        }
+      }),
+    )
+
+    processedCount += results.reduce((sum, value) => sum + Number(value || 0), 0)
   }
 
-  await Order.updateMany(
-    {
-      _id: { $in: candidates.map((order) => order._id) },
-      analyticsTrackedAt: null,
-    },
-    { $set: { analyticsTrackedAt: new Date() } },
-  )
-
-  return candidates.length
+  return processedCount
 }
 
 function buildTrendBuckets(startDate, endDate) {
@@ -634,6 +963,44 @@ async function aggregateHourlyOrders({ restaurantId, startDate, endDate }) {
       },
     },
     { $sort: { '_id.hour': 1 } },
+  ])
+}
+
+async function aggregateOrderInsightsDaily({ restaurantId, startDate, endDate }) {
+  return AnalyticsOrderInsightsDaily.find({
+    restaurantId,
+    date: { $gte: startDate, $lte: endDate },
+  })
+    .select('date dateKey completedOrders totalItemsSold singleItemOrders multiItemOrders ratedOrders totalRating rating1Count rating2Count rating3Count rating4Count rating5Count')
+    .sort({ date: 1 })
+    .lean()
+}
+
+async function aggregateBasketPairs({ restaurantId, startDate, endDate }) {
+  return AnalyticsBasketPairDaily.aggregate([
+    {
+      $match: {
+        restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+        date: { $gte: startDate, $lte: endDate },
+      },
+    },
+    {
+      $group: {
+        _id: '$pairKey',
+        itemA: { $first: '$itemA' },
+        itemB: { $first: '$itemB' },
+        count: { $sum: '$count' },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        pairKey: '$_id',
+        itemA: 1,
+        itemB: 1,
+        count: 1,
+      },
+    },
   ])
 }
 
@@ -1343,5 +1710,532 @@ export async function buildAdvancedAnalytics({ restaurantId, range = '14d' }) {
     revenue,
     dropoff,
     insights,
+  }
+}
+
+function computeMedian(values = []) {
+  const normalized = (Array.isArray(values) ? values : [])
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b)
+
+  if (!normalized.length) return 0
+  const middle = Math.floor(normalized.length / 2)
+  if (normalized.length % 2 === 0) {
+    return round2((normalized[middle - 1] + normalized[middle]) / 2)
+  }
+  return round2(normalized[middle])
+}
+
+function safeName(value, fallback) {
+  const normalized = String(value || '').trim()
+  return normalized || fallback
+}
+
+function buildPriceBands(items = []) {
+  const rows = Array.isArray(items) ? items : []
+  if (!rows.length) return []
+
+  const prices = rows.map((item) => Number(item.price || 0)).filter((value) => value > 0)
+  const minPrice = prices.length ? Math.min(...prices) : 0
+  const maxPrice = prices.length ? Math.max(...prices) : 0
+  const bandCount = 5
+  const width = maxPrice > minPrice ? Math.max(1, (maxPrice - minPrice) / bandCount) : 1
+
+  const bands = Array.from({ length: bandCount }, (_, index) => {
+    const start = minPrice + width * index
+    const end = index === bandCount - 1 ? maxPrice : start + width
+    return {
+      label: `${Math.round(start)}-${Math.round(end)}`,
+      min: start,
+      max: end,
+      orders: 0,
+      conversionTotal: 0,
+      count: 0,
+    }
+  })
+
+  rows.forEach((item) => {
+    const price = Number(item.price || 0)
+    let band = bands.find((entry, index) => {
+      if (index === bands.length - 1) {
+        return price >= entry.min && price <= entry.max
+      }
+      return price >= entry.min && price < entry.max
+    })
+
+    if (!band) {
+      band = bands[bands.length - 1]
+    }
+
+    band.orders += clampNonNegative(item.orders)
+    band.conversionTotal += Number(item.conversion || 0)
+    band.count += 1
+  })
+
+  return bands
+    .filter((band) => band.count > 0)
+    .map((band) => ({
+      band: band.label,
+      orders: band.orders,
+      conversion: round2(band.conversionTotal / Math.max(1, band.count)),
+    }))
+}
+
+function buildBasketIntelligence(insightRows = [], pairRows = []) {
+  const rows = Array.isArray(insightRows) ? insightRows : []
+  const pairs = Array.isArray(pairRows) ? pairRows : []
+
+  const singleItemOrders = rows.reduce((sum, row) => sum + clampNonNegative(row.singleItemOrders), 0)
+  const multiItemOrders = rows.reduce((sum, row) => sum + clampNonNegative(row.multiItemOrders), 0)
+  const totalOrders = rows.reduce((sum, row) => sum + clampNonNegative(row.completedOrders), 0)
+
+  const basketSizeDistribution = [
+    { size: 1, count: singleItemOrders },
+    { size: 2, count: multiItemOrders },
+  ]
+
+  const frequentlyBoughtTogether = pairs
+    .map((pair) => ({
+      pair: String(pair.pairKey || `${safeName(pair.itemA, 'Unknown')} + ${safeName(pair.itemB, 'Unknown')}`),
+      count: clampNonNegative(pair.count),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
+
+  return {
+    frequentlyBoughtTogether,
+    basketSizeDistribution,
+    orderTypeSplit: [
+      { name: 'Single Item', value: singleItemOrders },
+      { name: 'Multi Item', value: multiItemOrders },
+    ],
+    summary: {
+      totalOrders,
+      singleItemOrders,
+      multiItemOrders,
+    },
+  }
+}
+
+function buildRatingTrend(insightRows = [], startDate, endDate) {
+  const byDate = new Map(
+    (Array.isArray(insightRows) ? insightRows : []).map((row) => [
+      String(row.dateKey),
+      {
+        totalRating: clampNonNegative(row.totalRating),
+        ratedOrders: clampNonNegative(row.ratedOrders),
+      },
+    ]),
+  )
+
+  return buildTrendBuckets(startDate, endDate).map((bucket) => {
+    const row = byDate.get(bucket.dateKey) || { totalRating: 0, ratedOrders: 0 }
+    return {
+      label: bucket.label,
+      avgRating: row.ratedOrders ? round2(row.totalRating / row.ratedOrders) : 0,
+      ratedOrders: row.ratedOrders,
+    }
+  })
+}
+
+export async function buildDecisionAnalytics({ restaurantId, range = '14d' }) {
+  const resolvedRange = resolveAnalyticsRange(range)
+  const [advanced, currentItemsRaw, itemDailyRows, menuItems, categories, orderInsightsDaily, basketPairs] = await Promise.all([
+    buildAdvancedAnalytics({ restaurantId, range }),
+    aggregateItemMetrics({
+      restaurantId,
+      startDate: resolvedRange.currentStartDate,
+      endDate: resolvedRange.currentEndDate,
+    }).then((rows) => hydrateAggregatedItemNames(restaurantId, rows)),
+    AnalyticsItemDailyMetrics.find({
+      restaurantId,
+      date: { $gte: resolvedRange.currentStartDate, $lte: resolvedRange.currentEndDate },
+    })
+      .select('menuItemId menuItemName dateKey views addToCart orders revenue')
+      .lean(),
+    MenuItem.find({ restaurantId })
+      .select('_id name price categoryId')
+      .lean(),
+    Category.find({ restaurantId })
+      .select('_id name')
+      .lean(),
+    aggregateOrderInsightsDaily({
+      restaurantId,
+      startDate: resolvedRange.currentStartDate,
+      endDate: resolvedRange.currentEndDate,
+    }),
+    aggregateBasketPairs({
+      restaurantId,
+      startDate: resolvedRange.currentStartDate,
+      endDate: resolvedRange.currentEndDate,
+    }),
+  ])
+
+  const menuById = new Map(menuItems.map((item) => [String(item._id), item]))
+  const categoryById = new Map(categories.map((category) => [String(category._id), safeName(category.name, 'Uncategorized')]))
+
+  const enrichedItems = (Array.isArray(currentItemsRaw) ? currentItemsRaw : []).map((item) => {
+    const menu = menuById.get(String(item.menuItemId || ''))
+    const price = Number(menu?.price || 0)
+    const categoryName = menu?.categoryId ? categoryById.get(String(menu.categoryId)) || 'Uncategorized' : 'Uncategorized'
+    const views = clampNonNegative(item.views)
+    const addToCart = clampNonNegative(item.addToCart)
+    const orders = clampNonNegative(item.orders)
+    const revenue = round2(item.revenue)
+    const conversion = boundedPercentage(orders, views)
+
+    return {
+      itemId: String(item.menuItemId),
+      name: safeName(item.name, 'Archived item'),
+      categoryName,
+      price,
+      views,
+      addToCart,
+      orders,
+      revenue,
+      conversion,
+      avgOrderRevenue: orders > 0 ? round2(revenue / orders) : round2(price),
+      viewToCartDropPct: percentage(Math.max(0, views - addToCart), views),
+      cartToOrderDropPct: percentage(Math.max(0, addToCart - orders), addToCart),
+      dropPct: percentage(Math.max(0, views - orders), views),
+    }
+  })
+
+  const leakageTable = [...enrichedItems]
+    .filter((item) => item.views > 0)
+    .sort((a, b) => b.dropPct - a.dropPct || b.views - a.views)
+
+  const topProblemItems = leakageTable.slice(0, 5)
+  const trendSeed = buildTrendBuckets(resolvedRange.currentStartDate, resolvedRange.currentEndDate)
+  const byItemDate = new Map(
+    (Array.isArray(itemDailyRows) ? itemDailyRows : []).map((row) => [
+      `${String(row.menuItemId)}:${String(row.dateKey)}`,
+      {
+        views: clampNonNegative(row.views),
+        addToCart: clampNonNegative(row.addToCart),
+        orders: clampNonNegative(row.orders),
+      },
+    ]),
+  )
+
+  const topProblemItemsTrend = trendSeed.map((bucket) => {
+    const row = { label: bucket.label }
+    topProblemItems.forEach((item) => {
+      const itemDay = byItemDate.get(`${item.itemId}:${bucket.dateKey}`) || { views: 0, orders: 0 }
+      row[item.name] = percentage(Math.max(0, itemDay.views - itemDay.orders), itemDay.views)
+    })
+    return row
+  })
+
+  const hiddenGems = (Array.isArray(advanced?.items?.hiddenGems) ? advanced.items.hiddenGems : [])
+    .map((gem) => {
+      const matched = enrichedItems.find((item) => item.itemId === gem.itemId)
+      const item = matched || {
+        itemId: gem.itemId,
+        name: gem.name,
+        views: clampNonNegative(gem.views),
+        orders: clampNonNegative(gem.orders),
+        revenue: round2(gem.revenue),
+        conversion: round2(gem.conversion),
+        avgOrderRevenue: gem.orders > 0 ? round2(gem.revenue / gem.orders) : 0,
+      }
+      const targetViews = Math.max(item.views + 20, round2(item.views * 1.5))
+      const projectedOrders = round2((item.conversion / 100) * targetViews)
+      const projectedRevenue = round2(projectedOrders * Math.max(0, item.avgOrderRevenue))
+      const incrementalRevenue = Math.max(0, round2(projectedRevenue - item.revenue))
+
+      return {
+        ...item,
+        targetViews,
+        projectedOrders,
+        projectedRevenue,
+        incrementalRevenue,
+      }
+    })
+    .sort((a, b) => b.incrementalRevenue - a.incrementalRevenue)
+
+  const hiddenGemProjection = {
+    totalIncrementalRevenue: round2(hiddenGems.reduce((sum, item) => sum + Number(item.incrementalRevenue || 0), 0)),
+    projectedRevenue: round2(hiddenGems.reduce((sum, item) => sum + Number(item.projectedRevenue || 0), 0)),
+  }
+
+  const itemContribution = [...enrichedItems]
+    .filter((item) => item.revenue > 0)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 10)
+    .map((item) => ({
+      ...item,
+      revenueContribution: percentage(item.revenue, advanced?.kpis?.revenue?.value || 0),
+    }))
+
+  const categoryRevenueMap = new Map()
+  enrichedItems.forEach((item) => {
+    const current = Number(categoryRevenueMap.get(item.categoryName) || 0)
+    categoryRevenueMap.set(item.categoryName, round2(current + Number(item.revenue || 0)))
+  })
+  const categoryContribution = [...categoryRevenueMap.entries()]
+    .map(([categoryName, revenue]) => ({
+      categoryName,
+      revenue,
+      share: percentage(revenue, advanced?.kpis?.revenue?.value || 0),
+    }))
+    .sort((a, b) => b.revenue - a.revenue)
+
+  const topThreeRevenue = itemContribution.slice(0, 3).reduce((sum, item) => sum + Number(item.revenue || 0), 0)
+
+  const itemFunnelTable = [...enrichedItems]
+    .filter((item) => item.views > 0 || item.addToCart > 0 || item.orders > 0)
+    .sort((a, b) => b.views - a.views)
+
+  const dropDistribution = [
+    { name: 'View -> Cart Drop', value: Math.max(0, Number(advanced?.funnel?.views || 0) - Number(advanced?.funnel?.addToCart || 0)) },
+    { name: 'Cart -> Order Drop', value: Math.max(0, Number(advanced?.funnel?.addToCart || 0) - Number(advanced?.funnel?.orders || 0)) },
+  ]
+
+  const medianPrice = computeMedian(enrichedItems.map((item) => item.price))
+  const medianConversion = computeMedian(enrichedItems.map((item) => item.conversion))
+
+  const pricingScatter = [...enrichedItems]
+    .filter((item) => item.price > 0)
+    .map((item) => ({
+      itemId: item.itemId,
+      name: item.name,
+      price: item.price,
+      conversion: item.conversion,
+      orders: item.orders,
+      revenue: item.revenue,
+    }))
+
+  const overpricedItems = pricingScatter
+    .filter((item) => item.price >= medianPrice && item.conversion <= medianConversion)
+    .sort((a, b) => b.price - a.price)
+    .slice(0, 5)
+
+  const underpricedItems = pricingScatter
+    .filter((item) => item.price <= medianPrice && item.conversion >= medianConversion)
+    .sort((a, b) => b.conversion - a.conversion)
+    .slice(0, 5)
+
+  const priceOrdersTrend = buildPriceBands(enrichedItems)
+
+  const basket = buildBasketIntelligence(orderInsightsDaily, basketPairs)
+  const basketByDate = new Map()
+  ;(Array.isArray(orderInsightsDaily) ? orderInsightsDaily : []).forEach((entry) => {
+    const dateKey = String(entry?.dateKey || '').trim()
+    if (!dateKey) return
+    basketByDate.set(dateKey, {
+      items: clampNonNegative(entry?.totalItemsSold),
+      orders: clampNonNegative(entry?.completedOrders),
+    })
+  })
+
+  const ratingTotals = (Array.isArray(orderInsightsDaily) ? orderInsightsDaily : []).reduce(
+    (acc, row) => {
+      acc[1] += clampNonNegative(row?.rating1Count)
+      acc[2] += clampNonNegative(row?.rating2Count)
+      acc[3] += clampNonNegative(row?.rating3Count)
+      acc[4] += clampNonNegative(row?.rating4Count)
+      acc[5] += clampNonNegative(row?.rating5Count)
+      return acc
+    },
+    { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+  )
+
+  const ratingPoints = [1, 2, 3, 4, 5].map((rating) => ({
+    rating,
+    orders: Number(ratingTotals[rating] || 0),
+  }))
+
+  const avgRatedOrders = average(ratingPoints.map((entry) => entry.orders))
+  const qualityHighlights = {
+    highRatingLowOrders: ratingPoints.filter((entry) => entry.rating >= 4 && entry.orders < avgRatedOrders),
+    lowRatingHighOrders: ratingPoints.filter((entry) => entry.rating <= 2 && entry.orders > avgRatedOrders),
+  }
+
+  return {
+    range: advanced?.range || resolvedRange.key,
+    label: advanced?.label || resolvedRange.label,
+    period: advanced?.period,
+    kpis: advanced?.kpis || {},
+    dashboardCards: {
+      leakage: {
+        trend: (advanced?.trends?.combined || []).map((row) => ({
+          label: row.label,
+          views: Number(row.views || 0),
+          orders: Number(row.orders || 0),
+          conversion: Number(row.conversion || 0),
+        })),
+      },
+      hiddenGems: {
+        points: hiddenGems.map((item) => ({
+          name: item.name,
+          views: item.views,
+          conversion: item.conversion,
+          revenue: item.revenue,
+        })),
+      },
+      revenueDrivers: {
+        split: itemContribution.map((item) => ({ name: item.name, value: item.revenue })),
+      },
+      funnel: {
+        steps: [
+          { name: 'Views', value: Number(advanced?.funnel?.views || 0) },
+          { name: 'Add to Cart', value: Number(advanced?.funnel?.addToCart || 0) },
+          { name: 'Orders', value: Number(advanced?.funnel?.orders || 0) },
+        ],
+      },
+      pricing: {
+        points: pricingScatter,
+      },
+      basket: {
+        trend: (advanced?.trends?.combined || []).map((row) => ({
+          label: row.label,
+          avgItemsPerOrder: (() => {
+            const bucket = basketByDate.get(String(row.date || ''))
+            if (!bucket || bucket.orders <= 0) return 0
+            return round2(bucket.items / bucket.orders)
+          })(),
+          orders: Number(row.orders || 0),
+        })),
+      },
+      quality: {
+        points: ratingPoints,
+      },
+    },
+    drilldowns: {
+      leakage: {
+        itemLeakageTable: leakageTable,
+        stageDropAnalysis: [
+          { stage: 'View -> Cart', dropPercent: Number(100 - Number(advanced?.funnel?.viewToCartRate || 0)) },
+          { stage: 'Cart -> Order', dropPercent: Number(100 - Number(advanced?.funnel?.cartToOrderRate || 0)) },
+        ],
+        topProblemItemsTrend,
+        trendItems: topProblemItems.map((item) => item.name),
+      },
+      growthOpportunities: {
+        hiddenGems,
+        revenueImpact: hiddenGems.map((item) => ({ name: item.name, value: item.incrementalRevenue })),
+        projection: hiddenGemProjection,
+      },
+      revenueStructure: {
+        itemContribution,
+        categoryContribution,
+        dependency: {
+          top3RevenueShare: percentage(topThreeRevenue, advanced?.kpis?.revenue?.value || 0),
+        },
+      },
+      funnel: {
+        itemFunnelTable,
+        stageDropComparison: itemFunnelTable.map((item) => ({
+          name: item.name,
+          viewToCartDropPct: item.viewToCartDropPct,
+          cartToOrderDropPct: item.cartToOrderDropPct,
+        })),
+        dropDistribution,
+      },
+      pricing: {
+        scatter: pricingScatter,
+        overpricedItems,
+        underpricedItems,
+        priceOrdersTrend,
+      },
+      basket: basket,
+      quality: {
+        ratingVsOrders: ratingPoints,
+        highlights: qualityHighlights,
+        ratingTrend: buildRatingTrend(orderInsightsDaily, resolvedRange.currentStartDate, resolvedRange.currentEndDate),
+      },
+    },
+  }
+}
+
+export async function runAnalyticsIntegrityCheck({ restaurantId, days = 30 }) {
+  const safeDays = Math.max(1, Math.min(Number(days || 30), 180))
+  const endDate = normalizeDate(new Date())
+  const startDate = normalizeDate(addDays(endDate, -(safeDays - 1)))
+
+  const [orderRows, aggregateRows] = await Promise.all([
+    Order.aggregate([
+      {
+        $match: {
+          restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+          orderStatus: 'Completed',
+          completedAt: {
+            $gte: startDate,
+            $lte: new Date(endDate.getTime() + 86_399_999),
+          },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            dateKey: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$completedAt',
+              },
+            },
+          },
+          completedOrders: { $sum: 1 },
+          revenue: { $sum: '$totalAmount' },
+        },
+      },
+    ]),
+    AnalyticsDailyMetrics.find({
+      restaurantId,
+      date: { $gte: startDate, $lte: endDate },
+    })
+      .select('dateKey completedOrders revenue')
+      .lean(),
+  ])
+
+  const truthByDate = new Map(
+    (Array.isArray(orderRows) ? orderRows : []).map((row) => [
+      String(row?._id?.dateKey || ''),
+      {
+        completedOrders: clampNonNegative(row?.completedOrders),
+        revenue: round2(row?.revenue),
+      },
+    ]),
+  )
+  const aggByDate = new Map(
+    (Array.isArray(aggregateRows) ? aggregateRows : []).map((row) => [
+      String(row?.dateKey || ''),
+      {
+        completedOrders: clampNonNegative(row?.completedOrders),
+        revenue: round2(row?.revenue),
+      },
+    ]),
+  )
+
+  const keys = [...new Set([...truthByDate.keys(), ...aggByDate.keys()].filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const mismatches = keys
+    .map((dateKey) => {
+      const truth = truthByDate.get(dateKey) || { completedOrders: 0, revenue: 0 }
+      const aggregate = aggByDate.get(dateKey) || { completedOrders: 0, revenue: 0 }
+
+      return {
+        dateKey,
+        truthCompletedOrders: truth.completedOrders,
+        aggregateCompletedOrders: aggregate.completedOrders,
+        truthRevenue: truth.revenue,
+        aggregateRevenue: aggregate.revenue,
+        ordersDelta: round2(aggregate.completedOrders - truth.completedOrders),
+        revenueDelta: round2(aggregate.revenue - truth.revenue),
+      }
+    })
+    .filter((row) => row.ordersDelta !== 0 || Math.abs(row.revenueDelta) > 0.01)
+
+  return {
+    period: {
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      days: safeDays,
+    },
+    checkedDays: keys.length,
+    mismatchCount: mismatches.length,
+    healthy: mismatches.length === 0,
+    mismatches,
   }
 }

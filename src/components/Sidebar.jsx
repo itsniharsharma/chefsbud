@@ -9,7 +9,7 @@ const links = [
   { label: 'Inventory', to: '/inventory', roles: ['owner', 'staff'] },
   { label: 'Tables', to: '/dashboard/tables', roles: ['owner'] },
   { label: 'Offers (Dev)', to: '/dashboard/offers', roles: ['owner', 'staff'] },
-  { label: 'Analytics (Dev)', to: '/dashboard/analytics', roles: ['owner'] },
+  { label: 'Analytics', to: '/dashboard/analytics', roles: ['owner'] },
   { label: 'Recent Orders', to: '/dashboard/recent-orders', roles: ['owner', 'staff'] },
   { label: 'Settings', to: '/dashboard/settings', roles: ['owner'] },
 ]

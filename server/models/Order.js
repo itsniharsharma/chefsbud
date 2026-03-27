@@ -79,7 +79,10 @@ const orderSchema = new mongoose.Schema(
     inventoryProcessedAt: { type: Date, default: null, index: true },
     completedAt: { type: Date, default: null },
     analyticsTrackedAt: { type: Date, default: null, index: true },
+    analyticsTrackingState: { type: String, enum: ['', 'processing', 'tracked'], default: '', index: true },
+    analyticsTrackingStartedAt: { type: Date, default: null },
     hiddenFromActive: { type: Boolean, default: false, index: true },
+    hiddenFromRecent: { type: Boolean, default: false, index: true },
     deletedByOwnerAt: { type: Date, default: null, index: true },
     isArchived: { type: Boolean, default: false, index: true },
     archivedAt: { type: Date, default: null },
@@ -93,6 +96,7 @@ orderSchema.index({ restaurantId: 1, orderStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, tableNumber: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, floorNumber: 1, createdAt: -1 })
+orderSchema.index({ restaurantId: 1, hiddenFromRecent: 1, orderStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt: -1 })
 orderSchema.index({ restaurantId: 1, orderStatus: 1, analyticsTrackedAt: 1, createdAt: 1 })

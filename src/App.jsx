@@ -102,7 +102,7 @@ function App() {
             <Route path="menu" element={<MenuPage />} />
             <Route path="tables" element={<TablesPage />} />
             <Route path="offers" element={<OffersPage />} />
-            <Route path="analytics" element={<AnalyticsPage />} />
+            <Route path="analytics/*" element={<AnalyticsPage />} />
             <Route path="recent-orders" element={<RecentOrdersPage />} />
             <Route path="billing" element={<Navigate to="/dashboard/recent-orders" replace />} />
             <Route path="settings" element={<SettingsPage />} />

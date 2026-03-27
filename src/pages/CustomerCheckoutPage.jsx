@@ -5,10 +5,11 @@ import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { queryKeys } from '../lib/queryKeys'
-import { analyticsService } from '../services/analyticsService'
 import { offerService } from '../services/offerService'
 import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
+import { trackAddToCartReliable } from '../services/analyticsCaptureService'
+import { createCustomerAnalyticsEventId } from '../utils/customerAnalytics'
 import { buildCustomerMenuUrl, buildCustomerStatusUrl } from '../utils/customerUrl'
 
 export default function CustomerCheckoutPage() {
@@ -97,11 +98,17 @@ export default function CustomerCheckoutPage() {
 
   const trackAddToCart = (item) => {
     addItem(restaurantSlug, tableNumber, { _id: item.menuItemId, ...item })
-    void analyticsService.trackAddToCart({
+    trackAddToCartReliable({
       restaurantSlug,
+      eventId: createCustomerAnalyticsEventId({
+        prefix: 'add-to-cart',
+        restaurantSlug,
+        tableNumber,
+        menuItemId: item.menuItemId,
+      }),
       menuItemId: item.menuItemId,
       quantity: 1,
-    }).catch(() => {})
+    })
   }
 
   return (

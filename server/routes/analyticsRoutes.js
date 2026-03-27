@@ -2,7 +2,9 @@ import { Router } from 'express'
 import { body } from 'express-validator'
 import {
   getAnalytics,
+  getDecisionAnalytics,
   getDashboard,
+  getAnalyticsIntegrity,
   trackPublicAddToCart,
   trackPublicMenuExposure,
 } from '../controllers/analyticsController.js'
@@ -36,6 +38,28 @@ router.get(
 )
 
 router.get(
+  '/decision/:restaurantId',
+  requireAuth,
+  requireActiveBilling,
+  requireOwner,
+  cacheResponse({
+    ttlSeconds: 60,
+    keyBuilder: (req) =>
+      `analytics:decision:${req.user._id}:${req.params.restaurantId}:range:${req.query.range || req.query.rangeDays || '14d'}`,
+    tagsBuilder: (req) => [`analytics:${req.params.restaurantId}`],
+  }),
+  getDecisionAnalytics,
+)
+
+router.get(
+  '/integrity/:restaurantId',
+  requireAuth,
+  requireActiveBilling,
+  requireOwner,
+  getAnalyticsIntegrity,
+)
+
+router.get(
   '/:restaurantId',
   requireAuth,
   requireActiveBilling,
@@ -55,6 +79,7 @@ router.post(
   [
     body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
     body('sessionId').isString().trim().isLength({ min: 8, max: 120 }),
+    body('eventId').optional().isString().trim().isLength({ min: 6, max: 220 }),
     body('menuItemIds').isArray({ min: 1, max: 50 }),
     body('menuItemIds.*').isMongoId(),
   ],
@@ -67,6 +92,7 @@ router.post(
   publicAnalyticsLimiter,
   [
     body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
+    body('eventId').optional().isString().trim().isLength({ min: 6, max: 220 }),
     body('menuItemId').isMongoId(),
     body('quantity').optional().isInt({ min: 1, max: 20 }),
   ],

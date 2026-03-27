@@ -4,6 +4,9 @@ export const analyticsService = {
   dashboard(restaurantId) {
     return api.get(`/analytics/dashboard/${restaurantId}`).then((response) => response.data)
   },
+  decision(restaurantId, params = {}) {
+    return api.get(`/analytics/decision/${restaurantId}`, { params }).then((response) => response.data)
+  },
   analytics(restaurantId, params = {}) {
     return api.get(`/analytics/${restaurantId}`, { params }).then((response) => response.data)
   },

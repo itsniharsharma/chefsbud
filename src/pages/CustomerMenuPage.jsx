@@ -2,12 +2,12 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import Button from '../components/Button'
-import { analyticsService } from '../services/analyticsService'
 import { menuService } from '../services/menuService'
+import { trackAddToCartReliable, trackMenuExposureReliable } from '../services/analyticsCaptureService'
 import { getCustomerMenuSocket } from '../services/customerMenuSocketService'
 import { useCustomerCart } from '../hooks/useCustomerCart'
 import { formatCurrencyINR } from '../utils/currency'
-import { getCustomerAnalyticsSessionId } from '../utils/customerAnalytics'
+import { createCustomerAnalyticsEventId, getCustomerAnalyticsSessionId } from '../utils/customerAnalytics'
 import { buildCustomerCheckoutUrl } from '../utils/customerUrl'
 
 export default function CustomerMenuPage() {
@@ -25,6 +25,12 @@ export default function CustomerMenuPage() {
   const lastMenuRefreshRef = useRef(0)
   const refreshTimerRef = useRef(null)
   const disconnectTimerRef = useRef(null)
+  const impressionObserverRef = useRef(null)
+  const itemsContainerRef = useRef(null)
+  const flushImpressionTimerRef = useRef(null)
+  const pendingImpressionItemIdsRef = useRef(new Set())
+  const trackedImpressionItemIdsRef = useRef(new Set())
+  const trackedImpressionDayRef = useRef('')
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
@@ -297,23 +303,131 @@ export default function CustomerMenuPage() {
     [restaurantSlug, tableNumber],
   )
 
-  useEffect(() => {
-    if (!restaurantSlug || !analyticsSessionId || !activeCategory || !visibleItems.length) return
+  const flushImpressions = useCallback(() => {
+    if (!restaurantSlug || !analyticsSessionId) return
 
-    void analyticsService.trackMenuExposure({
+    const currentDateKey = new Date().toISOString().slice(0, 10)
+
+    if (trackedImpressionDayRef.current !== currentDateKey) {
+      trackedImpressionItemIdsRef.current.clear()
+      trackedImpressionDayRef.current = currentDateKey
+    }
+
+    const itemIds = [...pendingImpressionItemIdsRef.current]
+    pendingImpressionItemIdsRef.current.clear()
+    if (!itemIds.length) return
+
+    const nextItemIds = itemIds.filter((itemId) => {
+      const normalizedItemId = String(itemId || '').trim()
+      if (!normalizedItemId) return false
+      if (trackedImpressionItemIdsRef.current.has(normalizedItemId)) {
+        return false
+      }
+      trackedImpressionItemIdsRef.current.add(normalizedItemId)
+      return true
+    })
+
+    if (!nextItemIds.length) return
+
+    trackMenuExposureReliable({
       restaurantSlug,
       sessionId: analyticsSessionId,
-      menuItemIds: visibleItems.map((item) => item._id),
-    }).catch(() => {})
-  }, [activeCategory, analyticsSessionId, restaurantSlug, visibleItems])
+      eventId: createCustomerAnalyticsEventId({
+        prefix: 'menu-view',
+        restaurantSlug,
+        tableNumber,
+      }),
+      menuItemIds: nextItemIds,
+    })
+  }, [analyticsSessionId, restaurantSlug, tableNumber])
+
+  const scheduleImpressionFlush = useCallback(() => {
+    if (flushImpressionTimerRef.current) {
+      clearTimeout(flushImpressionTimerRef.current)
+    }
+
+    flushImpressionTimerRef.current = setTimeout(() => {
+      flushImpressionTimerRef.current = null
+      flushImpressions()
+    }, 400)
+  }, [flushImpressions])
+
+  useEffect(() => {
+    if (!activeCategory) {
+      if (impressionObserverRef.current) {
+        impressionObserverRef.current.disconnect()
+        impressionObserverRef.current = null
+      }
+      return undefined
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.6) {
+            return
+          }
+
+          const itemId = String(entry.target?.getAttribute('data-analytics-item-id') || '').trim()
+          if (!itemId) return
+
+          pendingImpressionItemIdsRef.current.add(itemId)
+          observer.unobserve(entry.target)
+          scheduleImpressionFlush()
+        })
+      },
+      {
+        threshold: [0.6],
+      },
+    )
+
+    impressionObserverRef.current = observer
+    return () => {
+      observer.disconnect()
+      if (impressionObserverRef.current === observer) {
+        impressionObserverRef.current = null
+      }
+    }
+  }, [activeCategory, scheduleImpressionFlush])
+
+  useEffect(() => {
+    if (!activeCategory || !impressionObserverRef.current) return
+
+    const observer = impressionObserverRef.current
+    const nodes = Array.from((itemsContainerRef.current || document).querySelectorAll('[data-analytics-item-id]'))
+    nodes.forEach((node) => observer.observe(node))
+  }, [activeCategory, visibleItems])
+
+  useEffect(() => {
+    const onVisibilityChanged = () => {
+      if (document.visibilityState === 'hidden') {
+        flushImpressions()
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChanged)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChanged)
+      flushImpressions()
+      if (flushImpressionTimerRef.current) {
+        clearTimeout(flushImpressionTimerRef.current)
+      }
+    }
+  }, [flushImpressions])
 
   const trackAddToCart = (item) => {
     addItem(restaurantSlug, tableNumber, item)
-    void analyticsService.trackAddToCart({
+    trackAddToCartReliable({
       restaurantSlug,
+      eventId: createCustomerAnalyticsEventId({
+        prefix: 'add-to-cart',
+        restaurantSlug,
+        tableNumber,
+        menuItemId: item._id,
+      }),
       menuItemId: item._id,
       quantity: 1,
-    }).catch(() => {})
+    })
   }
 
   const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
@@ -445,12 +559,12 @@ export default function CustomerMenuPage() {
             {!visibleItems.length ? (
               <div className="customer-empty-card">No available dishes in this category right now.</div>
             ) : (
-              <div className="space-y-3">
+              <div ref={itemsContainerRef} className="space-y-3">
                 {visibleItems.map((item) => {
                   const quantity = cartQuantityByItemId.get(item._id) || 0
                   const isVeg = item.isVeg !== false
                   return (
-                    <article key={item._id} className="customer-food-card">
+                    <article key={item._id} data-analytics-item-id={item._id} className="customer-food-card">
                       <div className="min-w-0 flex-1">
                         <div className="mb-1 flex flex-wrap items-center gap-2">
                           <p className="text-xs font-semibold uppercase tracking-wide text-red-600">

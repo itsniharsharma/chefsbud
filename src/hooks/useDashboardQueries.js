@@ -97,3 +97,16 @@ export function useAnalyticsOverviewQuery({ restaurantId, range }) {
     placeholderData: (previousData) => previousData,
   })
 }
+
+export function useAnalyticsDecisionQuery({ restaurantId, range }) {
+  return useQuery({
+    queryKey: queryKeys.dashboard.analyticsDecision(restaurantId, range),
+    enabled: Boolean(restaurantId),
+    queryFn: () => analyticsService.decision(restaurantId, { range }),
+    staleTime: 60_000,
+    refetchInterval: 180_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData) => previousData,
+  })
+}

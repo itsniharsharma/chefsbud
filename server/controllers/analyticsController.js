@@ -2,13 +2,28 @@ import MenuItem from '../models/MenuItem.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import {
+  backfillCompletedOrderAnalytics,
+  buildDecisionAnalytics,
   buildAdvancedAnalytics,
+  runAnalyticsIntegrityCheck,
   scheduleCompletedOrderAnalyticsBackfill,
   trackAddToCart,
   trackMenuExposure,
 } from '../services/itemAnalyticsService.js'
 import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
+
+const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(process.env.ANALYTICS_INLINE_BACKFILL_BATCH_SIZE || 40), 200))
+
+async function warmAnalyticsState(restaurantId) {
+  // Keep request freshness while capping synchronous work on hot endpoints.
+  await backfillCompletedOrderAnalytics({
+    restaurantId,
+    batchSize: ANALYTICS_INLINE_BACKFILL_BATCH_SIZE,
+  })
+
+  void scheduleCompletedOrderAnalyticsBackfill({ restaurantId })
+}
 
 function buildDateKeys(startDate, endDate) {
   const cursor = new Date(startDate)
@@ -92,7 +107,7 @@ export async function getAnalytics(req, res, next) {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    void scheduleCompletedOrderAnalyticsBackfill({ restaurantId: ownerRestaurant._id })
+    await warmAnalyticsState(ownerRestaurant._id)
     const analytics = await buildAdvancedAnalytics({
       restaurantId: ownerRestaurant._id,
       range: req.query.range || req.query.rangeDays,
@@ -107,10 +122,51 @@ export async function getAnalytics(req, res, next) {
   }
 }
 
+export async function getDecisionAnalytics(req, res, next) {
+  try {
+    const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
+    if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
+
+    await warmAnalyticsState(ownerRestaurant._id)
+    const analytics = await buildDecisionAnalytics({
+      restaurantId: ownerRestaurant._id,
+      range: req.query.range || req.query.rangeDays,
+    })
+
+    return res.json({
+      restaurantId: String(ownerRestaurant._id),
+      ...analytics,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export async function getAnalyticsIntegrity(req, res, next) {
+  try {
+    const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
+    if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
+
+    const days = Number(req.query.days || 30)
+    const report = await runAnalyticsIntegrityCheck({
+      restaurantId: ownerRestaurant._id,
+      days,
+    })
+
+    return res.json({
+      restaurantId: String(ownerRestaurant._id),
+      ...report,
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export async function trackPublicMenuExposure(req, res, next) {
   try {
     const restaurantSlug = String(req.body?.restaurantSlug || '').trim()
     const sessionId = String(req.body?.sessionId || '').trim()
+    const eventId = String(req.body?.eventId || '').trim()
     const rawMenuItemIds = Array.isArray(req.body?.menuItemIds) ? req.body.menuItemIds : []
     const menuItemIds = [...new Set(rawMenuItemIds.map((id) => String(id || '').trim()).filter(Boolean))]
 
@@ -138,6 +194,7 @@ export async function trackPublicMenuExposure(req, res, next) {
     const result = await trackMenuExposure({
       restaurantId: restaurant._id,
       sessionId,
+      eventId,
       menuItemIds: validItemIds.map((item) => item._id),
       resolvedMenuItems: validItemIds,
     })
@@ -151,6 +208,7 @@ export async function trackPublicMenuExposure(req, res, next) {
 export async function trackPublicAddToCart(req, res, next) {
   try {
     const restaurantSlug = String(req.body?.restaurantSlug || '').trim()
+    const eventId = String(req.body?.eventId || '').trim()
     const menuItemId = String(req.body?.menuItemId || '').trim()
     const quantity = Number(req.body?.quantity || 1)
 
@@ -165,6 +223,7 @@ export async function trackPublicAddToCart(req, res, next) {
 
     const result = await trackAddToCart({
       restaurantId: restaurant._id,
+      eventId,
       menuItemId,
       quantity,
     })

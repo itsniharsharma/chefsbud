@@ -20,6 +20,12 @@ export const queryKeys = {
       restaurantId,
       String(range || '14d'),
     ],
+    analyticsDecision: (restaurantId, range) => [
+      'dashboard',
+      'analytics-decision',
+      restaurantId,
+      String(range || '14d'),
+    ],
     ordersBoard: (restaurantId, statusFilter, scope, floorNumber = 'all') => [
       'dashboard',
       'orders-board',

@@ -11,7 +11,7 @@ import {
   reverseOrderConsumption,
 } from '../services/inventoryService.js'
 import {
-  revertCompletedOrderAnalytics,
+  applyOrderRatingAnalytics,
   syncCompletedOrderAnalytics,
 } from '../services/itemAnalyticsService.js'
 import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
@@ -87,6 +87,7 @@ function buildOrderQuery({ restaurantId, view, status, scope }) {
 
   if (view === 'completed') {
     query.orderStatus = 'Completed'
+    query.hiddenFromRecent = { $ne: true }
   } else {
     query.hiddenFromActive = false
     if (status && status !== 'All') {
@@ -264,16 +265,17 @@ export async function updateOrderStatus(req, res, next) {
 
     const wasCompleted = existingOrder.orderStatus === 'Completed'
     const isCompleted = orderStatus === 'Completed'
+
+    if (wasCompleted && !isCompleted) {
+      return res.status(409).json({ message: 'Completed orders are immutable and cannot be moved back to active statuses' })
+    }
+
     const update = {
       orderStatus,
       completedAt: isCompleted ? new Date() : null,
       hiddenFromActive: isCompleted,
       deletedByOwnerAt: isCompleted ? new Date() : null,
-      ...(wasCompleted && !isCompleted ? { analyticsTrackedAt: null } : {}),
-    }
-
-    if (wasCompleted && !isCompleted && existingOrder.analyticsTrackedAt) {
-      await runMetricsTask('revert_completed_order_analytics', () => revertCompletedOrderAnalytics(existingOrder))
+      ...(isCompleted ? { hiddenFromRecent: false } : {}),
     }
 
     const session = await mongoose.startSession()
@@ -336,6 +338,12 @@ export async function updateOrderStatus(req, res, next) {
 
     if (isCompleted && !wasCompleted) {
       await runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id))
+      await runMetricsTask('rebuild_order_metrics_on_complete', () =>
+        rebuildOrderMetricsForDate({
+          restaurantId: restaurant._id,
+          date: order.completedAt || new Date(),
+        }),
+      )
     }
 
     invalidateCacheByTags(
@@ -533,16 +541,15 @@ export async function deleteOrder(req, res, next) {
       return res.status(400).json({ message: 'Order can be deleted only after Served or Completed' })
     }
 
-    if (order.analyticsTrackedAt) {
-      await runMetricsTask('revert_completed_order_analytics_on_delete', () => revertCompletedOrderAnalytics(order))
-    }
-
-    await Order.deleteOne({ _id: req.params.orderId, restaurantId: restaurant._id })
-    await runMetricsTask('rebuild_order_metrics_on_delete', () =>
-      rebuildOrderMetricsForDate({
-        restaurantId: restaurant._id,
-        date: order.createdAt || new Date(),
-      }),
+    await Order.updateOne(
+      { _id: req.params.orderId, restaurantId: restaurant._id },
+      {
+        $set: {
+          hiddenFromActive: true,
+          hiddenFromRecent: true,
+          deletedByOwnerAt: new Date(),
+        },
+      },
     )
 
     invalidateCacheByTags(
@@ -591,14 +598,8 @@ export async function createOrder(req, res, next) {
       paymentStatus: 'Unpaid',
       orderStatus: 'Pending',
       hiddenFromActive: false,
+      hiddenFromRecent: false,
     })
-
-    await runMetricsTask('rebuild_order_metrics_on_create', () =>
-      rebuildOrderMetricsForDate({
-        restaurantId: draft.restaurant._id,
-        date: order.createdAt || new Date(),
-      }),
-    )
 
     invalidateCacheByTags(
       buildOrderCacheTags({
@@ -745,6 +746,15 @@ export async function ratePublicOrder(req, res, next) {
     ])
 
     if (updated.restaurantId) {
+      await runMetricsTask('apply_order_rating_analytics', () =>
+        applyOrderRatingAnalytics({
+          restaurantId: updated.restaurantId,
+          completedAt: updated.completedAt,
+          nextRating: updated.customerRating,
+          previousRating: null,
+        }),
+      )
+
       publishOrderChange({
         restaurantId: updated.restaurantId,
         type: 'customer-rated',
