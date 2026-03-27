@@ -3,6 +3,7 @@ import app from './app.js'
 import { closeDB, connectDB } from './config/db.js'
 import { startOrderArchiveScheduler, stopOrderArchiveScheduler } from './services/orderArchiveService.js'
 import { closeSocketServer, initSocketServer } from './realtime/socketServer.js'
+import { performanceMetrics } from './services/performanceMetrics.js'
 import { logger } from './utils/logger.js'
 
 const PORT = process.env.PORT || 5000
@@ -28,6 +29,7 @@ async function shutdown(signal, exitCode = 0) {
 
   try {
     stopOrderArchiveScheduler()
+    performanceMetrics.stop()
     await closeSocketServer()
 
     if (httpServer) {
@@ -69,6 +71,7 @@ process.on('SIGINT', () => {
 })
 
 async function start() {
+  performanceMetrics.start()
   await connectDB()
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {

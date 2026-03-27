@@ -14,13 +14,39 @@ import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(process.env.ANALYTICS_INLINE_BACKFILL_BATCH_SIZE || 40), 200))
+const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS || 60_000))
+const ANALYTICS_WARM_STATE_RETENTION_MS = Math.max(3_600_000, Number(process.env.ANALYTICS_WARM_STATE_RETENTION_MS || 24 * 60 * 60 * 1000))
+const ANALYTICS_WARM_STATE_MAX_ENTRIES = Math.max(100, Number(process.env.ANALYTICS_WARM_STATE_MAX_ENTRIES || 10_000))
+const analyticsWarmStateByRestaurant = new Map()
+
+function cleanupAnalyticsWarmState(now = Date.now()) {
+  for (const [restaurantKey, lastWarmAt] of analyticsWarmStateByRestaurant.entries()) {
+    if (Number(lastWarmAt || 0) + ANALYTICS_WARM_STATE_RETENTION_MS < now) {
+      analyticsWarmStateByRestaurant.delete(restaurantKey)
+    }
+  }
+
+  while (analyticsWarmStateByRestaurant.size > ANALYTICS_WARM_STATE_MAX_ENTRIES) {
+    const oldestKey = analyticsWarmStateByRestaurant.keys().next().value
+    if (!oldestKey) break
+    analyticsWarmStateByRestaurant.delete(oldestKey)
+  }
+}
 
 async function warmAnalyticsState(restaurantId) {
+  const restaurantKey = String(restaurantId || '')
+  const now = Date.now()
+  cleanupAnalyticsWarmState(now)
+  const lastWarmAt = Number(analyticsWarmStateByRestaurant.get(restaurantKey) || 0)
+
   // Keep request freshness while capping synchronous work on hot endpoints.
-  await backfillCompletedOrderAnalytics({
-    restaurantId,
-    batchSize: ANALYTICS_INLINE_BACKFILL_BATCH_SIZE,
-  })
+  if (now - lastWarmAt >= ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS) {
+    await backfillCompletedOrderAnalytics({
+      restaurantId,
+      batchSize: ANALYTICS_INLINE_BACKFILL_BATCH_SIZE,
+    })
+    analyticsWarmStateByRestaurant.set(restaurantKey, now)
+  }
 
   void scheduleCompletedOrderAnalyticsBackfill({ restaurantId })
 }

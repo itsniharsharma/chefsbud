@@ -13,6 +13,7 @@ import inventoryRoutes from './routes/inventoryRoutes.js'
 import demoRoutes from './routes/demoRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { requestContext } from './middleware/requestContext.js'
+import { requestLatencyMetrics } from './middleware/performanceMetrics.js'
 import { securityHeaders } from './middleware/securityHeaders.js'
 import { createRateLimiter } from './middleware/rateLimit.js'
 import { getDbStatus } from './config/db.js'
@@ -67,6 +68,7 @@ const corsOptions = {
 app.use(cors(corsOptions))
 app.use(compression())
 app.use(requestContext)
+app.use(requestLatencyMetrics)
 app.use(securityHeaders)
 app.use(globalLimiter)
 app.use('/api/payments/webhook', express.raw({ type: 'application/json', limit: '1mb' }))

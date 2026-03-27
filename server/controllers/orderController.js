@@ -98,7 +98,11 @@ function buildOrderQuery({ restaurantId, view, status, scope }) {
   if (scope === 'today') {
     const start = new Date()
     start.setHours(0, 0, 0, 0)
-    query.createdAt = { $gte: start }
+    if (view === 'completed') {
+      query.completedAt = { $gte: start }
+    } else {
+      query.createdAt = { $gte: start }
+    }
   }
 
   return query
@@ -157,8 +161,13 @@ function toPublicOrderPayload(order) {
 }
 
 async function listOrdersByQuery(query, pagination) {
+  const isCompletedView = String(query?.orderStatus || '') === 'Completed'
+  const sort = isCompletedView
+    ? { completedAt: -1, createdAt: -1 }
+    : { createdAt: -1 }
+
   return Order.find(query)
-    .sort({ createdAt: -1 })
+    .sort(sort)
     .skip(pagination.skip)
     .limit(pagination.limit)
     .select(orderListProjection)
