@@ -5,6 +5,7 @@ import InventoryPurchase from '../models/InventoryPurchase.js'
 import InventorySupplier from '../models/InventorySupplier.js'
 import MenuItem from '../models/MenuItem.js'
 import Recipe from '../models/Recipe.js'
+import RecipeVersion from '../models/RecipeVersion.js'
 import {
   addLedgerEntries,
   bootstrapStockFromSavedPurchases,
@@ -125,6 +126,26 @@ function resolveBaseUnit(unit = 'Unit') {
   if (normalized === 'kg' || normalized === 'gram' || normalized === 'g') return 'g'
   if (normalized === 'litre' || normalized === 'liter' || normalized === 'ml') return 'ml'
   return 'unit'
+}
+
+function convertRecipeUnitToBase(quantity, unit) {
+  const normalized = String(unit || '').trim().toLowerCase()
+  const qty = Number(quantity || 0)
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return { quantity: 0, unit: resolveBaseUnit(unit) }
+  }
+
+  if (normalized === 'kg') {
+    return { quantity: round6(qty * 1000), unit: 'g' }
+  }
+  if (normalized === 'litre' || normalized === 'liter') {
+    return { quantity: round6(qty * 1000), unit: 'ml' }
+  }
+
+  return {
+    quantity: round6(qty),
+    unit: resolveBaseUnit(unit),
+  }
 }
 
 function toPercent(part, total) {
@@ -1007,6 +1028,7 @@ export async function upsertRecipe(req, res, next) {
     })
 
     let recipe = null
+    let recipeVersion = null
     if (!existingRecipe) {
       recipe = await Recipe.create({
         restaurantId: restaurant._id,
@@ -1014,10 +1036,67 @@ export async function upsertRecipe(req, res, next) {
         ingredients,
         version: 1,
       })
+      const versionedIngredients = ingredients
+        .map((row) => {
+          const converted = convertRecipeUnitToBase(row.quantity, row.unit)
+          return {
+            inventoryItemId: row.inventoryItemId,
+            quantity: converted.quantity,
+            unit: converted.unit,
+          }
+        })
+        .filter((row) => row.quantity > 0)
+
+      recipeVersion = await RecipeVersion.findOneAndUpdate(
+        {
+          restaurantId: restaurant._id,
+          menuItemId,
+          version: 1,
+        },
+        {
+          $setOnInsert: {
+            restaurantId: restaurant._id,
+            menuItemId,
+            version: 1,
+            ingredients: versionedIngredients,
+            createdBy: req.user?._id || null,
+          },
+        },
+        { upsert: true, new: true },
+      )
     } else {
       existingRecipe.ingredients = ingredients
       existingRecipe.version = Math.max(1, Number(existingRecipe.version || 1) + 1)
       recipe = await existingRecipe.save()
+
+      const versionedIngredients = ingredients
+        .map((row) => {
+          const converted = convertRecipeUnitToBase(row.quantity, row.unit)
+          return {
+            inventoryItemId: row.inventoryItemId,
+            quantity: converted.quantity,
+            unit: converted.unit,
+          }
+        })
+        .filter((row) => row.quantity > 0)
+
+      recipeVersion = await RecipeVersion.findOneAndUpdate(
+        {
+          restaurantId: restaurant._id,
+          menuItemId,
+          version: Number(recipe.version || 1),
+        },
+        {
+          $setOnInsert: {
+            restaurantId: restaurant._id,
+            menuItemId,
+            version: Number(recipe.version || 1),
+            ingredients: versionedIngredients,
+            createdBy: req.user?._id || null,
+          },
+        },
+        { upsert: true, new: true },
+      )
     }
 
     await invalidateInventoryCaches(restaurant._id, {
@@ -1025,7 +1104,13 @@ export async function upsertRecipe(req, res, next) {
       analytics: true,
     })
 
-    return res.status(201).json(recipe)
+    const recipePayload = recipe?.toObject ? recipe.toObject() : recipe
+    if (recipeVersion?._id) {
+      recipePayload.latestRecipeVersionId = recipeVersion._id
+      recipePayload.latestRecipeVersion = Number(recipeVersion.version || recipePayload.version || 1)
+    }
+
+    return res.status(201).json(recipePayload)
   } catch (error) {
     next(error)
   }

@@ -45,6 +45,13 @@ ORDER_ARCHIVE_DELAY_HOURS=6
 ORDER_ARCHIVE_BATCH_SIZE=500
 ORDER_ARCHIVE_PURGE_AFTER_UPLOAD=true
 
+INVENTORY_V2_ROLLOUT_MODE=shadow
+INVENTORY_STRICT_POLICY=soft
+INVENTORY_ALLOW_LEGACY_FALLBACK=true
+INVENTORY_BLOCK_ORDER_COMPLETION_ON_FAILURE=false
+INVENTORY_ENABLE_RESERVATIONS_ON_ORDER_CREATE=true
+INVENTORY_ALLOW_CLIENT_POLICY_OVERRIDE=false
+
 VITE_API_BASE_URL=http://localhost:5000/api
 VITE_FRONTEND_BASE_URL=http://localhost:5173
 ```
@@ -128,6 +135,18 @@ Orders persist to MongoDB and appear in owner dashboard polling.
 	`{ restaurantId, referenceType, referenceId, direction, type, metadata.cycle }`.
 - On server startup, a non-blocking readiness check logs whether this index is present.
 - If startup logs show `startup_check_inventory_ledger_cycle_index_missing`, deploy can still run, but monitor index build completion to avoid temporary query slowdowns.
+
+### Inventory Rollout Controls (SaaS Safe Defaults)
+
+- `INVENTORY_V2_ROLLOUT_MODE` supports `off`, `shadow`, `enforced`.
+- Recommended phased rollout:
+	1. `off` for immediate rollback if needed.
+	2. `shadow` for non-blocking v2 reservation/consume plus legacy fallback.
+	3. `enforced` once reconciliation confidence is high.
+- `INVENTORY_STRICT_POLICY` controls `soft|hard` policy under `enforced` mode.
+- `INVENTORY_ALLOW_LEGACY_FALLBACK` allows legacy ledger fallback when v2 reservation consumption does not apply.
+- `INVENTORY_BLOCK_ORDER_COMPLETION_ON_FAILURE` blocks `Completed` status transition on inventory policy failures when enabled.
+- Health endpoint `/api/health` now exposes current inventory rollout and policy flags for runtime verification.
 
 ## AI Menu Import (Owner → Menu)
 

@@ -1,4 +1,5 @@
 import InventoryLedger from '../models/InventoryLedger.js'
+import { getInventoryRuntimeConfig } from '../config/inventoryRuntime.js'
 import { logger } from '../utils/logger.js'
 
 const EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX = {
@@ -46,8 +47,28 @@ async function verifyInventoryLedgerIndexes() {
   })
 }
 
+function verifyInventoryRuntimeConfig() {
+  const config = getInventoryRuntimeConfig()
+
+  logger.info('startup_check_inventory_runtime_config', {
+    rolloutMode: config.rolloutMode,
+    strictPolicy: config.strictPolicy,
+    allowLegacyFallback: config.allowLegacyFallback,
+    blockOrderCompletionOnInventoryFailure: config.blockOrderCompletionOnInventoryFailure,
+    allowClientPolicyOverride: config.allowClientPolicyOverride,
+    enableReservationsOnOrderCreate: config.enableReservationsOnOrderCreate,
+  })
+
+  if (config.rolloutMode === 'enforced' && config.allowLegacyFallback) {
+    logger.warn('startup_check_inventory_runtime_config_inconsistent', {
+      note: 'enforced rollout with legacy fallback can hide policy failures; consider disabling INVENTORY_ALLOW_LEGACY_FALLBACK',
+    })
+  }
+}
+
 export async function runStartupChecks() {
   try {
+    verifyInventoryRuntimeConfig()
     await verifyInventoryLedgerIndexes()
   } catch (error) {
     logger.warn('startup_checks_failed', {

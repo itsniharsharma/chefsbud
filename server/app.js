@@ -10,6 +10,7 @@ import offerRoutes from './routes/offerRoutes.js'
 import analyticsRoutes from './routes/analyticsRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
 import inventoryRoutes from './routes/inventoryRoutes.js'
+import inventoryV2Routes from './routes/inventoryV2Routes.js'
 import demoRoutes from './routes/demoRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { requestContext } from './middleware/requestContext.js'
@@ -17,6 +18,7 @@ import { requestLatencyMetrics } from './middleware/performanceMetrics.js'
 import { securityHeaders } from './middleware/securityHeaders.js'
 import { createRateLimiter } from './middleware/rateLimit.js'
 import { getDbStatus } from './config/db.js'
+import { getInventoryRuntimeConfig } from './config/inventoryRuntime.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -83,11 +85,16 @@ app.use(express.json({ limit: jsonLimit }))
 app.use(express.urlencoded({ extended: false, limit: urlEncodedLimit }))
 
 app.get('/api/health', (req, res) => {
+  const inventoryConfig = getInventoryRuntimeConfig()
+
   res.json({
     ok: true,
     app: "Chef's Bud - Restaurant Revenue OS",
     revision: appRevision,
     inventoryPatchLevel: 'inventory-hardening-v2',
+    inventoryRolloutMode: inventoryConfig.rolloutMode,
+    inventoryStrictPolicy: inventoryConfig.strictPolicy,
+    inventoryLegacyFallback: inventoryConfig.allowLegacyFallback,
     uptimeSeconds: Math.round(process.uptime()),
     processRole: String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase(),
     db: getDbStatus(),
@@ -103,6 +110,7 @@ app.use('/api/offers', offerRoutes)
 app.use('/api/analytics', analyticsRoutes)
 app.use('/api/payments', paymentRoutes)
 app.use('/api/inventory', inventoryRoutes)
+app.use('/api/inventory/v2', inventoryV2Routes)
 app.use('/api/demo', demoRoutes)
 
 app.use(notFoundHandler)

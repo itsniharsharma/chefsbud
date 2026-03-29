@@ -11,6 +11,14 @@ import {
   reverseOrderConsumption,
 } from '../services/inventoryService.js'
 import {
+  consumeReservationsForOrder,
+  reserveStockForOrder,
+} from '../services/inventoryV2Service.js'
+import {
+  getOrderInventoryBehavior,
+  isInventoryConstraintError,
+} from '../config/inventoryRuntime.js'
+import {
   applyOrderRatingAnalytics,
   syncCompletedOrderAnalytics,
 } from '../services/itemAnalyticsService.js'
@@ -314,17 +322,47 @@ export async function updateOrderStatus(req, res, next) {
         }
 
         if (isCompleted && !wasCompleted && !existingOrder.inventoryProcessedAt) {
+          const inventoryBehavior = getOrderInventoryBehavior()
           const cycle = Math.max(0, Number(existingOrder.inventoryConsumptionCycle || 0)) + 1
+
           try {
-            await processOrderConsumption(order, {
-              session,
-              createdBy: req.user?._id || null,
-              cycle,
-            })
+            let consumedFromReservation = 0
+            if (inventoryBehavior.mode !== 'off') {
+              const reservationResult = await consumeReservationsForOrder({
+                restaurantId: restaurant._id,
+                orderId: order._id,
+                createdBy: req.user?._id || null,
+                cycle,
+                policy: inventoryBehavior.consumptionPolicy,
+                session,
+              })
+
+              consumedFromReservation = Number(reservationResult?.consumedCount || 0)
+            }
+
+            if (!consumedFromReservation && inventoryBehavior.allowLegacyFallback) {
+              await processOrderConsumption(order, {
+                session,
+                createdBy: req.user?._id || null,
+                cycle,
+              })
+            }
+
             order.inventoryConsumptionCycle = cycle
             order.inventoryProcessedAt = new Date()
             await order.save({ session })
           } catch (inventoryError) {
+            if (
+              inventoryBehavior.blockOrderCompletionOnInventoryFailure ||
+              isInventoryConstraintError(inventoryError)
+            ) {
+              const error = new Error(
+                inventoryError?.message || 'Inventory policy blocked order completion',
+              )
+              error.status = 409
+              throw error
+            }
+
             logger.warn('order_inventory_consumption_failed', {
               orderId: String(order?._id || req.params.orderId || ''),
               restaurantId: String(restaurant?._id || ''),
@@ -620,6 +658,33 @@ export async function createOrder(req, res, next) {
       hiddenFromActive: false,
       hiddenFromRecent: false,
     })
+
+    const inventoryBehavior = getOrderInventoryBehavior()
+    if (inventoryBehavior.reserveOnCreate) {
+      try {
+        const reservationSession = await mongoose.startSession()
+        try {
+          await reservationSession.withTransaction(async () => {
+            await reserveStockForOrder({
+              restaurantId: draft.restaurant._id,
+              order,
+              createdBy: null,
+              policy: inventoryBehavior.consumptionPolicy,
+              idempotencyPrefix: 'order',
+              session: reservationSession,
+            })
+          })
+        } finally {
+          reservationSession.endSession()
+        }
+      } catch (reservationError) {
+        logger.warn('order_inventory_reservation_failed', {
+          orderId: String(order?._id || ''),
+          restaurantId: String(draft?.restaurant?._id || ''),
+          message: reservationError?.message || 'inventory_reservation_failed',
+        })
+      }
+    }
 
     invalidateCacheByTags(
       buildOrderCacheTags({

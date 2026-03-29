@@ -11,6 +11,10 @@ const LEDGER_TYPES = new Set([
   'ADJUSTMENT',
   'CONVERSION_IN',
   'CONVERSION_OUT',
+  'RESERVATION',
+  'RELEASE',
+  'TRANSFER_IN',
+  'TRANSFER_OUT',
 ])
 
 function toObjectIdString(value) {
@@ -60,8 +64,8 @@ function normalizeLedgerRow(row = {}) {
   if (!LEDGER_TYPES.has(type)) {
     throw new Error(`Invalid ledger type: ${type}`)
   }
-  if (directionRaw !== 1 && directionRaw !== -1) {
-    throw new Error('direction must be +1 or -1')
+  if (directionRaw !== 1 && directionRaw !== -1 && directionRaw !== 0) {
+    throw new Error('direction must be +1, 0 or -1')
   }
   if (!Number.isFinite(quantityRaw) || quantityRaw <= 0) {
     throw new Error('quantity must be greater than 0')
@@ -75,6 +79,7 @@ function normalizeLedgerRow(row = {}) {
 
   return {
     restaurantId,
+    locationId: row.locationId || null,
     inventoryItemId,
     type,
     quantity,
@@ -157,6 +162,7 @@ async function assertTenantOwnership(entries = [], { session } = {}) {
 function toLedgerDocument(entry) {
   return {
     restaurantId: entry.restaurantId,
+    locationId: entry.locationId || null,
     inventoryItemId: entry.inventoryItemId,
     type: entry.type,
     quantity: entry.quantity,
