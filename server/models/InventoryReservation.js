@@ -19,7 +19,7 @@ const inventoryReservationSchema = new mongoose.Schema(
     recipeVersion: { type: Number, default: 1, min: 1 },
     recipeVersionId: { type: mongoose.Schema.Types.ObjectId, ref: 'RecipeVersion', default: null },
     idempotencyKey: { type: String, default: '', trim: true, maxlength: 220 },
-    expiresAt: { type: Date, default: null, index: true },
+    expiresAt: { type: Date, default: null },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },

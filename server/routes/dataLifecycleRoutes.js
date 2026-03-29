@@ -13,7 +13,10 @@ import {
 } from '../services/dataLifecycleScheduler.js'
 import { getArchiveStats } from '../services/archiveService.js'
 import { getRollupStats } from '../services/analyticsRollupService.js'
-import logger from '../utils/logger.js'
+import { BlobServiceClient } from '@azure/storage-blob'
+import dataLifecycleConfig from '../config/dataLifecycle.js'
+import AnalyticsDailyMetrics from '../models/AnalyticsDailyMetrics.js'
+import { logger } from '../utils/logger.js'
 
 const router = express.Router()
 
@@ -197,9 +200,6 @@ router.get('/rollup/stats/:restaurantId', authorize(['owner']), async (req, res)
  */
 router.get('/config', authorize(['owner']), (req, res) => {
   try {
-    // Import config
-    const dataLifecycleConfig = require('../config/dataLifecycle.js').default
-    
     // Don't expose sensitive info like connection strings
     const safeConfig = {
       archive: {
@@ -270,7 +270,6 @@ router.post('/test', authorize(['owner']), async (req, res) => {
     // Test Azure connection
     try {
       logger.info('Testing Azure connection')
-      const { BlobServiceClient } = require('@azure/storage-blob')
       const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING
       
       if (!connectionString) {
@@ -297,7 +296,6 @@ router.post('/test', authorize(['owner']), async (req, res) => {
     // Test MongoDB connection
     try {
       logger.info('Testing MongoDB connection')
-      const AnalyticsDailyMetrics = require('../models/AnalyticsDailyMetrics.js').default
       await AnalyticsDailyMetrics.collection.stats()
       
       results.tests.mongodb = {

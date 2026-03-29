@@ -19,7 +19,7 @@ import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
 import AnalyticsItemMonthlyMetrics from '../models/AnalyticsItemMonthlyMetrics.js'
 import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsBasketPairMonthly from '../models/AnalyticsBasketPairMonthly.js'
-import logger from '../utils/logger.js'
+import { logger } from '../utils/logger.js'
 
 const ROLLUP_THRESHOLD_DAYS = 90
 

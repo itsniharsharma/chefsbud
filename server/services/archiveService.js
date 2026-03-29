@@ -15,7 +15,7 @@
 
 import { BlobServiceClient } from '@azure/storage-blob'
 import Order from '../models/Order.js'
-import logger from '../utils/logger.js'
+import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
 
 let blobServiceClient = null

@@ -14,7 +14,7 @@
  */
 
 import cron from 'node-cron'
-import logger from '../utils/logger.js'
+import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
 import { archiveOldOrders } from './archiveService.js'
 import { rollupAllAnalytics } from './analyticsRollupService.js'

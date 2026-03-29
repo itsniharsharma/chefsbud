@@ -23,7 +23,7 @@ import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsMonthlyMetrics from '../models/AnalyticsMonthlyMetrics.js'
 import AnalyticsItemMonthlyMetrics from '../models/AnalyticsItemMonthlyMetrics.js'
 import AnalyticsBasketPairMonthly from '../models/AnalyticsBasketPairMonthly.js'
-import logger from '../utils/logger.js'
+import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
 
 /**
