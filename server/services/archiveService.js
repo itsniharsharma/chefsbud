@@ -214,7 +214,7 @@ const archiveOldOrders = async () => {
             if (blobResult.uploaded > 0) {
               break
             }
-          } catch (retryError) {
+          } catch {
             attempt++
             if (attempt < config.archive.maxRetries) {
               await new Promise((resolve) =>

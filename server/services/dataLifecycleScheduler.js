@@ -20,7 +20,6 @@ import { archiveOldOrders } from './archiveService.js'
 import { rollupAllAnalytics } from './analyticsRollupService.js'
 import redis from '../config/redis.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
-import AnalyticsEventIngestion from '../models/AnalyticsEventIngestion.js'
 import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
 
@@ -49,17 +48,6 @@ const acquireLeadership = async () => {
   } catch (error) {
     logger.warn('Failed to check leadership', { error: error.message })
     return false
-  }
-}
-
-/**
- * Refresh leadership lock (call periodically while job is running)
- */
-const refreshLeadership = async () => {
-  try {
-    await redis.expire(LEADER_LOCK_KEY, LEADER_TTL)
-  } catch (error) {
-    logger.warn('Failed to refresh leadership', { error: error.message })
   }
 }
 

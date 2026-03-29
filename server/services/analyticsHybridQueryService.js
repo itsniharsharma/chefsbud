@@ -29,7 +29,6 @@ const ROLLUP_THRESHOLD_DAYS = 90
  */
 const getRestaurantAnalyticsByRange = async (restaurantId, startDate, endDate) => {
   try {
-    const now = new Date()
     const thresholdDate = new Date()
     thresholdDate.setDate(thresholdDate.getDate() - ROLLUP_THRESHOLD_DAYS)
     
@@ -99,7 +98,6 @@ const getRestaurantAnalyticsByRange = async (restaurantId, startDate, endDate) =
  */
 const getItemAnalyticsByRange = async (restaurantId, menuItemId, startDate, endDate) => {
   try {
-    const now = new Date()
     const thresholdDate = new Date()
     thresholdDate.setDate(thresholdDate.getDate() - ROLLUP_THRESHOLD_DAYS)
     
@@ -175,7 +173,6 @@ const getItemAnalyticsByRange = async (restaurantId, menuItemId, startDate, endD
  */
 const getTopItemsByMetric = async (restaurantId, metric = 'revenue', limit = 10, startDate, endDate) => {
   try {
-    const now = new Date()
     const thresholdDate = new Date()
     thresholdDate.setDate(thresholdDate.getDate() - ROLLUP_THRESHOLD_DAYS)
     
@@ -268,7 +265,6 @@ const getTopItemsByMetric = async (restaurantId, metric = 'revenue', limit = 10,
  */
 const getBasketPairRecommendations = async (restaurantId, menuItemId, limit = 5, startDate, endDate) => {
   try {
-    const now = new Date()
     const thresholdDate = new Date()
     thresholdDate.setDate(thresholdDate.getDate() - ROLLUP_THRESHOLD_DAYS)
     
