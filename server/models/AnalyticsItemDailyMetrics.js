@@ -13,6 +13,9 @@ const analyticsItemDailyMetricsSchema = new mongoose.Schema(
     orders: { type: Number, default: 0, min: 0 },
     quantitySold: { type: Number, default: 0, min: 0 },
     revenue: { type: Number, default: 0, min: 0 },
+    // Rollup tracking: marks when data has been aggregated to monthly
+    rolledUp: { type: Boolean, default: false, index: true },
+    rolledUpAt: { type: Date, default: null },
   },
   { timestamps: true },
 )
@@ -22,5 +25,6 @@ analyticsItemDailyMetricsSchema.index({ restaurantId: 1, date: 1, menuItemId: 1 
 analyticsItemDailyMetricsSchema.index({ restaurantId: 1, date: 1, revenue: -1 })
 analyticsItemDailyMetricsSchema.index({ restaurantId: 1, date: 1, views: -1 })
 analyticsItemDailyMetricsSchema.index({ restaurantId: 1, date: 1, orders: -1 })
+analyticsItemDailyMetricsSchema.index({ date: 1, rolledUp: 1 })
 
 export default mongoose.model('AnalyticsItemDailyMetrics', analyticsItemDailyMetricsSchema)

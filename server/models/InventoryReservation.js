@@ -32,4 +32,10 @@ inventoryReservationSchema.index(
   { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true, $ne: '' } } },
 )
 
+// TTL index: automatically delete reservations 24 hours after expiresAt
+inventoryReservationSchema.index(
+  { expiresAt: 1 },
+  { expireAfterSeconds: 0, partialFilterExpression: { expiresAt: { $exists: true, $ne: null } } },
+)
+
 export default mongoose.model('InventoryReservation', inventoryReservationSchema)

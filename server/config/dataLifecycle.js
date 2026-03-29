@@ -1,0 +1,88 @@
+/**
+ * Data Lifecycle Configuration
+ * Centralized settings for archive, rollup, and cleanup jobs
+ * Environment variables override defaults for production flexibility
+ */
+
+const config = {
+  // Archive settings: Move orders to Azure after N days
+  archive: {
+    enabled: process.env.ARCHIVE_ENABLED === 'true',
+    afterDays: parseInt(process.env.ARCHIVE_AFTER_DAYS || '45', 10),
+    batchSize: parseInt(process.env.ARCHIVE_BATCH_SIZE || '1000', 10),
+    maxRetries: 3,
+    retryDelayMs: 5000,
+    // Only archive completed orders to avoid issues with ongoing orders
+    archiveOnlyStatuses: ['Completed'],
+    timeout: 120000, // 2 minutes per batch
+  },
+
+  // Rollup settings: Aggregate daily → monthly after N days
+  rollup: {
+    enabled: process.env.ROLLUP_ENABLED === 'true',
+    afterDays: parseInt(process.env.ROLLUP_AFTER_DAYS || '90', 10),
+    // Keep only top N basket pairs per restaurant per month (rest are deleted)
+    topBasketPairsPerMonth: 100,
+    timeout: 180000, // 3 minutes per rollup job
+  },
+
+  // Cleanup settings
+  cleanup: {
+    // Mark daily data as rolledUp and keep for reference (don't delete immediately)
+    keepRolledUpDaily: true,
+    keepRolledUpDailyFor: 180, // days
+    
+    // Delete low-frequency data aggressively to prevent unbounded growth
+    deleteOrdersMissingAnalytics: true,
+    deleteOrdersMissingAnalyticsAfterDays: 365,
+    
+    // Cleanup old hourly metrics
+    hourlyMetricsRetention: 30, // days
+    
+    // Cleanup old event ingestion (TTL handles this, but explicit cleanup as fallback)
+    eventIngestionRetention: 7, // days (matching TTL)
+  },
+
+  // Azure Blob Storage settings
+  azure: {
+    containerName: process.env.AZURE_STORAGE_CONTAINER || 'orders-archive',
+    connectionString: process.env.AZURE_STORAGE_CONNECTION_STRING,
+    archivePath: 'orders-archive', // Base path in container
+  },
+
+  // Cron schedules (cron format: minute hour day month dayOfWeek)
+  schedules: {
+    // Run archive job daily at 2 AM (attempts to archive 45+ day old orders)
+    archive: process.env.CRON_ARCHIVE || '0 2 * * *',
+    
+    // Run rollup job daily at 3 AM (rolls up 90+ day old daily metrics to monthly)
+    rollup: process.env.CRON_ROLLUP || '0 3 * * *',
+    
+    // Clean up expired reservations every 15 minutes (TTL index does this, but explicit job as fallback)
+    cleanupExpired: process.env.CRON_CLEANUP_EXPIRED || '*/15 * * * *',
+    
+    // Run cleanup jobs daily at 4 AM
+    cleanup: process.env.CRON_CLEANUP || '0 4 * * *',
+  },
+
+  // Logging and monitoring
+  logging: {
+    enabled: true,
+    logArchiveDetails: process.env.NODE_ENV === 'development', // Verbose in dev only
+    logRollupDetails: process.env.NODE_ENV === 'development',
+  },
+
+  // Safety limits
+  safety: {
+    // Max documents to process in single operation
+    maxDocumentsPerOperation: 10000,
+    
+    // Abort if more than X% of batch fails
+    failureThreshold: 10, // percent
+    
+    // Require manual intervention if > X documents affected per cycle
+    auditThreshold: 5000,
+  },
+}
+
+export default config
