@@ -276,7 +276,18 @@ export async function updateOrderStatus(req, res, next) {
     const isCompleted = orderStatus === 'Completed'
 
     if (wasCompleted && !isCompleted) {
-      return res.status(409).json({ message: 'Completed orders are immutable and cannot be moved back to active statuses' })
+      // Treat delayed retries as idempotent: return latest state instead of conflict.
+      // This avoids noisy client errors when a stale transition arrives after completion.
+      const latestOrder = await Order.findOne({
+        _id: req.params.orderId,
+        restaurantId: restaurant._id,
+      })
+
+      if (!latestOrder) {
+        return res.status(404).json({ message: 'Order not found' })
+      }
+
+      return res.json(latestOrder)
     }
 
     const update = {

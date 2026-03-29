@@ -2,6 +2,7 @@ import 'dotenv/config'
 import app from './app.js'
 import { closeDB, connectDB } from './config/db.js'
 import { startOrderArchiveScheduler, stopOrderArchiveScheduler } from './services/orderArchiveService.js'
+import { runStartupChecks } from './services/startupChecks.js'
 import { closeSocketServer, initSocketServer } from './realtime/socketServer.js'
 import { performanceMetrics } from './services/performanceMetrics.js'
 import { logger } from './utils/logger.js'
@@ -73,6 +74,7 @@ process.on('SIGINT', () => {
 async function start() {
   performanceMetrics.start()
   await connectDB()
+  await runStartupChecks()
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
     startOrderArchiveScheduler()

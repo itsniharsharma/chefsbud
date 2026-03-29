@@ -4,7 +4,18 @@ import { formatCurrencyINR } from '../utils/currency'
 
 const statuses = ['Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
 
-function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, onShiftTable, shiftingTableKey, printingBillOrderId, printingKotOrderId, showStatusActions = true }) {
+function OrderCard({
+  order,
+  onStatusChange,
+  onPrintBill,
+  onPrintKot,
+  onShiftTable,
+  shiftingTableKey,
+  printingBillOrderId,
+  printingKotOrderId,
+  showStatusActions = true,
+  statusActionDisabled = false,
+}) {
   const orderId = order._id || order.id
   const label = order.orderStatus || order.status
   const total = order.billFinalTotalAmount ?? order.totalAmount ?? order.total ?? 0
@@ -85,6 +96,7 @@ function OrderCard({ order, onStatusChange, onPrintBill, onPrintKot, onShiftTabl
               key={status}
               variant={label === status ? 'primary' : 'secondary'}
               className="px-3 py-1 text-xs"
+              disabled={statusActionDisabled || label === status}
               onClick={() => onStatusChange(orderId, status)}
             >
               {status}

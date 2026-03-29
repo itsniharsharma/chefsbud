@@ -24,6 +24,7 @@ const inventoryLedgerSchema = new mongoose.Schema(
 inventoryLedgerSchema.index({ restaurantId: 1, inventoryItemId: 1, createdAt: -1 })
 inventoryLedgerSchema.index({ restaurantId: 1, createdAt: -1, type: 1 })
 inventoryLedgerSchema.index({ referenceType: 1, referenceId: 1, createdAt: -1 })
+inventoryLedgerSchema.index({ restaurantId: 1, referenceType: 1, referenceId: 1, direction: 1, type: 1, 'metadata.cycle': 1 })
 inventoryLedgerSchema.index(
   { restaurantId: 1, idempotencyKey: 1 },
   {

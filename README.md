@@ -116,6 +116,19 @@ Orders persist to MongoDB and appear in owner dashboard polling.
 - Archive objects are tenant-bounded by restaurant path, compressed as `json.gz`.
 - After successful upload, archived orders are purged from MongoDB when `ORDER_ARCHIVE_PURGE_AFTER_UPLOAD=true`.
 
+### Order Status API Idempotency
+
+- `PATCH /api/orders/:orderId/status` treats stale client retries as idempotent.
+- If an order is already `Completed` and a delayed/stale request attempts to move it back to an active status, API returns `200` with the current order state instead of `409`.
+- Client expectation: always trust the returned order payload as source of truth after status updates.
+
+### Inventory Index Rollout Note
+
+- Inventory reverse-consumption queries depend on a compound index in `InventoryLedger`:
+	`{ restaurantId, referenceType, referenceId, direction, type, metadata.cycle }`.
+- On server startup, a non-blocking readiness check logs whether this index is present.
+- If startup logs show `startup_check_inventory_ledger_cycle_index_missing`, deploy can still run, but monitor index build completion to avoid temporary query slowdowns.
+
 ## AI Menu Import (Owner → Menu)
 
 - Open Menu section in owner dashboard.

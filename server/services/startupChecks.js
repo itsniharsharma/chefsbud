@@ -1,0 +1,57 @@
+import InventoryLedger from '../models/InventoryLedger.js'
+import { logger } from '../utils/logger.js'
+
+const EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX = {
+  restaurantId: 1,
+  referenceType: 1,
+  referenceId: 1,
+  direction: 1,
+  type: 1,
+  'metadata.cycle': 1,
+}
+
+function hasExactKeyPattern(candidate = {}, expected = {}) {
+  const candidateEntries = Object.entries(candidate)
+  const expectedEntries = Object.entries(expected)
+
+  if (candidateEntries.length !== expectedEntries.length) return false
+
+  for (let index = 0; index < expectedEntries.length; index += 1) {
+    const [expectedKey, expectedValue] = expectedEntries[index]
+    const [candidateKey, candidateValue] = candidateEntries[index] || []
+    if (candidateKey !== expectedKey) return false
+    if (Number(candidateValue) !== Number(expectedValue)) return false
+  }
+
+  return true
+}
+
+async function verifyInventoryLedgerIndexes() {
+  const indexes = await InventoryLedger.collection.indexes()
+  const hasCycleIndex = indexes.some((index) =>
+    hasExactKeyPattern(index?.key || {}, EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX),
+  )
+
+  if (hasCycleIndex) {
+    logger.info('startup_check_inventory_ledger_cycle_index_ready', {
+      collection: InventoryLedger.collection.collectionName,
+    })
+    return
+  }
+
+  logger.warn('startup_check_inventory_ledger_cycle_index_missing', {
+    collection: InventoryLedger.collection.collectionName,
+    expectedKey: EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX,
+    note: 'Deploy can proceed, but monitor index build rollout to avoid slower reverse-consumption queries.',
+  })
+}
+
+export async function runStartupChecks() {
+  try {
+    await verifyInventoryLedgerIndexes()
+  } catch (error) {
+    logger.warn('startup_checks_failed', {
+      message: error?.message || 'unknown startup check failure',
+    })
+  }
+}

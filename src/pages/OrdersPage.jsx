@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import BillPrintModal from '../components/BillPrintModal'
 import OrderCard from '../components/OrderCard'
@@ -25,8 +25,10 @@ export default function OrdersPage() {
   const [shiftingTableKey, setShiftingTableKey] = useState('')
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
+  const [statusActionBusy, setStatusActionBusy] = useState(false)
   const [billTargetOrder, setBillTargetOrder] = useState(null)
   const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
+  const statusMutationLockRef = useRef(false)
   const queryClient = useQueryClient()
 
   const { data } = useOrdersBoardQuery({
@@ -129,6 +131,10 @@ export default function OrdersPage() {
       }
       setError(requestError?.response?.data?.message || 'Failed to update status')
     },
+    onSettled: () => {
+      statusMutationLockRef.current = false
+      setStatusActionBusy(false)
+    },
   })
 
   const markKotPrintedMutation = useMutation({
@@ -204,6 +210,10 @@ export default function OrdersPage() {
 
   const onStatusChange = (id, status) => {
     if (!restaurant?._id) return
+    if (statusMutationLockRef.current || updateStatusMutation.isPending) return
+
+    statusMutationLockRef.current = true
+    setStatusActionBusy(true)
     updateStatusMutation.mutate({ id, status })
   }
 
@@ -473,6 +483,7 @@ export default function OrdersPage() {
                 onPrintKot={printKotForOrder}
                 printingBillOrderId={printingBillOrderId}
                 printingKotOrderId={printingKotOrderId}
+                statusActionDisabled={statusActionBusy || updateStatusMutation.isPending}
               />
             ))}
             {!activeOrders.length && <p className="text-sm text-slate-500">No active orders in this view.</p>}

@@ -102,6 +102,17 @@ function buildStockDeltaByItem(entries = []) {
   return deltas
 }
 
+function normalizeComparableUnit(unit = '') {
+  const raw = String(unit || '').trim()
+  if (!raw) return ''
+
+  try {
+    return unitToBase(raw).unit
+  } catch {
+    return raw.toLowerCase()
+  }
+}
+
 async function assertTenantOwnership(entries = [], { session } = {}) {
   const itemIds = [...new Set(entries.map((entry) => toObjectIdString(entry.inventoryItemId)).filter(Boolean))]
   const restaurantIds = [...new Set(entries.map((entry) => toObjectIdString(entry.restaurantId)).filter(Boolean))]
@@ -133,9 +144,29 @@ async function assertTenantOwnership(entries = [], { session } = {}) {
     }
     const currentStock = Number(item.currentStock || 0)
     const canRealignBaseUnit = Math.abs(currentStock) <= 0.000001
-    if (item.currentStockUnit && item.currentStockUnit !== entry.unit && !canRealignBaseUnit) {
+    const currentUnit = normalizeComparableUnit(item.currentStockUnit)
+    const incomingUnit = normalizeComparableUnit(entry.unit)
+    const unitsMatch = Boolean(currentUnit) && Boolean(incomingUnit) && currentUnit === incomingUnit
+
+    if (item.currentStockUnit && !unitsMatch && !canRealignBaseUnit) {
       throw new Error('Inventory unit mismatch detected for ledger write')
     }
+  }
+}
+
+function toLedgerDocument(entry) {
+  return {
+    restaurantId: entry.restaurantId,
+    inventoryItemId: entry.inventoryItemId,
+    type: entry.type,
+    quantity: entry.quantity,
+    direction: entry.direction,
+    unit: entry.unit,
+    referenceType: entry.referenceType,
+    referenceId: entry.referenceId,
+    metadata: entry.metadata,
+    createdBy: entry.createdBy,
+    idempotencyKey: entry.idempotencyKey,
   }
 }
 
@@ -147,37 +178,74 @@ export async function addLedgerEntries(entries = [], { session = null } = {}) {
   const normalized = entries.map((row) => normalizeLedgerRow(row))
   await assertTenantOwnership(normalized, { session })
 
-  const bulkOps = normalized.map((entry) => ({
-    insertOne: {
-      document: {
-        restaurantId: entry.restaurantId,
-        inventoryItemId: entry.inventoryItemId,
-        type: entry.type,
-        quantity: entry.quantity,
-        direction: entry.direction,
-        unit: entry.unit,
-        referenceType: entry.referenceType,
-        referenceId: entry.referenceId,
-        metadata: entry.metadata,
-        createdBy: entry.createdBy,
-        idempotencyKey: entry.idempotencyKey,
-      },
-    },
-  }))
+  const idempotentEntries = []
+  const plainEntries = []
 
-  try {
-    await InventoryLedger.bulkWrite(bulkOps, {
+  for (const entry of normalized) {
+    if (entry.idempotencyKey) {
+      idempotentEntries.push(entry)
+    } else {
+      plainEntries.push(entry)
+    }
+  }
+
+  const insertedEntries = []
+  let duplicateCount = 0
+
+  if (idempotentEntries.length) {
+    const idempotentOps = idempotentEntries.map((entry) => ({
+      updateOne: {
+        filter: {
+          restaurantId: entry.restaurantId,
+          idempotencyKey: entry.idempotencyKey,
+        },
+        update: {
+          $setOnInsert: toLedgerDocument(entry),
+        },
+        upsert: true,
+      },
+    }))
+
+    const idempotentResult = await InventoryLedger.bulkWrite(idempotentOps, {
+      ordered: false,
+      session: session || undefined,
+    })
+
+    const upsertedIdsRaw = idempotentResult?.upsertedIds || {}
+    const upsertedIndexes = new Set(
+      Object.keys(upsertedIdsRaw)
+        .map((key) => Number(key))
+        .filter((index) => Number.isInteger(index) && index >= 0),
+    )
+
+    idempotentEntries.forEach((entry, index) => {
+      if (upsertedIndexes.has(index)) {
+        insertedEntries.push(entry)
+      }
+    })
+
+    duplicateCount += Math.max(0, idempotentEntries.length - upsertedIndexes.size)
+  }
+
+  if (plainEntries.length) {
+    const docs = plainEntries.map((entry) => toLedgerDocument(entry))
+    await InventoryLedger.insertMany(docs, {
       ordered: true,
       session: session || undefined,
     })
-  } catch (error) {
-    if (error?.code === 11000) {
-      return { insertedCount: 0, stockUpdatedCount: 0, duplicate: true }
-    }
-    throw error
+    insertedEntries.push(...plainEntries)
   }
 
-  const deltas = buildStockDeltaByItem(normalized)
+  if (!insertedEntries.length) {
+    return {
+      insertedCount: 0,
+      stockUpdatedCount: 0,
+      duplicate: duplicateCount > 0,
+      duplicateCount,
+    }
+  }
+
+  const deltas = buildStockDeltaByItem(insertedEntries)
   const stockOps = [...deltas.entries()].map(([inventoryItemId, value]) => ({
     updateOne: {
       filter: { _id: inventoryItemId },
@@ -196,8 +264,10 @@ export async function addLedgerEntries(entries = [], { session = null } = {}) {
   }
 
   return {
-    insertedCount: normalized.length,
+    insertedCount: insertedEntries.length,
     stockUpdatedCount: stockOps.length,
+    duplicate: duplicateCount > 0,
+    duplicateCount,
   }
 }
 

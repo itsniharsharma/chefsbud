@@ -23,6 +23,9 @@ app.disable('x-powered-by')
 app.set('trust proxy', 1)
 app.set('etag', 'strong')
 const isProduction = process.env.NODE_ENV === 'production'
+const appRevision =
+  String(process.env.APP_REVISION || process.env.VERCEL_GIT_COMMIT_SHA || process.env.RENDER_GIT_COMMIT || 'local').trim() ||
+  'local'
 const jsonLimit = process.env.API_JSON_LIMIT || '1mb'
 const urlEncodedLimit = process.env.API_URLENCODED_LIMIT || '256kb'
 
@@ -67,6 +70,10 @@ const corsOptions = {
 
 app.use(cors(corsOptions))
 app.use(compression())
+app.use((req, res, next) => {
+  res.setHeader('x-app-revision', appRevision)
+  next()
+})
 app.use(requestContext)
 app.use(requestLatencyMetrics)
 app.use(securityHeaders)
@@ -79,6 +86,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     app: "Chef's Bud - Restaurant Revenue OS",
+    revision: appRevision,
+    inventoryPatchLevel: 'inventory-hardening-v2',
     uptimeSeconds: Math.round(process.uptime()),
     processRole: String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase(),
     db: getDbStatus(),
