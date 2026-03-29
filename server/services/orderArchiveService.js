@@ -1,16 +1,34 @@
 import { logger } from '../utils/logger.js'
-import { archiveOldOrders } from './archiveService.js'
+import { archiveOldOrders, purgeArchivedOrders } from './archiveService.js'
 
 let archiveTimer = null
 let running = false
+let lastPurgeAtMs = 0
+
+function shouldRunPurgeNow() {
+  const purgeIntervalMinutes = Number(process.env.PURGE_INTERVAL_MINUTES || 360)
+  const safeIntervalMs = (Number.isFinite(purgeIntervalMinutes) && purgeIntervalMinutes > 0 ? purgeIntervalMinutes : 360) * 60 * 1000
+  const now = Date.now()
+  if (now - lastPurgeAtMs < safeIntervalMs) {
+    return false
+  }
+  lastPurgeAtMs = now
+  return true
+}
 
 export async function runOrderArchiveOnce() {
-  const result = await archiveOldOrders()
+  const archiveResult = await archiveOldOrders()
+  const purgeResult = shouldRunPurgeNow()
+    ? await purgeArchivedOrders()
+    : { status: 'skipped_interval', totalDeleted: 0 }
+
   return {
-    archivedOrders: Number(result?.totalArchived || 0),
+    archivedOrders: Number(archiveResult?.totalArchived || 0),
+    purgedOrders: Number(purgeResult?.totalDeleted || 0),
     archivedRestaurants: 0,
-    skipped: result?.status === 'disabled',
-    status: result?.status || 'unknown',
+    skipped: archiveResult?.status === 'disabled' && purgeResult?.status === 'disabled',
+    status: archiveResult?.status || 'unknown',
+    purgeStatus: purgeResult?.status || 'unknown',
   }
 }
 
@@ -36,7 +54,7 @@ export function startOrderArchiveScheduler() {
     running = true
     try {
       const result = await runOrderArchiveOnce()
-      if (!result.skipped && result.archivedOrders > 0) {
+      if (!result.skipped && (result.archivedOrders > 0 || result.purgedOrders > 0)) {
         logger.info('Order archive cycle complete', result)
       }
     } catch (error) {

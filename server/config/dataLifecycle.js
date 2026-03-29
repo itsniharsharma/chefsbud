@@ -17,6 +17,15 @@ const config = {
     timeout: 120000, // 2 minutes per batch
   },
 
+  // Purge settings: Remove already-archived orders from Mongo after safety window
+  purge: {
+    enabled: process.env.PURGE_ENABLED !== 'false',
+    deleteAfterArchiveDays: parseInt(process.env.DELETE_AFTER_ARCHIVE_DAYS || '1', 10),
+    batchSize: parseInt(process.env.PURGE_BATCH_SIZE || '500', 10),
+    dryRun: process.env.DRY_RUN_PURGE === 'true',
+    maxDurationMs: parseInt(process.env.PURGE_MAX_DURATION_MS || '120000', 10),
+  },
+
   // Rollup settings: Aggregate daily → monthly after N days
   rollup: {
     enabled: process.env.ROLLUP_ENABLED === 'true',
@@ -30,7 +39,7 @@ const config = {
   cleanup: {
     // Mark daily data as rolledUp and keep for reference (don't delete immediately)
     keepRolledUpDaily: true,
-    keepRolledUpDailyFor: 180, // days
+    keepRolledUpDailyFor: parseInt(process.env.DAILY_ANALYTICS_RETENTION_DAYS || '90', 10), // days
     
     // Delete low-frequency data aggressively to prevent unbounded growth
     deleteOrdersMissingAnalytics: true,
@@ -63,6 +72,9 @@ const config = {
     
     // Run cleanup jobs daily at 4 AM
     cleanup: process.env.CRON_CLEANUP || '0 4 * * *',
+
+    // Run purge job every 6 hours
+    purge: process.env.CRON_PURGE || '0 */6 * * *',
   },
 
   // Logging and monitoring

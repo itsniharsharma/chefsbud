@@ -33,14 +33,30 @@ services:
         value: '45'
       - key: ARCHIVE_BATCH_SIZE
         value: '1000'
+      - key: PURGE_ENABLED
+        value: 'true'
+      - key: DELETE_AFTER_ARCHIVE_DAYS
+        value: '1'
+      - key: PURGE_BATCH_SIZE
+        value: '500'
+      - key: DRY_RUN_PURGE
+        value: 'false'
+      - key: PURGE_MAX_DURATION_MS
+        value: '120000'
+      - key: PURGE_INTERVAL_MINUTES
+        value: '360'
       - key: ROLLUP_ENABLED
         value: 'true'
       - key: ROLLUP_AFTER_DAYS
+        value: '90'
+      - key: DAILY_ANALYTICS_RETENTION_DAYS
         value: '90'
       - key: AZURE_STORAGE_CONTAINER
         value: orders-archive
       - key: CRON_ARCHIVE
         value: '0 2 * * *'
+      - key: CRON_PURGE
+        value: '0 */6 * * *'
       - key: CRON_ROLLUP
         value: '0 3 * * *'
       - key: CRON_CLEANUP

@@ -20,6 +20,7 @@ import { archiveOldOrders } from './archiveService.js'
 import { rollupAllAnalytics } from './analyticsRollupService.js'
 import redis from '../config/redis.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
+import AnalyticsDailyMetrics from '../models/AnalyticsDailyMetrics.js'
 import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
 
@@ -157,6 +158,9 @@ const cleanupJob = async () => {
     
     const results = {
       hourlyMetricsDeleted: 0,
+      rolledUpDailyDeleted: 0,
+      rolledUpItemDailyDeleted: 0,
+      rolledUpPairDailyDeleted: 0,
       basketPairsDeleted: 0,
       itemMetricsOptimized: 0,
       errors: [],
@@ -168,7 +172,7 @@ const cleanupJob = async () => {
       cutoffDate.setDate(cutoffDate.getDate() - config.cleanup.hourlyMetricsRetention)
       
       const deleted = await OrderHourlyMetrics.deleteMany({
-        timestamp: { $lt: cutoffDate },
+        date: { $lt: cutoffDate },
       })
       
       results.hourlyMetricsDeleted = deleted.deletedCount
@@ -177,6 +181,44 @@ const cleanupJob = async () => {
       const msg = `Cleanup of hourly metrics failed: ${error.message}`
       logger.error(msg)
       results.errors.push(msg)
+    }
+
+    // Remove rolled-up daily analytics older than configured retention.
+    if (config.cleanup.keepRolledUpDaily) {
+      try {
+        const cutoffDate = new Date()
+        cutoffDate.setDate(cutoffDate.getDate() - config.cleanup.keepRolledUpDailyFor)
+
+        const [dailyDeleted, itemDailyDeleted, pairDailyDeleted] = await Promise.all([
+          AnalyticsDailyMetrics.deleteMany({
+            rolledUp: true,
+            rolledUpAt: { $exists: true, $lte: cutoffDate },
+          }),
+          AnalyticsItemDailyMetrics.deleteMany({
+            rolledUp: true,
+            rolledUpAt: { $exists: true, $lte: cutoffDate },
+          }),
+          AnalyticsBasketPairDaily.deleteMany({
+            rolledUp: true,
+            rolledUpAt: { $exists: true, $lte: cutoffDate },
+          }),
+        ])
+
+        results.rolledUpDailyDeleted = dailyDeleted.deletedCount
+        results.rolledUpItemDailyDeleted = itemDailyDeleted.deletedCount
+        results.rolledUpPairDailyDeleted = pairDailyDeleted.deletedCount
+
+        logger.info('Cleaned rolled-up daily analytics', {
+          cutoffDate: cutoffDate.toISOString(),
+          daily: dailyDeleted.deletedCount,
+          itemDaily: itemDailyDeleted.deletedCount,
+          pairDaily: pairDailyDeleted.deletedCount,
+        })
+      } catch (error) {
+        const msg = `Cleanup of rolled-up daily analytics failed: ${error.message}`
+        logger.error(msg)
+        results.errors.push(msg)
+      }
     }
     
     // Clean up low-frequency basket pairs (keep only top 100 per day)
@@ -258,6 +300,7 @@ const initializeScheduler = () => {
   
   logger.info('Initializing data lifecycle scheduler', {
     archiveSchedule: config.schedules.archive,
+    purgeSchedule: config.schedules.purge,
     rollupSchedule: config.schedules.rollup,
     cleanupSchedule: config.schedules.cleanup,
   })
@@ -334,6 +377,11 @@ const getSchedulerStatus = () => {
     recentHistory: jobHistory.slice(-20), // Last 20 jobs
     config: {
       archive: { enabled: config.archive.enabled, schedule: config.schedules.archive },
+      purge: {
+        enabled: config.purge.enabled,
+        schedule: config.schedules.purge,
+        deleteAfterArchiveDays: config.purge.deleteAfterArchiveDays,
+      },
       rollup: { enabled: config.rollup.enabled, schedule: config.schedules.rollup },
       cleanup: { schedule: config.schedules.cleanup },
     },

@@ -124,6 +124,7 @@ orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt:
 orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, paymentStatus: 1, createdAt: -1 })
 orderSchema.index({ hiddenFromActive: 1, deletedByOwnerAt: 1, isArchived: 1 })
 orderSchema.index({ isArchived: 1, hiddenFromActive: 1, deletedByOwnerAt: 1, restaurantId: 1 })
+orderSchema.index({ isArchived: 1, archivedAt: 1, orderStatus: 1 })
 orderSchema.index({ restaurantId: 1, orderStatus: 1, analyticsTrackedAt: 1, completedAt: 1, createdAt: 1 })
 orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
 orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })

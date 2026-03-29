@@ -59,7 +59,7 @@ const generateBlobPath = (restaurantId, date) => {
  */
 const uploadOrdersToBlobStorage = async (orders) => {
   if (!orders || orders.length === 0) {
-    return { uploaded: 0, failed: 0, errors: [] }
+    return { uploaded: 0, failed: 0, errors: [], uploadedOrderIds: [] }
   }
   
   initializeBlobClient()
@@ -79,6 +79,7 @@ const uploadOrdersToBlobStorage = async (orders) => {
   let uploaded = 0
   let failed = 0
   const errors = []
+  const uploadedOrderIds = []
   
   try {
     await containerClient.createIfNotExists()
@@ -86,7 +87,7 @@ const uploadOrdersToBlobStorage = async (orders) => {
     const msg = `Failed to ensure container exists: ${error.message}`
     logger.error(msg)
     errors.push(msg)
-    return { uploaded, failed, errors }
+    return { uploaded, failed, errors, uploadedOrderIds }
   }
   
   // Upload each group
@@ -117,6 +118,7 @@ const uploadOrdersToBlobStorage = async (orders) => {
       await blobClient.upload(Buffer.from(data), data.length)
       
       uploaded += groupOrders.length
+      uploadedOrderIds.push(...groupOrders.map((order) => order._id))
       logger.info('Orders archived to blob storage', {
         path: blobPath,
         count: groupOrders.length,
@@ -130,7 +132,7 @@ const uploadOrdersToBlobStorage = async (orders) => {
     }
   }
   
-  return { uploaded, failed, errors }
+  return { uploaded, failed, errors, uploadedOrderIds }
 }
 
 /**
@@ -231,19 +233,25 @@ const archiveOldOrders = async () => {
           continue
         }
         
-        // Mark as archived in MongoDB
-        const orderIds = ordersToArchive.map((o) => o._id)
-        const updateResult = await Order.updateMany(
-          { _id: { $in: orderIds } },
-          {
-            isArchived: true,
-            archivedAt: new Date(),
-            archiveKey: `${batch}_${Date.now()}`,
-          },
-        )
+        let updateResult = { modifiedCount: 0 }
+        const uploadedOrderIds = Array.isArray(blobResult.uploadedOrderIds)
+          ? blobResult.uploadedOrderIds
+          : []
+
+        // Mark only successfully uploaded orders as archived.
+        if (uploadedOrderIds.length > 0) {
+          updateResult = await Order.updateMany(
+            { _id: { $in: uploadedOrderIds } },
+            {
+              isArchived: true,
+              archivedAt: new Date(),
+              archiveKey: `${batch}_${Date.now()}`,
+            },
+          )
+        }
         
         totalProcessed += ordersToArchive.length
-        totalArchived += blobResult.uploaded
+        totalArchived += updateResult.modifiedCount || 0
         totalFailed += blobResult.failed
         allErrors.push(...blobResult.errors)
         
@@ -310,6 +318,133 @@ const archiveOldOrders = async () => {
 }
 
 /**
+ * Purge archived orders from MongoDB after a safety retention window.
+ * Conditions:
+ * - isArchived = true
+ * - archivedAt exists and older than configured cutoff
+ * - archiveKey exists and non-empty
+ * - orderStatus = Completed
+ */
+const purgeArchivedOrders = async (batchSize = config.purge.batchSize) => {
+  const startTime = Date.now()
+
+  try {
+    if (!config.purge.enabled) {
+      logger.info('Order purge is disabled in configuration')
+      return { status: 'disabled', message: 'Purge job disabled' }
+    }
+
+    const cutoffDate = new Date()
+    cutoffDate.setDate(cutoffDate.getDate() - Math.max(0, Number(config.purge.deleteAfterArchiveDays || 0)))
+
+    const safeBatchSize = Math.max(
+      1,
+      Math.min(Number(batchSize || config.purge.batchSize || 500), config.safety.maxDocumentsPerOperation),
+    )
+
+    let totalDeleted = 0
+    let totalProcessed = 0
+    let batch = 0
+    let hasMore = true
+
+    while (hasMore) {
+      const elapsed = Date.now() - startTime
+      if (elapsed >= config.purge.maxDurationMs) {
+        logger.warn('Order purge stopped due to max duration', {
+          elapsed,
+          maxDurationMs: config.purge.maxDurationMs,
+          totalDeleted,
+        })
+        break
+      }
+
+      batch += 1
+
+      const candidates = await Order.find({
+        isArchived: true,
+        archivedAt: { $exists: true, $lte: cutoffDate },
+        archiveKey: { $exists: true, $ne: '' },
+        orderStatus: 'Completed',
+      })
+        .select('_id')
+        .sort({ _id: 1 })
+        .limit(safeBatchSize)
+        .lean()
+        .exec()
+
+      if (candidates.length === 0) {
+        hasMore = false
+        break
+      }
+
+      const ids = candidates.map((row) => row._id)
+      totalProcessed += ids.length
+
+      if (config.purge.dryRun) {
+        totalDeleted += ids.length
+        logger.info('purged_orders_batch', {
+          batch,
+          count: ids.length,
+          dryRun: true,
+        })
+      } else {
+        const result = await Order.deleteMany({
+          _id: { $in: ids },
+          isArchived: true,
+          archivedAt: { $exists: true, $lte: cutoffDate },
+          archiveKey: { $exists: true, $ne: '' },
+          orderStatus: 'Completed',
+        })
+
+        totalDeleted += result.deletedCount || 0
+        logger.info('purged_orders_batch', {
+          batch,
+          count: result.deletedCount || 0,
+          dryRun: false,
+        })
+      }
+
+      if (totalProcessed >= config.safety.maxDocumentsPerOperation) {
+        logger.warn('Order purge stopped: reached max documents per operation', {
+          maxLimit: config.safety.maxDocumentsPerOperation,
+          processed: totalProcessed,
+        })
+        break
+      }
+    }
+
+    const duration = Date.now() - startTime
+    logger.info('purge_completed', {
+      totalDeleted,
+      batches: batch,
+      durationMs: duration,
+      dryRun: config.purge.dryRun,
+      cutoffDate: cutoffDate.toISOString(),
+    })
+
+    return {
+      status: 'success',
+      totalDeleted,
+      batches: batch,
+      duration,
+      dryRun: config.purge.dryRun,
+      cutoffDate: cutoffDate.toISOString(),
+    }
+  } catch (error) {
+    logger.error('Critical error in purge service', {
+      error: error.message,
+      stack: error.stack,
+    })
+
+    return {
+      status: 'failed',
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    }
+  }
+}
+
+/**
  * Get archive statistics
  * Returns count of archived vs. active orders per restaurant
  */
@@ -341,4 +476,4 @@ const getArchiveStats = async (restaurantId) => {
   }
 }
 
-export { archiveOldOrders, getArchiveStats, uploadOrdersToBlobStorage }
+export { archiveOldOrders, purgeArchivedOrders, getArchiveStats, uploadOrdersToBlobStorage }

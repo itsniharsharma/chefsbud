@@ -208,6 +208,12 @@ router.get('/config', authorize(['owner']), (req, res) => {
         batchSize: dataLifecycleConfig.archive.batchSize,
         maxRetries: dataLifecycleConfig.archive.maxRetries,
       },
+      purge: {
+        enabled: dataLifecycleConfig.purge.enabled,
+        deleteAfterArchiveDays: dataLifecycleConfig.purge.deleteAfterArchiveDays,
+        batchSize: dataLifecycleConfig.purge.batchSize,
+        dryRun: dataLifecycleConfig.purge.dryRun,
+      },
       rollup: {
         enabled: dataLifecycleConfig.rollup.enabled,
         afterDays: dataLifecycleConfig.rollup.afterDays,
@@ -216,6 +222,7 @@ router.get('/config', authorize(['owner']), (req, res) => {
       cleanup: {
         hourlyMetricsRetention: dataLifecycleConfig.cleanup.hourlyMetricsRetention,
         keepRolledUpDaily: dataLifecycleConfig.cleanup.keepRolledUpDaily,
+        keepRolledUpDailyFor: dataLifecycleConfig.cleanup.keepRolledUpDailyFor,
       },
       schedules: dataLifecycleConfig.schedules,
     }
