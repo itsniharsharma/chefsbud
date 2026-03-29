@@ -2,6 +2,7 @@ import mongoose from 'mongoose'
 import Order from '../models/Order.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
+import InventoryViolation from '../models/InventoryViolation.js'
 import bcrypt from 'bcrypt'
 import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import { buildValidatedBillAdjustments } from '../services/orderBillComposerService.js'
@@ -356,18 +357,59 @@ export async function updateOrderStatus(req, res, next) {
               inventoryBehavior.blockOrderCompletionOnInventoryFailure ||
               isInventoryConstraintError(inventoryError)
             ) {
-              const error = new Error(
-                inventoryError?.message || 'Inventory policy blocked order completion',
-              )
-              error.status = 409
-              throw error
-            }
+              // Log violation but don't block - instead mark as inconsistent
+              const inconsistency = {
+                cycle,
+                error: inventoryError?.message || 'inventory_constraint_violation',
+                policy: inventoryBehavior.consumptionPolicy,
+              }
+              order.inventoryInconsistencies = order.inventoryInconsistencies || []
+              order.inventoryInconsistencies.push(inconsistency)
+              await order.save({ session })
 
-            logger.warn('order_inventory_consumption_failed', {
-              orderId: String(order?._id || req.params.orderId || ''),
-              restaurantId: String(restaurant?._id || ''),
-              message: inventoryError?.message || 'inventory_consumption_failed',
-            })
+              // Log violation to InventoryViolation collection for tracking
+              try {
+                await InventoryViolation.create(
+                  [
+                    {
+                      restaurantId: restaurant._id,
+                      type: 'POLICY_BREACH',
+                      severity: isInventoryConstraintError(inventoryError) ? 'critical' : 'warning',
+                      orderId: order._id,
+                      message: inventoryError?.message || 'Order completed despite inventory policy violation',
+                      metadata: {
+                        cycle,
+                        policy: inventoryBehavior.consumptionPolicy,
+                        blockingEnabled: inventoryBehavior.blockOrderCompletionOnInventoryFailure,
+                      },
+                    },
+                  ],
+                  { session }
+                )
+              } catch (violationError) {
+                // Don't block on violation logging failure
+                logger.warn('failed_to_log_inventory_violation', {
+                  orderId: String(order?._id),
+                  error: violationError?.message,
+                })
+              }
+
+              logger.error('order_inventory_policy_violation_non_blocking', {
+                orderId: String(order?._id || req.params.orderId || ''),
+                restaurantId: String(restaurant?._id || ''),
+                message: inventoryError?.message || 'inventory_policy_violation',
+                policy: inventoryBehavior.consumptionPolicy,
+                inconsistencyMarked: true,
+              })
+
+              // Don't throw - allow order completion
+            } else {
+              logger.warn('order_inventory_consumption_failed', {
+                orderId: String(order?._id || req.params.orderId || ''),
+                restaurantId: String(restaurant?._id || ''),
+                message: inventoryError?.message || 'inventory_consumption_failed',
+              })
+            }
           }
         }
 

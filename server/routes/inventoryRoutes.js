@@ -20,11 +20,23 @@ import {
   updateInventoryItemDefaultUnit,
   updateInventoryPurchaseItem,
 } from '../controllers/inventoryController.js'
+import {
+  findOrdersWithInconsistencies,
+  generateReconciliationReport,
+  clearOrderInconsistencies,
+  getViolationAnalytics,
+} from '../services/inventoryReconciliationService.js'
+import {
+  getAllCircuitBreakerStatus,
+  resetCircuitBreaker,
+  resetAllCircuitBreakers,
+} from '../services/circuitBreaker.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
 import { requireActiveBilling } from '../middleware/billing.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
+import { logger } from '../utils/logger.js'
 
 const router = Router()
 
@@ -253,6 +265,166 @@ router.delete(
   [param('purchaseId').isMongoId(), param('itemIndex').isInt({ min: 0, max: 999 })],
   validateRequest,
   deleteInventoryPurchaseItem,
+)
+
+// Monitoring endpoints
+router.get(
+  '/monitoring/circuit-breakers',
+  requireAuth,
+  requireOwner,
+  (req, res) => {
+    res.json({
+      timestamp: new Date(),
+      breakers: getAllCircuitBreakerStatus(),
+    })
+  },
+)
+
+router.post(
+  '/monitoring/circuit-breakers/:name/reset',
+  [param('name').isString().trim()],
+  validateRequest,
+  requireAuth,
+  requireOwner,
+  (req, res) => {
+    try {
+      resetCircuitBreaker(req.params.name)
+      res.json({ success: true, message: `Circuit breaker ${req.params.name} reset` })
+    } catch (error) {
+      res.status(400).json({ error: error.message })
+    }
+  },
+)
+
+router.post(
+  '/monitoring/circuit-breakers/reset-all',
+  requireAuth,
+  requireOwner,
+  (req, res) => {
+    try {
+      resetAllCircuitBreakers()
+      res.json({ success: true, message: 'All circuit breakers reset' })
+    } catch (error) {
+      res.status(400).json({ error: error.message })
+    }
+  },
+)
+
+// Reconciliation endpoints for inventory inconsistency detection
+router.get(
+  '/reconciliation/report',
+  [query('limit').optional().isInt({ min: 1, max: 500 })],
+  validateRequest,
+  requireAuth,
+  requireOwner, // Owner/admin only
+  async (req, res) => {
+    try {
+      const restaurantId = req.restaurant?._id || req.user?._id
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant not found' })
+      }
+
+      const limit = Math.min(Number(req.query?.limit) || 50, 500)
+      const report = await generateReconciliationReport(restaurantId, { limit })
+
+      res.json(report)
+    } catch (error) {
+      logger.error('reconciliation_report_request_failed', {
+        userId: String(req.user?._id || ''),
+        restaurantId: String(req.restaurant?._id || ''),
+        error: error.message,
+      })
+      res.status(500).json({ error: 'Failed to generate reconciliation report. Contact support.' })
+    }
+  },
+)
+
+router.get(
+  '/reconciliation/violations-analytics',
+  [query('daysBack').optional().isInt({ min: 1, max: 365 })],
+  validateRequest,
+  requireAuth,
+  requireOwner, // Owner/admin only
+  async (req, res) => {
+    try {
+      const restaurantId = req.restaurant?._id || req.user?._id
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant not found' })
+      }
+
+      const daysBack = Math.min(Number(req.query?.daysBack) || 30, 365)
+      const analytics = await getViolationAnalytics(restaurantId, { daysBack })
+
+      res.json(analytics)
+    } catch (error) {
+      logger.error('violation_analytics_request_failed', {
+        userId: String(req.user?._id || ''),
+        restaurantId: String(req.restaurant?._id || ''),
+        error: error.message,
+      })
+      res.status(500).json({ error: 'Failed to retrieve violation analytics. Contact support.' })
+    }
+  },
+)
+
+router.get(
+  '/reconciliation/orders',
+  [query('limit').optional().isInt({ min: 1, max: 500 })],
+  validateRequest,
+  requireAuth,
+  requireOwner, // Owner/admin only
+  async (req, res) => {
+    try {
+      const restaurantId = req.restaurant?._id || req.user?._id
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant not found' })
+      }
+
+      const limit = Math.min(Number(req.query?.limit) || 100, 500)
+      const orders = await findOrdersWithInconsistencies(restaurantId, { limit })
+
+      res.json({ count: orders.length, orders })
+    } catch (error) {
+      logger.error('inconsistent_orders_request_failed', {
+        userId: String(req.user?._id || ''),
+        restaurantId: String(req.restaurant?._id || ''),
+        error: error.message,
+      })
+      res.status(500).json({ error: 'Failed to retrieve inconsistent orders. Contact support.' })
+    }
+  },
+)
+
+router.post(
+  '/reconciliation/orders/:orderId/clear',
+  [param('orderId').isMongoId()],
+  validateRequest,
+  requireAuth,
+  requireOwner, // Owner/admin only
+  async (req, res) => {
+    try {
+      const restaurantId = req.restaurant?._id || req.user?._id
+      if (!restaurantId) {
+        return res.status(400).json({ error: 'Restaurant not found' })
+      }
+
+      const order = await clearOrderInconsistencies(req.params.orderId, restaurantId, req.user?._id)
+      res.json({ success: true, order })
+    } catch (error) {
+      logger.error('clear_inconsistencies_request_failed', {
+        userId: String(req.user?._id || ''),
+        restaurantId: String(req.restaurant?._id || ''),
+        orderId: req.params.orderId,
+        error: error.message,
+      })
+      
+      if (error.message.includes('not found')) {
+        return res.status(404).json({ error: 'Order not found' })
+      }
+      
+      res.status(500).json({ error: 'Failed to clear inconsistencies. Contact support.' })
+    }
+  },
 )
 
 export default router

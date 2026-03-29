@@ -31,6 +31,7 @@ const titles = {
   '/inventory/recipes': 'Recipe Builder',
   '/inventory/request': 'Request For Purchase',
   '/inventory/analytics': 'Inventory Analytics',
+  '/inventory/monitoring': 'Inventory Monitoring',
 }
 
 export default function DashboardLayout() {

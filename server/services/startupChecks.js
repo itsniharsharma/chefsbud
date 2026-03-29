@@ -1,6 +1,7 @@
 import InventoryLedger from '../models/InventoryLedger.js'
 import { getInventoryRuntimeConfig } from '../config/inventoryRuntime.js'
 import { logger } from '../utils/logger.js'
+import { validateInventoryConsistency } from './inventoryValidation.js'
 
 const EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX = {
   restaurantId: 1,
@@ -70,6 +71,18 @@ export async function runStartupChecks() {
   try {
     verifyInventoryRuntimeConfig()
     await verifyInventoryLedgerIndexes()
+    
+    // Run inventory consistency validation (non-blocking)
+    try {
+      const validationResults = await validateInventoryConsistency()
+      if (validationResults.error) {
+        logger.error('startup_inventory_validation_errors', { results: validationResults })
+      }
+    } catch (error) {
+      logger.warn('startup_inventory_validation_failed', {
+        message: error?.message || 'inventory validation check failed',
+      })
+    }
   } catch (error) {
     logger.warn('startup_checks_failed', {
       message: error?.message || 'unknown startup check failure',

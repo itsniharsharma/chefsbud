@@ -77,6 +77,20 @@ const orderSchema = new mongoose.Schema(
     customerRatedAt: { type: Date, default: null },
     inventoryConsumptionCycle: { type: Number, default: 0, min: 0 },
     inventoryProcessedAt: { type: Date, default: null, index: true },
+    inventoryInconsistencies: {
+      type: [
+        new mongoose.Schema(
+          {
+            cycle: { type: Number, required: true },
+            timestamp: { type: Date, default: () => new Date() },
+            error: { type: String, default: '' },
+            policy: { type: String, default: '' },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
     completedAt: { type: Date, default: null },
     analyticsTrackedAt: { type: Date, default: null, index: true },
     analyticsTrackingState: { type: String, enum: ['', 'processing', 'tracked'], default: '', index: true },
