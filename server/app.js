@@ -12,6 +12,7 @@ import paymentRoutes from './routes/paymentRoutes.js'
 import inventoryRoutes from './routes/inventoryRoutes.js'
 import inventoryV2Routes from './routes/inventoryV2Routes.js'
 import demoRoutes from './routes/demoRoutes.js'
+import dataLifecycleRoutes from './routes/dataLifecycleRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { requestContext } from './middleware/requestContext.js'
 import { requestLatencyMetrics } from './middleware/performanceMetrics.js'
@@ -112,6 +113,7 @@ app.use('/api/payments', paymentRoutes)
 app.use('/api/inventory', inventoryRoutes)
 app.use('/api/inventory/v2', inventoryV2Routes)
 app.use('/api/demo', demoRoutes)
+app.use('/api/data-lifecycle', dataLifecycleRoutes)
 
 app.use(notFoundHandler)
 app.use(errorHandler)

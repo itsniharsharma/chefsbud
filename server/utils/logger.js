@@ -17,11 +17,17 @@ function write(level, message, meta = {}) {
     return
   }
 
+  const normalizedMeta = { ...(meta || {}) }
+  if (Object.prototype.hasOwnProperty.call(normalizedMeta, 'message')) {
+    normalizedMeta.metaMessage = normalizedMeta.message
+    delete normalizedMeta.message
+  }
+
   const payload = {
     level,
     time: new Date().toISOString(),
     message,
-    ...meta,
+    ...normalizedMeta,
   }
 
   const line = JSON.stringify(payload)

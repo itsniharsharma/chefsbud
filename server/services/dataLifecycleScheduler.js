@@ -16,39 +16,136 @@
 import cron from 'node-cron'
 import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
-import { archiveOldOrders } from './archiveService.js'
+import { archiveOldOrders, purgeArchivedOrders } from './archiveService.js'
 import { rollupAllAnalytics } from './analyticsRollupService.js'
-import redis from '../config/redis.js'
+import { getRedisClient } from '../config/redis.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
+import Order from '../models/Order.js'
+import InventoryReservation from '../models/InventoryReservation.js'
 import AnalyticsDailyMetrics from '../models/AnalyticsDailyMetrics.js'
+import AnalyticsMonthlyMetrics from '../models/AnalyticsMonthlyMetrics.js'
 import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
+import AnalyticsBasketPairMonthly from '../models/AnalyticsBasketPairMonthly.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
+import AnalyticsItemMonthlyMetrics from '../models/AnalyticsItemMonthlyMetrics.js'
 
-const LEADER_LOCK_KEY = 'data-lifecycle:leader'
-const LEADER_TTL = 60 // seconds
+const JOB_LOCK_PREFIX = 'data-lifecycle:job-lock'
+const JOB_LOCK_TTL = Math.max(120, Number(process.env.LIFECYCLE_JOB_LOCK_TTL_SECONDS || 900))
+const LOCK_OWNER_ID = `${process.pid}:${Date.now()}`
 
 // Job tracking
 let activeJobs = {}
 let jobHistory = []
+const runningJobs = new Set()
 
 /**
- * Acquire leadership for background jobs (single instance across cluster)
- * Uses Redis for distributed locking
+ * Acquire per-job lock across cluster.
+ * Prevents duplicate/overlapping execution across instances.
  */
-const acquireLeadership = async () => {
+const acquireJobLock = async (jobName) => {
+  const lockKey = `${JOB_LOCK_PREFIX}:${jobName}`
+  const client = getRedisClient()
+  if (!client) {
+    return true
+  }
+
   try {
-    const lockAcquired = await redis.set(
-      LEADER_LOCK_KEY,
-      process.pid.toString(),
-      'EX',
-      LEADER_TTL,
-      'NX',
-    )
-    
+    const lockAcquired = await client.set(lockKey, LOCK_OWNER_ID, {
+      ex: JOB_LOCK_TTL,
+      nx: true,
+    })
     return lockAcquired === 'OK'
   } catch (error) {
-    logger.warn('Failed to check leadership', { error: error.message })
+    logger.warn('Failed to acquire lifecycle job lock', {
+      jobName,
+      lockKey,
+      error: error.message,
+    })
     return false
+  }
+}
+
+const releaseJobLock = async (jobName) => {
+  const lockKey = `${JOB_LOCK_PREFIX}:${jobName}`
+  const client = getRedisClient()
+  if (!client) return
+
+  try {
+    const currentOwner = await client.get(lockKey)
+    if (currentOwner === LOCK_OWNER_ID) {
+      await client.del(lockKey)
+    }
+  } catch (error) {
+    logger.warn('Failed to release lifecycle job lock', {
+      jobName,
+      lockKey,
+      error: error.message,
+    })
+  }
+}
+
+const beginJob = async (jobName, jobId) => {
+  if (runningJobs.has(jobName)) {
+    logger.warn('Lifecycle job overlap prevented (local)', { jobName })
+    return false
+  }
+
+  const lockAcquired = await acquireJobLock(jobName)
+  if (!lockAcquired) {
+    logger.debug('Lifecycle job lock held by another instance', { jobName })
+    return false
+  }
+
+  runningJobs.add(jobName)
+  activeJobs[jobId] = { startTime: Date.now(), name: jobName }
+  return true
+}
+
+const endJob = async (jobName, jobId) => {
+  runningJobs.delete(jobName)
+  delete activeJobs[jobId]
+  await releaseJobLock(jobName)
+}
+
+const logLifecycleHealth = async (sourceJob) => {
+  try {
+    const now = new Date()
+    const staleArchiveCutoff = new Date(now)
+    staleArchiveCutoff.setDate(staleArchiveCutoff.getDate() - Math.max(0, Number(config.purge.deleteAfterArchiveDays || 0)))
+
+    const [staleArchivedOrders, activeReservationBacklog, monthlyPopulation] = await Promise.all([
+      Order.countDocuments({
+        isArchived: true,
+        archivedAt: { $exists: true, $lte: staleArchiveCutoff },
+        archiveKey: { $exists: true, $ne: '' },
+        orderStatus: 'Completed',
+      }),
+      InventoryReservation.countDocuments({
+        status: 'active',
+        expiresAt: { $exists: true, $lt: now },
+      }),
+      Promise.all([
+        AnalyticsMonthlyMetrics.countDocuments({}),
+        AnalyticsItemMonthlyMetrics.countDocuments({}),
+        AnalyticsBasketPairMonthly.countDocuments({}),
+      ]),
+    ])
+
+    logger.info('lifecycle_health_snapshot', {
+      sourceJob,
+      staleArchivedOrders,
+      reservationTtlBacklog: activeReservationBacklog,
+      monthlyAnalyticsPopulation: {
+        daily: monthlyPopulation[0],
+        item: monthlyPopulation[1],
+        pair: monthlyPopulation[2],
+      },
+    })
+  } catch (error) {
+    logger.warn('lifecycle_health_snapshot_failed', {
+      sourceJob,
+      error: error.message,
+    })
   }
 }
 
@@ -58,16 +155,15 @@ const acquireLeadership = async () => {
  */
 const archiveJob = async () => {
   const jobId = `archive_${Date.now()}`
+  let started = false
   
   try {
-    const isLeader = await acquireLeadership()
-    if (!isLeader) {
-      logger.debug('Not cluster leader, skipping archive job')
+    const canRun = await beginJob('archive', jobId)
+    if (!canRun) {
       return
     }
-    
-    activeJobs[jobId] = { startTime: Date.now(), name: 'archive' }
-    
+    started = true
+
     logger.info('Archive job started')
     const result = await archiveOldOrders()
     
@@ -81,6 +177,7 @@ const archiveJob = async () => {
     })
     
     jobHistory.push({ ...activeJobs[jobId], timestamp: new Date() })
+    await logLifecycleHealth('archive')
   } catch (error) {
     logger.error('Archive job failed', {
       error: error.message,
@@ -91,7 +188,55 @@ const archiveJob = async () => {
     activeJobs[jobId].error = error.message
     activeJobs[jobId].failed = true
   } finally {
-    delete activeJobs[jobId]
+    if (started) {
+      await endJob('archive', jobId)
+    }
+  }
+}
+
+/**
+ * Purge job
+ * Deletes safely-archived orders after retention window.
+ */
+const purgeJob = async () => {
+  const jobId = `purge_${Date.now()}`
+  let started = false
+
+  try {
+    const canRun = await beginJob('purge', jobId)
+    if (!canRun) {
+      return
+    }
+    started = true
+
+    logger.info('Purge job started')
+    const result = await purgeArchivedOrders()
+
+    activeJobs[jobId].endTime = Date.now()
+    activeJobs[jobId].result = result
+
+    logger.info('Purge job completed', {
+      status: result.status,
+      totalDeleted: result.totalDeleted,
+      duration: result.duration,
+      dryRun: result.dryRun,
+    })
+
+    jobHistory.push({ ...activeJobs[jobId], timestamp: new Date() })
+    await logLifecycleHealth('purge')
+  } catch (error) {
+    logger.error('Purge job failed', {
+      error: error.message,
+      jobId,
+    })
+
+    activeJobs[jobId] = activeJobs[jobId] || {}
+    activeJobs[jobId].error = error.message
+    activeJobs[jobId].failed = true
+  } finally {
+    if (started) {
+      await endJob('purge', jobId)
+    }
   }
 }
 
@@ -101,16 +246,15 @@ const archiveJob = async () => {
  */
 const rollupJob = async () => {
   const jobId = `rollup_${Date.now()}`
+  let started = false
   
   try {
-    const isLeader = await acquireLeadership()
-    if (!isLeader) {
-      logger.debug('Not cluster leader, skipping rollup job')
+    const canRun = await beginJob('rollup', jobId)
+    if (!canRun) {
       return
     }
-    
-    activeJobs[jobId] = { startTime: Date.now(), name: 'rollup' }
-    
+    started = true
+
     logger.info('Rollup job started')
     const result = await rollupAllAnalytics()
     
@@ -124,6 +268,7 @@ const rollupJob = async () => {
     })
     
     jobHistory.push({ ...activeJobs[jobId], timestamp: new Date() })
+    await logLifecycleHealth('rollup')
   } catch (error) {
     logger.error('Rollup job failed', {
       error: error.message,
@@ -134,7 +279,9 @@ const rollupJob = async () => {
     activeJobs[jobId].error = error.message
     activeJobs[jobId].failed = true
   } finally {
-    delete activeJobs[jobId]
+    if (started) {
+      await endJob('rollup', jobId)
+    }
   }
 }
 
@@ -144,16 +291,15 @@ const rollupJob = async () => {
  */
 const cleanupJob = async () => {
   const jobId = `cleanup_${Date.now()}`
+  let started = false
   
   try {
-    const isLeader = await acquireLeadership()
-    if (!isLeader) {
-      logger.debug('Not cluster leader, skipping cleanup job')
+    const canRun = await beginJob('cleanup', jobId)
+    if (!canRun) {
       return
     }
-    
-    activeJobs[jobId] = { startTime: Date.now(), name: 'cleanup' }
-    
+    started = true
+
     logger.info('Cleanup job started')
     
     const results = {
@@ -273,6 +419,7 @@ const cleanupJob = async () => {
     logger.info('Cleanup job completed', results)
     
     jobHistory.push({ ...activeJobs[jobId], timestamp: new Date() })
+    await logLifecycleHealth('cleanup')
   } catch (error) {
     logger.error('Cleanup job failed', {
       error: error.message,
@@ -283,7 +430,9 @@ const cleanupJob = async () => {
     activeJobs[jobId].error = error.message
     activeJobs[jobId].failed = true
   } finally {
-    delete activeJobs[jobId]
+    if (started) {
+      await endJob('cleanup', jobId)
+    }
   }
 }
 
@@ -315,6 +464,15 @@ const initializeScheduler = () => {
       scheduledJobs.push(archiveSchedule)
       logger.info('Archive job scheduled', { cron: config.schedules.archive })
     }
+
+    if (config.purge.enabled) {
+      const purgeSchedule = cron.schedule(config.schedules.purge, purgeJob, {
+        runOnInit: false,
+        timezone: 'UTC',
+      })
+      scheduledJobs.push(purgeSchedule)
+      logger.info('Purge job scheduled', { cron: config.schedules.purge })
+    }
     
     // Rollup job
     if (config.rollup.enabled) {
@@ -337,6 +495,8 @@ const initializeScheduler = () => {
     logger.info('Data lifecycle scheduler initialized successfully', {
       jobsScheduled: scheduledJobs.length,
     })
+
+    void logLifecycleHealth('scheduler_init')
   } catch (error) {
     logger.error('Failed to initialize scheduler', {
       error: error.message,
@@ -392,7 +552,7 @@ const getSchedulerStatus = () => {
  * Manually trigger a job (for testing/debugging)
  */
 const triggerJob = async (jobName) => {
-  const validJobs = ['archive', 'rollup', 'cleanup']
+  const validJobs = ['archive', 'purge', 'rollup', 'cleanup']
   if (!validJobs.includes(jobName)) {
     throw new Error(`Invalid job name. Valid options: ${validJobs.join(', ')}`)
   }
@@ -402,6 +562,8 @@ const triggerJob = async (jobName) => {
   switch (jobName) {
     case 'archive':
       return await archiveJob()
+    case 'purge':
+      return await purgeJob()
     case 'rollup':
       return await rollupJob()
     case 'cleanup':
@@ -417,6 +579,7 @@ export {
   getSchedulerStatus,
   triggerJob,
   archiveJob,
+  purgeJob,
   rollupJob,
   cleanupJob,
 }

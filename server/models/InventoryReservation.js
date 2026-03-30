@@ -1,5 +1,11 @@
 import mongoose from 'mongoose'
 
+const DEFAULT_RESERVATION_TTL_MINUTES = Math.max(5, Number(process.env.INVENTORY_RESERVATION_TTL_MINUTES || 240))
+
+function buildDefaultReservationExpiry() {
+  return new Date(Date.now() + DEFAULT_RESERVATION_TTL_MINUTES * 60 * 1000)
+}
+
 const inventoryReservationSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
@@ -19,7 +25,7 @@ const inventoryReservationSchema = new mongoose.Schema(
     recipeVersion: { type: Number, default: 1, min: 1 },
     recipeVersionId: { type: mongoose.Schema.Types.ObjectId, ref: 'RecipeVersion', default: null },
     idempotencyKey: { type: String, default: '', trim: true, maxlength: 220 },
-    expiresAt: { type: Date, default: null },
+    expiresAt: { type: Date, default: () => buildDefaultReservationExpiry() },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },
@@ -32,10 +38,10 @@ inventoryReservationSchema.index(
   { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true, $ne: '' } } },
 )
 
-// TTL index: automatically delete reservations 24 hours after expiresAt
+// TTL index: automatically delete reservations when expiresAt is reached.
 inventoryReservationSchema.index(
   { expiresAt: 1 },
-  { expireAfterSeconds: 0, partialFilterExpression: { expiresAt: { $exists: true, $ne: null } } },
+  { expireAfterSeconds: 0 },
 )
 
 export default mongoose.model('InventoryReservation', inventoryReservationSchema)

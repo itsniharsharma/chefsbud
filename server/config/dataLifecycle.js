@@ -4,10 +4,28 @@
  * Environment variables override defaults for production flexibility
  */
 
+function parseBooleanFlag(value, defaultValue = false) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return defaultValue
+  }
+
+  const normalized = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false
+  return defaultValue
+}
+
+const archiveEnabledFlag =
+  process.env.ARCHIVE_ENABLED !== undefined
+    ? process.env.ARCHIVE_ENABLED
+    : process.env.ORDER_ARCHIVE_ENABLED
+const rollupEnabledFlag = process.env.ROLLUP_ENABLED
+const purgeEnabledFlag = process.env.PURGE_ENABLED
+
 const config = {
   // Archive settings: Move orders to Azure after N days
   archive: {
-    enabled: process.env.ARCHIVE_ENABLED === 'true',
+    enabled: parseBooleanFlag(archiveEnabledFlag, false),
     afterDays: parseInt(process.env.ARCHIVE_AFTER_DAYS || '45', 10),
     batchSize: parseInt(process.env.ARCHIVE_BATCH_SIZE || '1000', 10),
     maxRetries: 3,
@@ -19,7 +37,7 @@ const config = {
 
   // Purge settings: Remove already-archived orders from Mongo after safety window
   purge: {
-    enabled: process.env.PURGE_ENABLED !== 'false',
+    enabled: parseBooleanFlag(purgeEnabledFlag, true),
     deleteAfterArchiveDays: parseInt(process.env.DELETE_AFTER_ARCHIVE_DAYS || '1', 10),
     batchSize: parseInt(process.env.PURGE_BATCH_SIZE || '500', 10),
     dryRun: process.env.DRY_RUN_PURGE === 'true',
@@ -28,7 +46,7 @@ const config = {
 
   // Rollup settings: Aggregate daily → monthly after N days
   rollup: {
-    enabled: process.env.ROLLUP_ENABLED === 'true',
+    enabled: parseBooleanFlag(rollupEnabledFlag, false),
     afterDays: parseInt(process.env.ROLLUP_AFTER_DAYS || '90', 10),
     // Keep only top N basket pairs per restaurant per month (rest are deleted)
     topBasketPairsPerMonth: 100,

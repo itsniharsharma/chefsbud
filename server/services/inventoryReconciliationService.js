@@ -31,6 +31,7 @@ export async function findOrdersWithInconsistencies(restaurantId, options = {}) 
   try {
     const query = {
       restaurantId,
+      isArchived: false,
       inventoryInconsistencies: { $exists: true, $ne: [] },
     }
 
@@ -187,7 +188,7 @@ export async function generateReconciliationReport(restaurantId, options = {}) {
 export async function clearOrderInconsistencies(orderId, restaurantId, userId = null) {
   try {
     const result = await Order.findOneAndUpdate(
-      { _id: orderId, restaurantId },
+      { _id: orderId, restaurantId, isArchived: false },
       { $set: { inventoryInconsistencies: [] } },
       { new: false },
     )

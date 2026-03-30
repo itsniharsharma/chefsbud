@@ -25,6 +25,7 @@ async function aggregateDayMetrics(restaurantId, dateLike) {
     {
       $match: {
         restaurantId,
+        isArchived: false,
         orderStatus: 'Completed',
         completedAt: { $gte: start, $lt: end },
       },

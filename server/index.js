@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import app from './app.js'
 import { closeDB, connectDB } from './config/db.js'
-import { startOrderArchiveScheduler, stopOrderArchiveScheduler } from './services/orderArchiveService.js'
+import { initializeScheduler, shutdownScheduler } from './services/dataLifecycleScheduler.js'
 import { startInventoryReconciliationScheduler, stopInventoryReconciliationScheduler } from './services/inventoryReconciliationService.js'
 import { cleanupAllLeaderships } from './services/schedulerLeaderElection.js'
 import { runStartupChecks } from './services/startupChecks.js'
@@ -31,7 +31,7 @@ async function shutdown(signal, exitCode = 0) {
   forceExitTimer.unref?.()
 
   try {
-    stopOrderArchiveScheduler()
+    await shutdownScheduler()
     await stopInventoryReconciliationScheduler()
     await cleanupAllLeaderships()
     performanceMetrics.stop()
@@ -81,7 +81,7 @@ async function start() {
   await runStartupChecks()
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
-    startOrderArchiveScheduler()
+    initializeScheduler()
     startInventoryReconciliationScheduler()
     logger.info('Jobs process started', { processRole: PROCESS_ROLE })
     return
@@ -98,7 +98,7 @@ async function start() {
   initSocketServer(httpServer)
 
   if (PROCESS_ROLE === 'all') {
-    startOrderArchiveScheduler()
+    initializeScheduler()
     startInventoryReconciliationScheduler()
   }
 

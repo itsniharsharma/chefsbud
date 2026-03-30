@@ -6,7 +6,7 @@
  */
 
 import express from 'express'
-import authorize from '../middleware/authorize.js'
+import { requireOwner } from '../middleware/authorize.js'
 import {
   getSchedulerStatus,
   triggerJob,
@@ -40,7 +40,7 @@ const router = express.Router()
  *   }
  * }
  */
-router.get('/status', authorize(['owner']), (req, res) => {
+router.get('/status', requireOwner, (req, res) => {
   try {
     const status = getSchedulerStatus()
     return res.json({
@@ -62,7 +62,7 @@ router.get('/status', authorize(['owner']), (req, res) => {
  * Manually trigger a specific job
  *
  * Params:
- *   jobName: 'archive' | 'rollup' | 'cleanup'
+ *   jobName: 'archive' | 'purge' | 'rollup' | 'cleanup'
  *
  * Response:
  * {
@@ -72,10 +72,10 @@ router.get('/status', authorize(['owner']), (req, res) => {
  *   message: string
  * }
  */
-router.post('/jobs/:jobName/trigger', authorize(['owner']), async (req, res) => {
+router.post('/jobs/:jobName/trigger', requireOwner, async (req, res) => {
   try {
     const { jobName } = req.params
-    const validJobs = ['archive', 'rollup', 'cleanup']
+    const validJobs = ['archive', 'purge', 'rollup', 'cleanup']
     
     if (!validJobs.includes(jobName)) {
       return res.status(400).json({
@@ -121,7 +121,7 @@ router.post('/jobs/:jobName/trigger', authorize(['owner']), async (req, res) => 
  *   archivePercentage: string (e.g., "25.50")
  * }
  */
-router.get('/archive/stats/:restaurantId', authorize(['owner']), async (req, res) => {
+router.get('/archive/stats/:restaurantId', requireOwner, async (req, res) => {
   try {
     const { restaurantId } = req.params
     
@@ -162,7 +162,7 @@ router.get('/archive/stats/:restaurantId', authorize(['owner']), async (req, res
  *   pairMonthly: number
  * }
  */
-router.get('/rollup/stats/:restaurantId', authorize(['owner']), async (req, res) => {
+router.get('/rollup/stats/:restaurantId', requireOwner, async (req, res) => {
   try {
     const { restaurantId } = req.params
     
@@ -198,7 +198,7 @@ router.get('/rollup/stats/:restaurantId', authorize(['owner']), async (req, res)
  *   schedules: { archive, rollup, cleanup, cleanupExpired }
  * }
  */
-router.get('/config', authorize(['owner']), (req, res) => {
+router.get('/config', requireOwner, (req, res) => {
   try {
     // Don't expose sensitive info like connection strings
     const safeConfig = {
@@ -252,7 +252,7 @@ router.get('/config', authorize(['owner']), (req, res) => {
  *   azure: { working: boolean, details: string }
  * }
  */
-router.post('/test', authorize(['owner']), async (req, res) => {
+router.post('/test', requireOwner, async (req, res) => {
   try {
     const results = {
       timestamp: new Date().toISOString(),

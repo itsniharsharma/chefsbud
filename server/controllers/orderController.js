@@ -273,6 +273,7 @@ export async function updateOrderStatus(req, res, next) {
     const existingOrder = await Order.findOne({
       _id: req.params.orderId,
       restaurantId: restaurant._id,
+      isArchived: false,
     })
       .select('_id restaurantId items subtotalAmount totalAmount orderStatus inventoryConsumptionCycle inventoryProcessedAt completedAt createdAt updatedAt analyticsTrackedAt')
       .lean()
@@ -290,6 +291,7 @@ export async function updateOrderStatus(req, res, next) {
       const latestOrder = await Order.findOne({
         _id: req.params.orderId,
         restaurantId: restaurant._id,
+        isArchived: false,
       })
 
       if (!latestOrder) {
@@ -313,7 +315,7 @@ export async function updateOrderStatus(req, res, next) {
     try {
       await session.withTransaction(async () => {
         order = await Order.findOneAndUpdate(
-          { _id: req.params.orderId, restaurantId: restaurant._id },
+          { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
           { $set: update },
           { new: true, runValidators: true, session },
         )
@@ -631,7 +633,7 @@ export async function deleteOrder(req, res, next) {
       return respondRestaurantNotFound(res)
     }
 
-    const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id }).lean()
+    const order = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false }).lean()
 
     if (!order) {
       return res.status(404).json({ message: 'Order not found' })
@@ -642,7 +644,7 @@ export async function deleteOrder(req, res, next) {
     }
 
     await Order.updateOne(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
+      { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       {
         $set: {
           hiddenFromActive: true,
@@ -908,7 +910,7 @@ export async function markOrderKotPrinted(req, res, next) {
       return respondRestaurantNotFound(res)
     }
 
-    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
+    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false })
       .select('_id tableNumber floorNumber kotPrinted kotPrintCount')
       .lean()
 
@@ -959,7 +961,7 @@ export async function markOrderKotPrinted(req, res, next) {
     }
 
     const order = await Order.findOneAndUpdate(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
+      { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
       { new: true, runValidators: true },
     )
@@ -1011,7 +1013,7 @@ export async function markOrderBillPrinted(req, res, next) {
       return respondRestaurantNotFound(res)
     }
 
-    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id })
+    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false })
       .select('_id floorNumber tableNumber totalAmount billPrinted billAdjustments billAdjustmentSubtotal billFinalTotalAmount')
       .lean()
 
@@ -1047,7 +1049,7 @@ export async function markOrderBillPrinted(req, res, next) {
     }
 
     const order = await Order.findOneAndUpdate(
-      { _id: req.params.orderId, restaurantId: restaurant._id },
+      { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
       { new: true, runValidators: true },
     )

@@ -6,6 +6,43 @@ import Restaurant from '../models/Restaurant.js'
 import { logger } from '../utils/logger.js'
 
 let ioServer = null
+const REDIS_ERROR_LOG_WINDOW_MS = Math.max(10_000, Number(process.env.SOCKET_REDIS_ERROR_LOG_WINDOW_MS || 60_000))
+const REDIS_ERROR_LOG_BURST_LIMIT = Math.max(1, Number(process.env.SOCKET_REDIS_ERROR_LOG_BURST_LIMIT || 3))
+const redisErrorBuckets = new Map()
+
+function logSocketRedisError(eventKey, error) {
+  const now = Date.now()
+  const message = String(error?.message || `unknown_${eventKey}_error`)
+  const bucketKey = `${eventKey}:${message}`
+  const existing = redisErrorBuckets.get(bucketKey)
+
+  if (!existing || now - existing.windowStart >= REDIS_ERROR_LOG_WINDOW_MS) {
+    if (existing?.suppressed > 0) {
+      logger.warn('socket_redis_error_suppressed_summary', {
+        event: eventKey,
+        message,
+        suppressedCount: existing.suppressed,
+        windowMs: REDIS_ERROR_LOG_WINDOW_MS,
+      })
+    }
+
+    redisErrorBuckets.set(bucketKey, {
+      windowStart: now,
+      logged: 1,
+      suppressed: 0,
+    })
+    logger.warn(eventKey, { message })
+    return
+  }
+
+  if (existing.logged < REDIS_ERROR_LOG_BURST_LIMIT) {
+    existing.logged += 1
+    logger.warn(eventKey, { message })
+    return
+  }
+
+  existing.suppressed += 1
+}
 
 function parseToken(socket) {
   const authToken = String(socket.handshake?.auth?.token || '').trim()
@@ -48,15 +85,20 @@ async function configureRedisAdapter(io) {
     return
   }
 
-  const pubClient = createClient({ url: redisUrl })
+  const pubClient = createClient({
+    url: redisUrl,
+    socket: {
+      reconnectStrategy: (retries) => Math.min(200 + retries * 200, 5_000),
+    },
+  })
   const subClient = pubClient.duplicate()
 
   // Redis clients emit error events that must be handled to avoid process crash.
   pubClient.on('error', (error) => {
-    logger.warn('socket_redis_pub_error', { message: error?.message || 'unknown_redis_pub_error' })
+    logSocketRedisError('socket_redis_pub_error', error)
   })
   subClient.on('error', (error) => {
-    logger.warn('socket_redis_sub_error', { message: error?.message || 'unknown_redis_sub_error' })
+    logSocketRedisError('socket_redis_sub_error', error)
   })
 
   await Promise.all([pubClient.connect(), subClient.connect()])

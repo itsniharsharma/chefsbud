@@ -2,6 +2,7 @@ import InventoryLedger from '../models/InventoryLedger.js'
 import { getInventoryRuntimeConfig } from '../config/inventoryRuntime.js'
 import { logger } from '../utils/logger.js'
 import { validateInventoryConsistency } from './inventoryValidation.js'
+import { runLifecycleIndexMaintenance } from './lifecycleIndexMaintenance.js'
 
 const EXPECTED_INVENTORY_LEDGER_CYCLE_INDEX = {
   restaurantId: 1,
@@ -71,6 +72,7 @@ export async function runStartupChecks() {
   try {
     verifyInventoryRuntimeConfig()
     await verifyInventoryLedgerIndexes()
+    await runLifecycleIndexMaintenance()
     
     // Run inventory consistency validation (non-blocking)
     try {

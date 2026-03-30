@@ -403,6 +403,7 @@ async function upsertBasketPairDaily({ restaurantId, date, dateKey, pairs = [] }
 function buildAnalyticsClaimSelector(orderId) {
   return {
     _id: orderId,
+    isArchived: false,
     orderStatus: 'Completed',
     analyticsTrackedAt: null,
     $or: [
@@ -438,6 +439,7 @@ async function markCompletedOrderAnalyticsTracked(orderId) {
   await Order.updateOne(
     {
       _id: orderId,
+      isArchived: false,
       analyticsTrackingState: 'processing',
       analyticsTrackedAt: null,
     },
@@ -459,6 +461,7 @@ async function markCompletedOrderAnalyticsClaimFailed(orderId) {
   await Order.updateOne(
     {
       _id: orderId,
+      isArchived: false,
       analyticsTrackingState: 'processing',
       analyticsTrackedAt: null,
     },
@@ -775,6 +778,7 @@ export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize 
 
   const candidates = await Order.find({
     restaurantId,
+    isArchived: false,
     orderStatus: 'Completed',
     analyticsTrackedAt: null,
   })
@@ -2160,6 +2164,7 @@ export async function runAnalyticsIntegrityCheck({ restaurantId, days = 30 }) {
       {
         $match: {
           restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+          isArchived: false,
           orderStatus: 'Completed',
           completedAt: {
             $gte: startDate,
