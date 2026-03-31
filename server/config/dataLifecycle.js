@@ -21,6 +21,8 @@ const archiveEnabledFlag =
     : process.env.ORDER_ARCHIVE_ENABLED
 const rollupEnabledFlag = process.env.ROLLUP_ENABLED
 const purgeEnabledFlag = process.env.PURGE_ENABLED
+const inventoryLifecycleEnabledFlag = process.env.INVENTORY_LEDGER_SUMMARY_ENABLED
+const inventoryMonthlyArchiveEnabledFlag = process.env.INVENTORY_MONTHLY_ARCHIVE_ENABLED
 
 const config = {
   // Archive settings: Move orders to Azure after N days
@@ -73,8 +75,21 @@ const config = {
   // Azure Blob Storage settings
   azure: {
     containerName: process.env.AZURE_STORAGE_CONTAINER || 'orders-archive',
+    inventoryContainerName: process.env.AZURE_INVENTORY_STORAGE_CONTAINER || 'inventory-archive',
     connectionString: process.env.AZURE_STORAGE_CONNECTION_STRING,
     archivePath: 'orders-archive', // Base path in container
+    inventoryArchivePath: process.env.AZURE_INVENTORY_ARCHIVE_PATH || 'inventory-monthly-archive',
+  },
+
+  // Inventory lifecycle settings
+  inventoryLifecycle: {
+    enabled: parseBooleanFlag(inventoryLifecycleEnabledFlag, true),
+    dailyRollupLookbackDays: parseInt(process.env.INVENTORY_DAILY_ROLLUP_LOOKBACK_DAYS || '3', 10),
+    dailySummaryRetentionDays: parseInt(process.env.INVENTORY_DAILY_SUMMARY_RETENTION_DAYS || '90', 10),
+    monthlyRebuildWindowMonths: parseInt(process.env.INVENTORY_MONTHLY_REBUILD_WINDOW_MONTHS || '18', 10),
+    monthlyArchiveEnabled: parseBooleanFlag(inventoryMonthlyArchiveEnabledFlag, false),
+    monthlyArchiveAfterMonths: parseInt(process.env.INVENTORY_MONTHLY_ARCHIVE_AFTER_MONTHS || '12', 10),
+    monthlyArchiveBatchSize: parseInt(process.env.INVENTORY_MONTHLY_ARCHIVE_BATCH_SIZE || '5000', 10),
   },
 
   // Cron schedules (cron format: minute hour day month dayOfWeek)
@@ -90,6 +105,9 @@ const config = {
     
     // Run cleanup jobs daily at 4 AM
     cleanup: process.env.CRON_CLEANUP || '0 4 * * *',
+
+    // Roll up inventory ledger to daily/monthly summaries once daily.
+    inventoryLifecycle: process.env.CRON_INVENTORY_LIFECYCLE || '30 1 * * *',
 
     // Run purge job every 6 hours
     purge: process.env.CRON_PURGE || '0 */6 * * *',

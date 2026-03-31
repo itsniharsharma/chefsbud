@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import app from './app.js'
 import { closeDB, connectDB } from './config/db.js'
+import config from './config/dataLifecycle.js'
 import { initializeScheduler, shutdownScheduler } from './services/dataLifecycleScheduler.js'
 import { cleanupAllLeaderships } from './services/schedulerLeaderElection.js'
 import { runStartupChecks } from './services/startupChecks.js'
@@ -76,6 +77,25 @@ process.on('SIGINT', () => {
 async function start() {
   performanceMetrics.start()
   await connectDB()
+  
+  // Phase 1: Startup validation - ensure TTL >= Rollup Lookback
+  try {
+    const ROLLUP_LOOKBACK_DAYS = Number(config.inventoryLifecycle?.dailyRollupLookbackDays || 3)
+    const LEDGER_TTL_SECONDS = Number(process.env.INVENTORY_LEDGER_TTL_SECONDS || 432000)
+    const LEDGER_TTL_DAYS = Math.ceil(LEDGER_TTL_SECONDS / 86400)
+    
+    if (ROLLUP_LOOKBACK_DAYS < LEDGER_TTL_DAYS) {
+      const msg = `[CRITICAL] Inventory lifecycle constraint violation: ROLLUP_LOOKBACK_DAYS (${ROLLUP_LOOKBACK_DAYS}) must be >= LEDGER_TTL_DAYS (${LEDGER_TTL_DAYS}). This creates a data loss risk! Aborting startup.`
+      console.error(msg)
+      logger.error('startup_validation_failed', { ROLLUP_LOOKBACK_DAYS, LEDGER_TTL_DAYS })
+      process.exit(1)
+    }
+    logger.info('startup_validation_passed', { ROLLUP_LOOKBACK_DAYS, LEDGER_TTL_DAYS, message: 'Inventory lifecycle TTL constraint satisfied' })
+  } catch (error) {
+    logger.error('startup_validation_error', { message: error?.message })
+    process.exit(1)
+  }
+  
   await runStartupChecks()
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {

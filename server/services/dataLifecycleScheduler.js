@@ -18,10 +18,12 @@ import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
 import { archiveOldOrders, purgeArchivedOrders } from './archiveService.js'
 import { rollupAllAnalytics } from './analyticsRollupService.js'
+import { runInventoryLedgerLifecycleCycle } from './inventoryLedgerLifecycleService.js'
 import { getRedisClient } from '../config/redis.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
 import Order from '../models/Order.js'
 import InventoryReservation from '../models/InventoryReservation.js'
+import InventoryMonthlySummary from '../models/InventoryMonthlySummary.js'
 import AnalyticsDailyMetrics from '../models/AnalyticsDailyMetrics.js'
 import AnalyticsMonthlyMetrics from '../models/AnalyticsMonthlyMetrics.js'
 import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
@@ -41,28 +43,53 @@ const runningJobs = new Set()
 /**
  * Acquire per-job lock across cluster.
  * Prevents duplicate/overlapping execution across instances.
+ * Phase 1: Implements Redis fallback policy
+ *  - Single-instance (PROCESS_ROLE='all'|'jobs') → degraded mode
+ *  - Multi-instance without Redis → FAIL
  */
 const acquireJobLock = async (jobName) => {
   const lockKey = `${JOB_LOCK_PREFIX}:${jobName}`
   const client = getRedisClient()
-  if (!client) {
-    return true
+  
+  // Redis is available, use it
+  if (client) {
+    try {
+      const lockAcquired = await client.set(lockKey, LOCK_OWNER_ID, {
+        ex: JOB_LOCK_TTL,
+        nx: true,
+      })
+      return lockAcquired === 'OK'
+    } catch (error) {
+      logger.warn('Failed to acquire lifecycle job lock', {
+        jobName,
+        lockKey,
+        error: error.message,
+      })
+      return false
+    }
   }
 
-  try {
-    const lockAcquired = await client.set(lockKey, LOCK_OWNER_ID, {
-      ex: JOB_LOCK_TTL,
-      nx: true,
-    })
-    return lockAcquired === 'OK'
-  } catch (error) {
-    logger.warn('Failed to acquire lifecycle job lock', {
+  // Phase 1: Redis unavailable, implement degraded mode
+  const processRole = String(process.env.PROCESS_ROLE || 'all').toLowerCase().trim()
+  
+  if (processRole === 'all' || processRole === 'jobs') {
+    // Single-instance deployment → allow degraded execution
+    logger.warn('DEGRADED MODE: Redis lock unavailable on single-process deployment. Proceeding without distributed lock.', {
       jobName,
-      lockKey,
-      error: error.message,
+      processRole,
     })
-    return false
+    // Emit metric for alerting
+    logger.info('lifecycle_lock_degraded_mode', { jobName, processRole })
+    return { acquired: true, mode: 'degraded' }
   }
+
+  // Multi-instance deployment without Redis → FAIL
+  logger.error('CRITICAL: Redis lock unavailable in multi-instance deployment', {
+    jobName,
+    processRole,
+  })
+  logger.info('lifecycle_lock_failed', { jobName, processRole })
+  return false
 }
 
 const releaseJobLock = async (jobName) => {
@@ -90,9 +117,18 @@ const beginJob = async (jobName, jobId) => {
     return false
   }
 
-  const lockAcquired = await acquireJobLock(jobName)
+  const lockResult = await acquireJobLock(jobName)
+  
+  // Phase 1: Handle degraded mode or lock failure
+  if (lockResult === false) {
+    logger.debug('Lifecycle job lock held by another instance or unavailable', { jobName })
+    return false
+  }
+  
+  // lockResult can be true (classic) or { acquired: true, mode: 'degraded' }
+  const lockAcquired = lockResult === true || (typeof lockResult === 'object' && lockResult.acquired === true)
+  
   if (!lockAcquired) {
-    logger.debug('Lifecycle job lock held by another instance', { jobName })
     return false
   }
 
@@ -113,7 +149,7 @@ const logLifecycleHealth = async (sourceJob) => {
     const staleArchiveCutoff = new Date(now)
     staleArchiveCutoff.setDate(staleArchiveCutoff.getDate() - Math.max(0, Number(config.purge.deleteAfterArchiveDays || 0)))
 
-    const [staleArchivedOrders, activeReservationBacklog, monthlyPopulation] = await Promise.all([
+    const [staleArchivedOrders, activeReservationBacklog, monthlyPopulation, inventoryMonthlySummaryCount] = await Promise.all([
       Order.countDocuments({
         isArchived: true,
         archivedAt: { $exists: true, $lte: staleArchiveCutoff },
@@ -129,6 +165,7 @@ const logLifecycleHealth = async (sourceJob) => {
         AnalyticsItemMonthlyMetrics.countDocuments({}),
         AnalyticsBasketPairMonthly.countDocuments({}),
       ]),
+      InventoryMonthlySummary.countDocuments({}),
     ])
 
     logger.info('lifecycle_health_snapshot', {
@@ -140,6 +177,7 @@ const logLifecycleHealth = async (sourceJob) => {
         item: monthlyPopulation[1],
         pair: monthlyPopulation[2],
       },
+      inventoryMonthlySummaryCount,
     })
   } catch (error) {
     logger.warn('lifecycle_health_snapshot_failed', {
@@ -436,6 +474,49 @@ const cleanupJob = async () => {
   }
 }
 
+const inventoryLifecycleJob = async () => {
+  const jobId = `inventory_lifecycle_${Date.now()}`
+  let started = false
+
+  try {
+    const canRun = await beginJob('inventory_lifecycle', jobId)
+    if (!canRun) {
+      return
+    }
+    started = true
+
+    logger.info('Inventory lifecycle job started')
+    const result = await runInventoryLedgerLifecycleCycle()
+
+    activeJobs[jobId].endTime = Date.now()
+    activeJobs[jobId].result = result
+
+    logger.info('Inventory lifecycle job completed', {
+      status: result?.status,
+      durationMs: result?.durationMs,
+      dailyWindows: result?.daily?.dailyWindows || 0,
+      monthlyWindows: result?.monthly?.monthlyWindows || 0,
+      archivedGroups: result?.archive?.archivedGroups || 0,
+    })
+
+    jobHistory.push({ ...activeJobs[jobId], timestamp: new Date() })
+    await logLifecycleHealth('inventory_lifecycle')
+  } catch (error) {
+    logger.error('Inventory lifecycle job failed', {
+      error: error.message,
+      jobId,
+    })
+
+    activeJobs[jobId] = activeJobs[jobId] || {}
+    activeJobs[jobId].error = error.message
+    activeJobs[jobId].failed = true
+  } finally {
+    if (started) {
+      await endJob('inventory_lifecycle', jobId)
+    }
+  }
+}
+
 /**
  * Initialize all scheduled jobs
  */
@@ -452,6 +533,7 @@ const initializeScheduler = () => {
     purgeSchedule: config.schedules.purge,
     rollupSchedule: config.schedules.rollup,
     cleanupSchedule: config.schedules.cleanup,
+    inventoryLifecycleSchedule: config.schedules.inventoryLifecycle,
   })
   
   try {
@@ -491,6 +573,15 @@ const initializeScheduler = () => {
     })
     scheduledJobs.push(cleanupSchedule)
     logger.info('Cleanup job scheduled', { cron: config.schedules.cleanup })
+
+    if (config.inventoryLifecycle.enabled) {
+      const inventoryLifecycleSchedule = cron.schedule(config.schedules.inventoryLifecycle, inventoryLifecycleJob, {
+        runOnInit: false,
+        timezone: 'UTC',
+      })
+      scheduledJobs.push(inventoryLifecycleSchedule)
+      logger.info('Inventory lifecycle job scheduled', { cron: config.schedules.inventoryLifecycle })
+    }
     
     logger.info('Data lifecycle scheduler initialized successfully', {
       jobsScheduled: scheduledJobs.length,

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import InventoryItem from '../models/InventoryItem.js'
 import InventoryLedger from '../models/InventoryLedger.js'
+import InventoryDailySummary from '../models/InventoryDailySummary.js'
 import InventoryPurchase from '../models/InventoryPurchase.js'
 import InventorySupplier from '../models/InventorySupplier.js'
 import MenuItem from '../models/MenuItem.js'
@@ -211,6 +212,305 @@ function buildStockDistribution(rows = [], metricKey = 'estimatedStockValue', ot
   }
 
   return distribution
+}
+
+function buildMovementByTypeFromSummaryRows(rows = []) {
+  const totals = rows.reduce(
+    (acc, row) => {
+      acc.purchaseQty += Number(row?.purchaseQty || 0)
+      acc.consumptionQty += Number(row?.consumptionQty || 0)
+      acc.wastageQty += Number(row?.wastageQty || 0)
+      acc.adjustmentInQty += Number(row?.adjustmentInQty || 0)
+      acc.adjustmentOutQty += Number(row?.adjustmentOutQty || 0)
+      acc.conversionInQty += Number(row?.conversionInQty || 0)
+      acc.conversionOutQty += Number(row?.conversionOutQty || 0)
+      acc.reservationQty += Number(row?.reservationQty || 0)
+      acc.releaseQty += Number(row?.releaseQty || 0)
+      acc.transferInQty += Number(row?.transferInQty || 0)
+      acc.transferOutQty += Number(row?.transferOutQty || 0)
+      acc.ledgerEntryCount += Number(row?.ledgerEntryCount || 0)
+      return acc
+    },
+    {
+      purchaseQty: 0,
+      consumptionQty: 0,
+      wastageQty: 0,
+      adjustmentInQty: 0,
+      adjustmentOutQty: 0,
+      conversionInQty: 0,
+      conversionOutQty: 0,
+      reservationQty: 0,
+      releaseQty: 0,
+      transferInQty: 0,
+      transferOutQty: 0,
+      ledgerEntryCount: 0,
+    },
+  )
+
+  return [
+    {
+      type: 'PURCHASE',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.purchaseQty),
+      netQuantity: round6(totals.purchaseQty),
+    },
+    {
+      type: 'CONSUMPTION',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.consumptionQty),
+      netQuantity: round6(-totals.consumptionQty),
+    },
+    {
+      type: 'WASTAGE',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.wastageQty),
+      netQuantity: round6(-totals.wastageQty),
+    },
+    {
+      type: 'ADJUSTMENT',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.adjustmentInQty + totals.adjustmentOutQty),
+      netQuantity: round6(totals.adjustmentInQty - totals.adjustmentOutQty),
+    },
+    {
+      type: 'CONVERSION_IN',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.conversionInQty),
+      netQuantity: round6(totals.conversionInQty),
+    },
+    {
+      type: 'CONVERSION_OUT',
+      entries: totals.ledgerEntryCount,
+      absoluteQuantity: round6(totals.conversionOutQty),
+      netQuantity: round6(-totals.conversionOutQty),
+    },
+  ]
+    .filter((row) => Number(row.absoluteQuantity || 0) > 0)
+    .sort((a, b) => Number(b.absoluteQuantity || 0) - Number(a.absoluteQuantity || 0))
+}
+
+function buildMovementTrendFromSummaryRows(rows = []) {
+  const map = new Map()
+
+  for (const row of rows) {
+    const day = String(row?.dateKey || '')
+    if (!day) continue
+
+    if (!map.has(day)) {
+      map.set(day, {
+        day,
+        purchase: 0,
+        consumption: 0,
+        wastage: 0,
+        adjustment: 0,
+        conversionIn: 0,
+        conversionOut: 0,
+      })
+    }
+
+    const entry = map.get(day)
+    entry.purchase = round6(Number(entry.purchase || 0) + Number(row?.purchaseQty || 0))
+    entry.consumption = round6(Number(entry.consumption || 0) - Number(row?.consumptionQty || 0))
+    entry.wastage = round6(Number(entry.wastage || 0) - Number(row?.wastageQty || 0))
+    entry.adjustment = round6(Number(entry.adjustment || 0) + Number(row?.adjustmentInQty || 0) - Number(row?.adjustmentOutQty || 0))
+    entry.conversionIn = round6(Number(entry.conversionIn || 0) + Number(row?.conversionInQty || 0))
+    entry.conversionOut = round6(Number(entry.conversionOut || 0) - Number(row?.conversionOutQty || 0))
+  }
+
+  return [...map.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)))
+}
+
+async function buildMovementAnalyticsFromLedger({ restaurantId, start30d, start14d, itemNamesById }) {
+  const [ledgerTypeRows, ledgerTrendRows, topWastageRows] = await Promise.all([
+    InventoryLedger.aggregate([
+      { $match: { restaurantId, createdAt: { $gte: start30d } } },
+      {
+        $group: {
+          _id: '$type',
+          entries: { $sum: 1 },
+          absoluteQuantity: { $sum: '$quantity' },
+          netQuantity: {
+            $sum: {
+              $multiply: ['$quantity', '$direction'],
+            },
+          },
+        },
+      },
+    ]),
+    InventoryLedger.aggregate([
+      {
+        $match: {
+          restaurantId,
+          createdAt: { $gte: start14d },
+          type: { $in: ['PURCHASE', 'CONSUMPTION', 'WASTAGE', 'ADJUSTMENT', 'CONVERSION_IN', 'CONVERSION_OUT'] },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            day: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$createdAt',
+              },
+            },
+            type: '$type',
+          },
+          signedQuantity: {
+            $sum: {
+              $multiply: ['$quantity', '$direction'],
+            },
+          },
+        },
+      },
+      { $sort: { '_id.day': 1 } },
+    ]),
+    InventoryLedger.aggregate([
+      {
+        $match: {
+          restaurantId,
+          createdAt: { $gte: start30d },
+          type: 'WASTAGE',
+          direction: -1,
+        },
+      },
+      {
+        $group: {
+          _id: { inventoryItemId: '$inventoryItemId', unit: '$unit' },
+          quantity: { $sum: '$quantity' },
+        },
+      },
+      { $sort: { quantity: -1 } },
+      { $limit: 8 },
+    ]),
+  ])
+
+  const movementByType = ledgerTypeRows
+    .map((row) => ({
+      type: String(row?._id || ''),
+      entries: Number(row?.entries || 0),
+      absoluteQuantity: round6(row?.absoluteQuantity || 0),
+      netQuantity: round6(row?.netQuantity || 0),
+    }))
+    .sort((a, b) => Number(b.absoluteQuantity || 0) - Number(a.absoluteQuantity || 0))
+
+  const trendByDayMap = new Map()
+  const trendTypeToKey = {
+    PURCHASE: 'purchase',
+    CONSUMPTION: 'consumption',
+    WASTAGE: 'wastage',
+    ADJUSTMENT: 'adjustment',
+    CONVERSION_IN: 'conversionIn',
+    CONVERSION_OUT: 'conversionOut',
+  }
+
+  for (const row of ledgerTrendRows) {
+    const day = String(row?._id?.day || '')
+    const type = String(row?._id?.type || '')
+    const key = trendTypeToKey[type]
+    if (!day || !key) continue
+
+    if (!trendByDayMap.has(day)) {
+      trendByDayMap.set(day, {
+        day,
+        purchase: 0,
+        consumption: 0,
+        wastage: 0,
+        adjustment: 0,
+        conversionIn: 0,
+        conversionOut: 0,
+      })
+    }
+
+    const current = trendByDayMap.get(day)
+    current[key] = round6(Number(current[key] || 0) + Number(row?.signedQuantity || 0))
+  }
+
+  const movementTrend = [...trendByDayMap.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)))
+  const topWastageItems = topWastageRows.map((row) => {
+    const itemId = String(row?._id?.inventoryItemId || '')
+    return {
+      itemId,
+      name: itemNamesById.get(itemId) || 'Unknown Item',
+      unit: String(row?._id?.unit || 'unit'),
+      quantity: round6(row?.quantity || 0),
+    }
+  })
+
+  return {
+    movementByType,
+    movementTrend,
+    topWastageItems,
+    source: 'ledger',
+  }
+}
+
+async function buildMovementAnalytics({ restaurantId, start30d, start14d, itemNamesById, unitByItemId }) {
+  const summaryEnabled = String(process.env.INVENTORY_SUMMARY_ANALYTICS_ENABLED || 'true').trim().toLowerCase() !== 'false'
+  if (!summaryEnabled) {
+    return buildMovementAnalyticsFromLedger({ restaurantId, start30d, start14d, itemNamesById })
+  }
+
+  const [summaryRows30d, summaryRows14d, wastageRows] = await Promise.all([
+    InventoryDailySummary.find({
+      restaurantId,
+      date: { $gte: start30d },
+    })
+      .select('date dateKey purchaseQty consumptionQty wastageQty adjustmentInQty adjustmentOutQty conversionInQty conversionOutQty reservationQty releaseQty transferInQty transferOutQty ledgerEntryCount')
+      .lean(),
+    InventoryDailySummary.find({
+      restaurantId,
+      date: { $gte: start14d },
+    })
+      .select('dateKey purchaseQty consumptionQty wastageQty adjustmentInQty adjustmentOutQty conversionInQty conversionOutQty')
+      .lean(),
+    InventoryDailySummary.aggregate([
+      {
+        $match: {
+          restaurantId,
+          date: { $gte: start30d },
+          wastageQty: { $gt: 0 },
+        },
+      },
+      {
+        $group: {
+          _id: '$inventoryItemId',
+          quantity: { $sum: '$wastageQty' },
+        },
+      },
+      { $sort: { quantity: -1 } },
+      { $limit: 8 },
+    ]),
+  ])
+
+  const coverage30d = new Set(summaryRows30d.map((row) => String(row?.dateKey || '')).filter(Boolean)).size
+  const coverage14d = new Set(summaryRows14d.map((row) => String(row?.dateKey || '')).filter(Boolean)).size
+  const minimumCoverage30d = Math.max(7, Number(process.env.INVENTORY_SUMMARY_MIN_COVERAGE_30D || 21))
+  const minimumCoverage14d = Math.max(5, Number(process.env.INVENTORY_SUMMARY_MIN_COVERAGE_14D || 10))
+
+  const hasSufficientCoverage = coverage30d >= minimumCoverage30d && coverage14d >= minimumCoverage14d
+  if (!hasSufficientCoverage) {
+    return buildMovementAnalyticsFromLedger({ restaurantId, start30d, start14d, itemNamesById })
+  }
+
+  const movementByType = buildMovementByTypeFromSummaryRows(summaryRows30d)
+  const movementTrend = buildMovementTrendFromSummaryRows(summaryRows14d)
+  const topWastageItems = wastageRows.map((row) => {
+    const itemId = String(row?._id || '')
+    return {
+      itemId,
+      name: itemNamesById.get(itemId) || 'Unknown Item',
+      unit: unitByItemId.get(itemId) || 'unit',
+      quantity: round6(row?.quantity || 0),
+    }
+  })
+
+  return {
+    movementByType,
+    movementTrend,
+    topWastageItems,
+    source: 'daily_summary',
+  }
 }
 
 function buildPurchaseLedgerEntries({ restaurantId, purchase, createdBy, referenceType = 'purchase' }) {
@@ -1154,9 +1454,6 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
       purchaseSummaryRows,
       purchaseSourceRows,
       purchasePaymentRows,
-      ledgerTypeRows,
-      ledgerTrendRows,
-      topWastageRows,
     ] = await Promise.all([
       InventoryItem.find({ restaurantId: restaurant._id, isActive: true })
         .select('_id name currentStock currentStockUnit defaultUnit')
@@ -1222,70 +1519,10 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
         },
         { $sort: { spend: -1 } },
       ]),
-      InventoryLedger.aggregate([
-        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
-        {
-          $group: {
-            _id: '$type',
-            entries: { $sum: 1 },
-            absoluteQuantity: { $sum: '$quantity' },
-            netQuantity: {
-              $sum: {
-                $multiply: ['$quantity', '$direction'],
-              },
-            },
-          },
-        },
-      ]),
-      InventoryLedger.aggregate([
-        {
-          $match: {
-            restaurantId: restaurant._id,
-            createdAt: { $gte: start14d },
-            type: { $in: ['PURCHASE', 'CONSUMPTION', 'WASTAGE', 'ADJUSTMENT', 'CONVERSION_IN', 'CONVERSION_OUT'] },
-          },
-        },
-        {
-          $group: {
-            _id: {
-              day: {
-                $dateToString: {
-                  format: '%Y-%m-%d',
-                  date: '$createdAt',
-                },
-              },
-              type: '$type',
-            },
-            signedQuantity: {
-              $sum: {
-                $multiply: ['$quantity', '$direction'],
-              },
-            },
-          },
-        },
-        { $sort: { '_id.day': 1 } },
-      ]),
-      InventoryLedger.aggregate([
-        {
-          $match: {
-            restaurantId: restaurant._id,
-            createdAt: { $gte: start30d },
-            type: 'WASTAGE',
-            direction: -1,
-          },
-        },
-        {
-          $group: {
-            _id: { inventoryItemId: '$inventoryItemId', unit: '$unit' },
-            quantity: { $sum: '$quantity' },
-          },
-        },
-        { $sort: { quantity: -1 } },
-        { $limit: 8 },
-      ]),
     ])
 
     const itemNamesById = new Map(inventoryItems.map((item) => [String(item._id), String(item.name || '')]))
+    const unitByItemId = new Map(inventoryItems.map((item) => [String(item._id), String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))]))
     const rateByItemAndUnit = new Map()
 
     for (const row of purchaseRateRows) {
@@ -1366,57 +1603,12 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
       sharePercent: toPercent(row?.spend || 0, purchaseSummary.totalSpend || 0),
     }))
 
-    const movementByType = ledgerTypeRows
-      .map((row) => ({
-        type: String(row?._id || ''),
-        entries: Number(row?.entries || 0),
-        absoluteQuantity: round6(row?.absoluteQuantity || 0),
-        netQuantity: round6(row?.netQuantity || 0),
-      }))
-      .sort((a, b) => Number(b.absoluteQuantity || 0) - Number(a.absoluteQuantity || 0))
-
-    const trendByDayMap = new Map()
-    const trendTypeToKey = {
-      PURCHASE: 'purchase',
-      CONSUMPTION: 'consumption',
-      WASTAGE: 'wastage',
-      ADJUSTMENT: 'adjustment',
-      CONVERSION_IN: 'conversionIn',
-      CONVERSION_OUT: 'conversionOut',
-    }
-
-    for (const row of ledgerTrendRows) {
-      const day = String(row?._id?.day || '')
-      const type = String(row?._id?.type || '')
-      const key = trendTypeToKey[type]
-      if (!day || !key) continue
-
-      if (!trendByDayMap.has(day)) {
-        trendByDayMap.set(day, {
-          day,
-          purchase: 0,
-          consumption: 0,
-          wastage: 0,
-          adjustment: 0,
-          conversionIn: 0,
-          conversionOut: 0,
-        })
-      }
-
-      const current = trendByDayMap.get(day)
-      current[key] = round6(Number(current[key] || 0) + Number(row?.signedQuantity || 0))
-    }
-
-    const movementTrend = [...trendByDayMap.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)))
-
-    const topWastageItems = topWastageRows.map((row) => {
-      const itemId = String(row?._id?.inventoryItemId || '')
-      return {
-        itemId,
-        name: itemNamesById.get(itemId) || 'Unknown Item',
-        unit: String(row?._id?.unit || 'unit'),
-        quantity: round6(row?.quantity || 0),
-      }
+    const movement = await buildMovementAnalytics({
+      restaurantId: restaurant._id,
+      start30d,
+      start14d,
+      itemNamesById,
+      unitByItemId,
     })
 
     return res.json({
@@ -1460,9 +1652,10 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
         paymentMix: purchaseByPayment,
       },
       movement: {
-        byType: movementByType,
-        trend14d: movementTrend,
-        topWastageItems,
+        byType: movement.movementByType,
+        trend14d: movement.movementTrend,
+        topWastageItems: movement.topWastageItems,
+        source: movement.source,
       },
     })
   } catch (error) {

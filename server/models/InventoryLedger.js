@@ -1,5 +1,7 @@
 import mongoose from 'mongoose'
 
+const INVENTORY_LEDGER_TTL_SECONDS = Math.max(24 * 60 * 60, Number(process.env.INVENTORY_LEDGER_TTL_SECONDS || 5 * 24 * 60 * 60))
+
 const inventoryLedgerSchema = new mongoose.Schema(
   {
     restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
@@ -36,6 +38,7 @@ const inventoryLedgerSchema = new mongoose.Schema(
 inventoryLedgerSchema.index({ restaurantId: 1, inventoryItemId: 1, createdAt: -1 })
 inventoryLedgerSchema.index({ restaurantId: 1, locationId: 1, inventoryItemId: 1, createdAt: -1 })
 inventoryLedgerSchema.index({ restaurantId: 1, createdAt: -1, type: 1 })
+inventoryLedgerSchema.index({ createdAt: 1 }, { expireAfterSeconds: INVENTORY_LEDGER_TTL_SECONDS })
 inventoryLedgerSchema.index({ referenceType: 1, referenceId: 1, createdAt: -1 })
 inventoryLedgerSchema.index({ restaurantId: 1, referenceType: 1, referenceId: 1, direction: 1, type: 1, 'metadata.cycle': 1 })
 inventoryLedgerSchema.index(
