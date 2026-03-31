@@ -80,9 +80,9 @@ async function start() {
   
   // Phase 1: Startup validation - ensure TTL >= Rollup Lookback
   try {
-    const ROLLUP_LOOKBACK_DAYS = Number(config.inventoryLifecycle?.dailyRollupLookbackDays || 3)
     const LEDGER_TTL_SECONDS = Number(process.env.INVENTORY_LEDGER_TTL_SECONDS || 432000)
     const LEDGER_TTL_DAYS = Math.ceil(LEDGER_TTL_SECONDS / 86400)
+    const ROLLUP_LOOKBACK_DAYS = Number(config.inventoryLifecycle?.dailyRollupLookbackDays || LEDGER_TTL_DAYS)
     
     if (ROLLUP_LOOKBACK_DAYS < LEDGER_TTL_DAYS) {
       const msg = `[CRITICAL] Inventory lifecycle constraint violation: ROLLUP_LOOKBACK_DAYS (${ROLLUP_LOOKBACK_DAYS}) must be >= LEDGER_TTL_DAYS (${LEDGER_TTL_DAYS}). This creates a data loss risk! Aborting startup.`

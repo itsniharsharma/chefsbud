@@ -23,6 +23,13 @@ const rollupEnabledFlag = process.env.ROLLUP_ENABLED
 const purgeEnabledFlag = process.env.PURGE_ENABLED
 const inventoryLifecycleEnabledFlag = process.env.INVENTORY_LEDGER_SUMMARY_ENABLED
 const inventoryMonthlyArchiveEnabledFlag = process.env.INVENTORY_MONTHLY_ARCHIVE_ENABLED
+const ledgerTtlSeconds = parseInt(process.env.INVENTORY_LEDGER_TTL_SECONDS || '432000', 10)
+const ledgerTtlDays = Math.max(1, Math.ceil(ledgerTtlSeconds / 86400))
+const inventoryRollupLookbackRaw = parseInt(
+  process.env.INVENTORY_DAILY_ROLLUP_LOOKBACK_DAYS || String(ledgerTtlDays),
+  10,
+)
+const inventoryRollupLookbackDays = Math.max(ledgerTtlDays, inventoryRollupLookbackRaw)
 
 const config = {
   // Archive settings: Move orders to Azure after N days
@@ -84,7 +91,8 @@ const config = {
   // Inventory lifecycle settings
   inventoryLifecycle: {
     enabled: parseBooleanFlag(inventoryLifecycleEnabledFlag, true),
-    dailyRollupLookbackDays: parseInt(process.env.INVENTORY_DAILY_ROLLUP_LOOKBACK_DAYS || '3', 10),
+    // Keep lookback >= raw ledger TTL window to avoid irreversible data gaps.
+    dailyRollupLookbackDays: inventoryRollupLookbackDays,
     dailySummaryRetentionDays: parseInt(process.env.INVENTORY_DAILY_SUMMARY_RETENTION_DAYS || '90', 10),
     monthlyRebuildWindowMonths: parseInt(process.env.INVENTORY_MONTHLY_REBUILD_WINDOW_MONTHS || '18', 10),
     monthlyArchiveEnabled: parseBooleanFlag(inventoryMonthlyArchiveEnabledFlag, false),

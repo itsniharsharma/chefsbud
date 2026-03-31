@@ -487,10 +487,29 @@ async function buildMovementAnalytics({ restaurantId, start30d, start14d, itemNa
   const coverage14d = new Set(summaryRows14d.map((row) => String(row?.dateKey || '')).filter(Boolean)).size
   const minimumCoverage30d = Math.max(7, Number(process.env.INVENTORY_SUMMARY_MIN_COVERAGE_30D || 21))
   const minimumCoverage14d = Math.max(5, Number(process.env.INVENTORY_SUMMARY_MIN_COVERAGE_14D || 10))
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const allowSummaryLagDays = Math.max(0, Number(process.env.INVENTORY_SUMMARY_MAX_LAG_DAYS || 0))
+
+  const summaryDateKeys = [...new Set(summaryRows14d.map((row) => String(row?.dateKey || '')).filter(Boolean))]
+  const latestSummaryKey = summaryDateKeys.sort((a, b) => String(b).localeCompare(String(a)))[0] || ''
+
+  const lagInDays = latestSummaryKey
+    ? Math.floor((new Date(todayKey).getTime() - new Date(latestSummaryKey).getTime()) / (24 * 60 * 60 * 1000))
+    : Number.POSITIVE_INFINITY
 
   const hasSufficientCoverage = coverage30d >= minimumCoverage30d && coverage14d >= minimumCoverage14d
   if (!hasSufficientCoverage) {
     return buildMovementAnalyticsFromLedger({ restaurantId, start30d, start14d, itemNamesById })
+  }
+
+  // Keep movement charts real-time: when summary rollup lags, fall back to live ledger.
+  // This prevents missing same-day consumption after order completion.
+  if (!Number.isFinite(lagInDays) || lagInDays > allowSummaryLagDays) {
+    const live = await buildMovementAnalyticsFromLedger({ restaurantId, start30d, start14d, itemNamesById })
+    return {
+      ...live,
+      source: 'ledger_live_fallback',
+    }
   }
 
   const movementByType = buildMovementByTypeFromSummaryRows(summaryRows30d)
