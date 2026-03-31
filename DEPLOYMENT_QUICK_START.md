@@ -2,7 +2,7 @@
 
 ## 🚀 5-Minute Integration Checklist
 
-This guide shows exactly where and how to integrate the data lifecycle system into your existing Chef's Bud codebase.
+This guide shows exactly where and how to integrate the data lifecycle system into your existing Chef's Bud codebase
 
 ---
 
