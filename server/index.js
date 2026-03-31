@@ -2,7 +2,6 @@ import 'dotenv/config'
 import app from './app.js'
 import { closeDB, connectDB } from './config/db.js'
 import { initializeScheduler, shutdownScheduler } from './services/dataLifecycleScheduler.js'
-import { startInventoryReconciliationScheduler, stopInventoryReconciliationScheduler } from './services/inventoryReconciliationService.js'
 import { cleanupAllLeaderships } from './services/schedulerLeaderElection.js'
 import { runStartupChecks } from './services/startupChecks.js'
 import { closeSocketServer, initSocketServer } from './realtime/socketServer.js'
@@ -32,7 +31,6 @@ async function shutdown(signal, exitCode = 0) {
 
   try {
     await shutdownScheduler()
-    await stopInventoryReconciliationScheduler()
     await cleanupAllLeaderships()
     performanceMetrics.stop()
     await closeSocketServer()
@@ -82,7 +80,6 @@ async function start() {
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
     initializeScheduler()
-    startInventoryReconciliationScheduler()
     logger.info('Jobs process started', { processRole: PROCESS_ROLE })
     return
   }
@@ -99,7 +96,6 @@ async function start() {
 
   if (PROCESS_ROLE === 'all') {
     initializeScheduler()
-    startInventoryReconciliationScheduler()
   }
 
   httpServer.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000)

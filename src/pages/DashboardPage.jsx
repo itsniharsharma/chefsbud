@@ -1,12 +1,4 @@
 import { useMemo } from 'react'
-import {
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import Card from '../components/Card'
 import { useAuth } from '../hooks/useAuth'
 import { formatCurrencyINR } from '../utils/currency'
@@ -36,6 +28,10 @@ export default function DashboardPage() {
     ]
   }, [data])
 
+  const lowStockNotifications = Array.isArray(data?.notifications?.lowStock)
+    ? data.notifications.lowStock
+    : []
+
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -53,22 +49,28 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="card h-64 p-4 md:h-72">
-        <h2 className="mb-3 text-lg font-semibold">Revenue Trend</h2>
-        <ResponsiveContainer width="100%" height="90%">
-          <LineChart data={data?.revenueTrend || []}>
-            <XAxis
-              dataKey="day"
-              label={{ value: 'X-Axis: Day', position: 'insideBottom', offset: -4 }}
-            />
-            <YAxis
-              tickFormatter={(value) => formatCurrencyINR(value)}
-              label={{ value: 'Y-Axis: Revenue (INR)', angle: -90, position: 'insideLeft' }}
-            />
-            <Tooltip />
-            <Line type="monotone" dataKey="revenue" stroke="#E50914" strokeWidth={3} />
-          </LineChart>
-        </ResponsiveContainer>
+      <div className="card p-4 md:p-5">
+        <h2 className="text-lg font-semibold">Low Stock Notifications</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Alerts expire automatically after 24 hours.
+        </p>
+
+        {!lowStockNotifications.length ? (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            No low-stock alerts right now.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {lowStockNotifications.map((notification, index) => (
+              <article
+                key={String(notification?.itemId || `${notification?.itemName || 'item'}-${index}`)}
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+              >
+                {notification?.message || 'Stock level is below threshold. Kindly refill.'}
+              </article>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -18,7 +18,6 @@ export const importers = {
   inventory: () => import('../pages/InventoryPage'),
   inventoryModule: () => import('../pages/InventoryModulePage'),
   addPurchase: () => import('../pages/AddPurchasePage'),
-  monitoring: () => import('../pages/MonitoringPage'),
   customerMenu: () => import('../pages/CustomerMenuPage'),
   customerCheckout: () => import('../pages/CustomerCheckoutPage'),
   customerStatus: () => import('../pages/CustomerStatusPage'),
@@ -43,7 +42,6 @@ const routePathImporters = {
   '/inventory/purchase/add': importers.addPurchase,
   '/inventory/conversion': importers.inventoryModule,
   '/inventory/request': importers.inventoryModule,
-  '/inventory/monitoring': importers.monitoring,
 }
 
 export function preloadRouteByPath(path) {

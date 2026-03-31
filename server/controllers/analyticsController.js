@@ -1,6 +1,9 @@
 import MenuItem from '../models/MenuItem.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
+import InventoryItem from '../models/InventoryItem.js'
+import InventoryPurchase from '../models/InventoryPurchase.js'
+import DashboardNotification from '../models/DashboardNotification.js'
 import {
   backfillCompletedOrderAnalytics,
   buildDecisionAnalytics,
@@ -17,7 +20,138 @@ const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(proces
 const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS || 60_000))
 const ANALYTICS_WARM_STATE_RETENTION_MS = Math.max(3_600_000, Number(process.env.ANALYTICS_WARM_STATE_RETENTION_MS || 24 * 60 * 60 * 1000))
 const ANALYTICS_WARM_STATE_MAX_ENTRIES = Math.max(100, Number(process.env.ANALYTICS_WARM_STATE_MAX_ENTRIES || 10_000))
+const LOW_STOCK_NOTIFICATIONS_ENABLED = String(process.env.LOW_STOCK_NOTIFICATIONS_ENABLED || 'true').trim().toLowerCase() !== 'false'
+const LOW_STOCK_THRESHOLD_PERCENT = 10
+const LOW_STOCK_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1000
+const MAX_LOW_STOCK_NOTIFICATIONS = 50
 const analyticsWarmStateByRestaurant = new Map()
+
+function round2(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
+function round6(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 1_000_000) / 1_000_000
+}
+
+function normalizePurchaseUnitFactor(unit = '') {
+  const normalized = String(unit || '').trim()
+  if (normalized === 'Kg') return { baseUnit: 'g', factor: 1000 }
+  if (normalized === 'Gram' || normalized === 'g') return { baseUnit: 'g', factor: 1 }
+  if (normalized === 'Litre') return { baseUnit: 'ml', factor: 1000 }
+  if (normalized === 'Ml' || normalized === 'ml') return { baseUnit: 'ml', factor: 1 }
+  return { baseUnit: 'unit', factor: 1 }
+}
+
+async function buildLowStockDashboardNotifications(restaurantId) {
+  const now = new Date()
+  const expiresAt = new Date(now.getTime() + LOW_STOCK_NOTIFICATION_TTL_MS)
+
+  const [inventoryItems, purchaseAggregates] = await Promise.all([
+    InventoryItem.find({ restaurantId, isActive: true })
+      .select('_id name currentStock currentStockUnit')
+      .lean(),
+    InventoryPurchase.aggregate([
+      { $match: { restaurantId } },
+      { $unwind: '$items' },
+      {
+        $project: {
+          itemId: '$items.itemId',
+          quantity: { $toDouble: '$items.quantity' },
+          unit: '$items.unit',
+        },
+      },
+    ]),
+  ])
+
+  const purchasedByItem = new Map()
+  for (const row of purchaseAggregates) {
+    const itemId = String(row?.itemId || '')
+    if (!itemId) continue
+
+    const { baseUnit, factor } = normalizePurchaseUnitFactor(row?.unit)
+    const quantity = Number(row?.quantity || 0)
+    if (!Number.isFinite(quantity) || quantity <= 0) continue
+
+    const normalizedQuantity = quantity * factor
+    if (!purchasedByItem.has(itemId)) {
+      purchasedByItem.set(itemId, { g: 0, ml: 0, unit: 0 })
+    }
+
+    const bucket = purchasedByItem.get(itemId)
+    bucket[baseUnit] += normalizedQuantity
+  }
+
+  const notifications = []
+  for (const item of inventoryItems) {
+    const itemId = String(item?._id || '')
+    const unit = String(item?.currentStockUnit || 'unit')
+    const purchased = Number(purchasedByItem.get(itemId)?.[unit] || 0)
+    if (!Number.isFinite(purchased) || purchased <= 0) continue
+
+    const currentStock = Math.max(0, Number(item?.currentStock || 0))
+    const currentPercent = purchased > 0 ? (currentStock / purchased) * 100 : 0
+    if (!Number.isFinite(currentPercent) || currentPercent >= LOW_STOCK_THRESHOLD_PERCENT) continue
+
+    const roundedPercent = round2(currentPercent)
+    notifications.push({
+      restaurantId,
+      type: 'LOW_STOCK_THRESHOLD',
+      itemId: item._id,
+      itemName: String(item?.name || 'Item'),
+      thresholdPercent: LOW_STOCK_THRESHOLD_PERCENT,
+      currentPercent: roundedPercent,
+      currentStock: round6(currentStock),
+      purchasedQuantity: round6(purchased),
+      unit,
+      message: `${String(item?.name || 'Item')} is below ${LOW_STOCK_THRESHOLD_PERCENT}% (${roundedPercent}%). Kindly refill stock.`,
+      expiresAt,
+    })
+  }
+
+  if (notifications.length) {
+    const operations = notifications.map((notification) => ({
+      updateOne: {
+        filter: {
+          restaurantId,
+          type: 'LOW_STOCK_THRESHOLD',
+          itemId: notification.itemId,
+        },
+        update: {
+          $set: notification,
+          $setOnInsert: { createdAt: now },
+        },
+        upsert: true,
+      },
+    }))
+
+    await DashboardNotification.bulkWrite(operations, { ordered: false })
+
+    const lowItemIds = notifications.map((notification) => notification.itemId)
+    await DashboardNotification.deleteMany({
+      restaurantId,
+      type: 'LOW_STOCK_THRESHOLD',
+      itemId: { $nin: lowItemIds },
+    })
+  } else {
+    await DashboardNotification.deleteMany({
+      restaurantId,
+      type: 'LOW_STOCK_THRESHOLD',
+    })
+  }
+
+  const active = await DashboardNotification.find({
+    restaurantId,
+    type: 'LOW_STOCK_THRESHOLD',
+    expiresAt: { $gt: now },
+  })
+    .sort({ currentPercent: 1, updatedAt: -1 })
+    .limit(MAX_LOW_STOCK_NOTIFICATIONS)
+    .select('itemId itemName thresholdPercent currentPercent currentStock purchasedQuantity unit message expiresAt updatedAt')
+    .lean()
+
+  return active
+}
 
 function cleanupAnalyticsWarmState(now = Date.now()) {
   for (const [restaurantKey, lastWarmAt] of analyticsWarmStateByRestaurant.entries()) {
@@ -82,13 +216,14 @@ export async function getDashboard(req, res, next) {
     const trendStart = new Date(startDay)
     trendStart.setDate(trendStart.getDate() - 6)
 
-    const [metricsDocs, activeTables] = await Promise.all([
+    const [metricsDocs, activeTables, lowStockNotifications] = await Promise.all([
       ensureOrderMetricsRange({
         restaurantId: ownerRestaurant._id,
         startDate: trendStart,
         endDate: startDay,
       }),
       Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
+      LOW_STOCK_NOTIFICATIONS_ENABLED ? buildLowStockDashboardNotifications(ownerRestaurant._id) : Promise.resolve([]),
     ])
 
     const metricsByDateKey = new Map(
@@ -122,6 +257,11 @@ export async function getDashboard(req, res, next) {
       recentOrders: [],
       topSellingItems: [],
       revenueTrend,
+      notifications: {
+        lowStock: lowStockNotifications,
+        ttlHours: 24,
+        enabled: LOW_STOCK_NOTIFICATIONS_ENABLED,
+      },
     })
   } catch (error) {
     next(error)

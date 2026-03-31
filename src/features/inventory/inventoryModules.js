@@ -5,7 +5,6 @@ import {
   Boxes,
   ClipboardList,
   FileChartColumn,
-  MonitorCheck,
   ShoppingBasket,
   Trash2,
   Truck,
@@ -74,13 +73,6 @@ export const inventoryModules = [
     description: 'Get end-to-end raw inventory health, movement, and value intelligence',
     icon: ChartPie,
     route: '/inventory/analytics',
-  },
-  {
-    key: 'monitoring',
-    title: 'Inventory Monitoring',
-    description: 'Track reconciliation health, violation trends, and circuit breaker status',
-    icon: MonitorCheck,
-    route: '/inventory/monitoring',
   },
 ]
 

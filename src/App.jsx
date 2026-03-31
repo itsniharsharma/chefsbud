@@ -23,7 +23,6 @@ const SettingsPage = lazy(importers.settings)
 const InventoryPage = lazy(importers.inventory)
 const InventoryModulePage = lazy(importers.inventoryModule)
 const AddPurchasePage = lazy(importers.addPurchase)
-const MonitoringPage = lazy(importers.monitoring)
 const CustomerMenuPage = lazy(importers.customerMenu)
 const CustomerCheckoutPage = lazy(importers.customerCheckout)
 const CustomerStatusPage = lazy(importers.customerStatus)
@@ -128,7 +127,6 @@ function App() {
             <Route path="recipes" element={<InventoryModulePage moduleKey="recipes" />} />
             <Route path="request" element={<InventoryModulePage moduleKey="request" />} />
             <Route path="analytics" element={<InventoryModulePage moduleKey="analytics" />} />
-            <Route path="monitoring" element={<MonitoringPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

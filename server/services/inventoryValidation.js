@@ -1,7 +1,6 @@
 import InventoryBalance from '../models/InventoryBalance.js'
 import InventoryLedger from '../models/InventoryLedger.js'
 import InventoryReservation from '../models/InventoryReservation.js'
-import Order from '../models/Order.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -81,26 +80,7 @@ export async function validateInventoryConsistency() {
       logger.warn('startup_validation_orphaned_reservations_detected', { count: orphanedCount })
     }
 
-    // Check 3: Orders with violations that aren't marked for resolution
-    const unresolvedViolations = await Order.countDocuments({
-      inventoryInconsistencies: { $exists: true, $ne: [] },
-      isArchived: false,
-      completedAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // Completed > 24h ago
-    })
-
-    results.checks.push({
-      name: 'unresolved_violations',
-      passed: unresolvedViolations === 0,
-      details: `Found ${unresolvedViolations} orders with unresolved violations > 24h old`,
-      severity: unresolvedViolations > 100 ? 'warning' : 'info',
-    })
-
-    if (unresolvedViolations > 100) {
-      results.warning = true
-      logger.warn('startup_validation_many_unresolved_violations', { count: unresolvedViolations })
-    }
-
-    // Check 4: Ledger consistency (total consumed <= reserved + purchased)
+    // Check 3: Ledger consistency (total consumed <= reserved + purchased)
     const ledgerIssues = await InventoryLedger.aggregate([
       {
         $group: {

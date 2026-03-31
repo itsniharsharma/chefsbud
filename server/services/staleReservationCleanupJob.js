@@ -1,7 +1,6 @@
 import InventoryReservation from '../models/InventoryReservation.js'
 import Order from '../models/Order.js'
 import { addLedgerEntries } from './inventoryService.js'
-import { logInventoryViolation } from './inventoryAlertingService.js'
 import { logger } from '../utils/logger.js'
 
 let cleanupJobInterval = null
@@ -112,22 +111,6 @@ async function cleanupReservationBatch(restaurantId, reservations) {
         idempotencyKey: `cleanup:expire:${String(reservation._id)}`,
       })
 
-      // Log violation for operational tracking
-      await logInventoryViolation({
-        restaurantId,
-        type: 'EXPIRED_UNCLEANED',
-        severity: 'warning',
-        orderId: reservation.orderId,
-        inventoryItemId: reservation.inventoryItemId,
-        locationId: reservation.locationId,
-        quantity: Number(reservation.reservedQty || 0),
-        unit: reservation.unit,
-        message: `Expired reservation cleaned up: ${String(reservation._id)}`,
-        metadata: {
-          reservationId: String(reservation._id),
-          expiresAt: reservation.expiresAt,
-        },
-      })
     } catch (error) {
       logger.warn('cleanup_individual_reservation_failed', {
         restaurantId,
