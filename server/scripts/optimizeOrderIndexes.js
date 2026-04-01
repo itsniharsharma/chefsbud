@@ -26,14 +26,7 @@ const DROP_EXTRA = parseBoolean(getArgValue('drop-extra') ?? process.env.ORDER_I
 const KEEP_INDEXES = new Set(['_id_'])
 
 function normalizeKey(key = {}) {
-  return JSON.stringify(
-    Object.keys(key)
-      .sort()
-      .reduce((acc, k) => {
-        acc[k] = key[k]
-        return acc
-      }, {}),
-  )
+  return JSON.stringify(key)
 }
 
 function indexNameFromSpec(spec = {}) {
@@ -44,6 +37,10 @@ function indexNameFromSpec(spec = {}) {
 
 function buildTargetIndexSpecs() {
   return [
+    {
+      key: { restaurantId: 1, isArchived: 1, createdAt: -1 },
+      options: { name: 'restaurantId_1_isArchived_1_createdAt_-1' },
+    },
     {
       key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, createdAt: -1 },
       options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_createdAt_-1' },

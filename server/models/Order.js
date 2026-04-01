@@ -91,6 +91,9 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
+// Lifecycle core path expected by startup checks.
+orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
+
 // Active board listing (default path): restaurant + non-archived + active visibility, newest first.
 orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, createdAt: -1 })
 
