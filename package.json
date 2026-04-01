@@ -10,7 +10,10 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "cleanup:inventory-monitoring": "node server/scripts/cleanupInventoryMonitoring.js"
+    "cleanup:inventory-monitoring": "node server/scripts/cleanupInventoryMonitoring.js",
+    "indexes:orders:plan": "node server/scripts/optimizeOrderIndexes.js",
+    "indexes:orders:apply": "node server/scripts/optimizeOrderIndexes.js --dry-run=false",
+    "indexes:orders:prune": "node server/scripts/optimizeOrderIndexes.js --dry-run=false --drop-extra=true"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.31.0",

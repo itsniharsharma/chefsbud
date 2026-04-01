@@ -24,8 +24,8 @@ const billAdjustmentItemSchema = new mongoose.Schema(
 
 const orderSchema = new mongoose.Schema(
   {
-    restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true, index: true },
-    restaurantSlug: { type: String, required: true, trim: true, index: true },
+    restaurantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Restaurant', required: true },
+    restaurantSlug: { type: String, required: true, trim: true },
     floorNumber: { type: Number, required: true, min: 1, default: 1 },
     tableNumber: { type: Number, required: true },
     items: { type: [orderItemSchema], required: true },
@@ -60,9 +60,9 @@ const orderSchema = new mongoose.Schema(
     providerPaymentId: { type: String, default: '' },
     paymentCapturedAt: { type: Date, default: null },
     paymentFailureReason: { type: String, default: '' },
-    billPrinted: { type: Boolean, default: false, index: true },
+    billPrinted: { type: Boolean, default: false },
     billPrintedAt: { type: Date, default: null },
-    kotPrinted: { type: Boolean, default: false, index: true },
+    kotPrinted: { type: Boolean, default: false },
     kotPrintedAt: { type: Date, default: null },
     kotPrintCount: { type: Number, default: 0, min: 0 },
     lastKotReprintReason: { type: String, default: '', trim: true, maxlength: 240 },
@@ -76,43 +76,54 @@ const orderSchema = new mongoose.Schema(
     customerRating: { type: Number, min: 1, max: 5, default: null },
     customerRatedAt: { type: Date, default: null },
     inventoryConsumptionCycle: { type: Number, default: 0, min: 0 },
-    inventoryProcessedAt: { type: Date, default: null, index: true },
+    inventoryProcessedAt: { type: Date, default: null },
     completedAt: { type: Date, default: null },
-    analyticsTrackedAt: { type: Date, default: null, index: true },
-    analyticsTrackingState: { type: String, enum: ['', 'processing', 'tracked'], default: '', index: true },
+    analyticsTrackedAt: { type: Date, default: null },
+    analyticsTrackingState: { type: String, enum: ['', 'processing', 'tracked'], default: '' },
     analyticsTrackingStartedAt: { type: Date, default: null },
-    hiddenFromActive: { type: Boolean, default: false, index: true },
-    hiddenFromRecent: { type: Boolean, default: false, index: true },
-    deletedByOwnerAt: { type: Date, default: null, index: true },
-    isArchived: { type: Boolean, default: false, index: true },
+    hiddenFromActive: { type: Boolean, default: false },
+    hiddenFromRecent: { type: Boolean, default: false },
+    deletedByOwnerAt: { type: Date, default: null },
+    isArchived: { type: Boolean, default: false },
     archivedAt: { type: Date, default: null },
     archiveKey: { type: String, default: '' },
   },
   { timestamps: true },
 )
 
-orderSchema.index({ restaurantId: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, orderStatus: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, tableNumber: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, floorNumber: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, hiddenFromRecent: 1, orderStatus: 1, completedAt: -1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, paymentStatus: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, paymentStatus: 1, orderStatus: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, orderStatus: 1, analyticsTrackedAt: 1, createdAt: 1 })
-orderSchema.index({ restaurantId: 1, orderStatus: 1, completedAt: -1 })
-orderSchema.index({ restaurantSlug: 1, tableNumber: 1, orderStatus: 1, completedAt: -1 })
-orderSchema.index({ restaurantId: 1, hiddenFromActive: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
-orderSchema.index({ isArchived: 1, createdAt: -1 })
-orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, hiddenFromRecent: 1, completedAt: -1 })
-orderSchema.index({ restaurantId: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
+// Active board listing (default path): restaurant + non-archived + active visibility, newest first.
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, createdAt: -1 })
+
+// Active board with explicit status filter.
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, orderStatus: 1, createdAt: -1 })
+
+// Completed/recent views with completion-time sorting.
+orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, completedAt: -1, createdAt: -1 })
+
+// Floor-filtered active board query.
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, createdAt: -1 })
+
+// Active table transfer checks and updates.
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 })
+
+// Public table order timeline and status checks.
 orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
+
+// Public table payment-filtered order list.
 orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, paymentStatus: 1, createdAt: -1 })
-orderSchema.index({ hiddenFromActive: 1, deletedByOwnerAt: 1, isArchived: 1 })
-orderSchema.index({ isArchived: 1, hiddenFromActive: 1, deletedByOwnerAt: 1, restaurantId: 1 })
+
+// Archival purge path.
 orderSchema.index({ isArchived: 1, archivedAt: 1, orderStatus: 1 })
-orderSchema.index({ restaurantId: 1, orderStatus: 1, analyticsTrackedAt: 1, completedAt: 1, createdAt: 1 })
+
+// Analytics backfill scanner prefers oldest completed, untracked records.
+orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, analyticsTrackedAt: 1, completedAt: 1, createdAt: 1 })
+
+// Manager listing by table within restaurant (fallback for non-public flows).
+orderSchema.index({ restaurantId: 1, isArchived: 1, tableNumber: 1, createdAt: -1 })
+
+// Optional cleanup/backoffice path for hidden active rows.
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, deletedByOwnerAt: 1 })
+
 orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
 orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })
 
