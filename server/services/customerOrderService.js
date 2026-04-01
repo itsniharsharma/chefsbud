@@ -2,6 +2,7 @@ import MenuItem from '../models/MenuItem.js'
 import Offer from '../models/Offer.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
+import mongoose from 'mongoose'
 import { applyOffersToOrder } from './offerEngine.js'
 
 function buildHttpError(message, statusCode) {
@@ -19,6 +20,9 @@ async function buildOrderItems(restaurantId, items) {
   for (const item of items) {
     const id = String(item?.menuItemId || '').trim()
     if (!id) continue
+    if (!mongoose.isValidObjectId(id)) {
+      throw buildHttpError('One or more menu items are invalid', 400)
+    }
     const quantity = Math.max(1, Number(item?.quantity || 1))
     quantityById.set(id, (quantityById.get(id) || 0) + quantity)
   }

@@ -34,7 +34,7 @@ router.post(
 		body('tableNumber').isInt({ min: 1, max: 500 }),
 		body('floorNumber').optional().isInt({ min: 1, max: 500 }),
 		body('items').isArray({ min: 1, max: 50 }),
-		body('items.*.menuItemId').isString().trim().notEmpty(),
+		body('items.*.menuItemId').isString().trim().isMongoId(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
 		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
 		body('customerNote').optional().isString().trim().isLength({ max: 500 }),
