@@ -23,6 +23,7 @@ export default function CurrentStockModule() {
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [editingUnits, setEditingUnits] = useState({})
+  const [syncingItemId, setSyncingItemId] = useState('')
 
   const sorted = useMemo(
     () => [...items].sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''))),
@@ -51,6 +52,37 @@ export default function CurrentStockModule() {
       await refetch()
     } catch (requestError) {
       setError(requestError?.response?.data?.message || 'Stock sync failed. Please retry.')
+    }
+  }
+
+  async function handleSyncItemFromPurchases(item) {
+    const inventoryItemId = String(item?._id || '').trim()
+    if (!inventoryItemId) return
+
+    setStatus('')
+    setError('')
+    setSyncingItemId(inventoryItemId)
+    try {
+      const response = await bootstrapMutation.mutateAsync({
+        batchSize: 250,
+        inventoryItemId,
+        mode: 'bootstrap_and_reconcile',
+      })
+      const summary = response?.summary || {}
+      const bootstrap = summary?.bootstrap || summary
+      const reconcile = summary?.reconcile || null
+      const inserted = Number(bootstrap?.insertedLedgerRows || 0)
+      const scanned = Number(bootstrap?.scannedPurchases || 0)
+      const adjusted = Number(reconcile?.adjustedItems || 0)
+
+      setStatus(
+        `Sync complete for ${String(item?.name || 'item')}. Purchases scanned: ${scanned}, ledger inserted: ${inserted}, reconciled items: ${adjusted}.`,
+      )
+      await refetch()
+    } catch (requestError) {
+      setError(requestError?.response?.data?.message || 'Item sync failed. Please retry.')
+    } finally {
+      setSyncingItemId('')
     }
   }
 
@@ -148,14 +180,26 @@ export default function CurrentStockModule() {
                   </td>
                   <td className="px-3 py-2 text-slate-700">{toStockText(item)}</td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => handleSaveDefaultUnit(item)}
-                      disabled={updateDefaultUnitMutation.isPending || isRowUnitUnchanged(item)}
-                      className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-[var(--primary)] hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      {updateDefaultUnitMutation.isPending ? 'Saving...' : 'Save Unit'}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveDefaultUnit(item)}
+                        disabled={updateDefaultUnitMutation.isPending || isRowUnitUnchanged(item)}
+                        className="rounded-lg border border-rose-200 px-2 py-1 text-xs font-semibold text-[var(--primary)] hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {updateDefaultUnitMutation.isPending ? 'Saving...' : 'Save Unit'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleSyncItemFromPurchases(item)}
+                        disabled={bootstrapMutation.isPending}
+                        className="rounded-lg border border-rose-700 bg-rose-600 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {bootstrapMutation.isPending && syncingItemId === String(item._id)
+                          ? 'Syncing...'
+                          : 'Sync Purchase'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

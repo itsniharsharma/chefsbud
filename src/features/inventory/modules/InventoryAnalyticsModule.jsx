@@ -142,13 +142,18 @@ export default function InventoryAnalyticsModule() {
               <div className="mt-3 h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={stockValueDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={2}>
+                    <Pie data={stockValueDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={1} minAngle={2}>
                       {stockValueDistribution.map((row, index) => (
                         <Cell key={`${row.itemId}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                       ))}
                     </Pie>
                     <Legend />
-                    <Tooltip formatter={(value) => formatCurrencyINR(value)} />
+                    <Tooltip
+                      formatter={(value, _name, entry) => {
+                        const raw = Number(entry?.payload?.valueRaw ?? value)
+                        return formatCurrencyINR(raw)
+                      }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
               </div>
@@ -162,7 +167,7 @@ export default function InventoryAnalyticsModule() {
               <div className="mt-3 h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={stockQuantityDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={2}>
+                    <Pie data={stockQuantityDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={1} minAngle={2}>
                       {stockQuantityDistribution.map((row, index) => (
                         <Cell key={`qty-${row.itemId}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                       ))}
@@ -170,8 +175,9 @@ export default function InventoryAnalyticsModule() {
                     <Legend />
                     <Tooltip
                       formatter={(value, _name, entry) => {
+                        const raw = Number(entry?.payload?.valueRaw ?? value)
                         const unit = String(entry?.payload?.stockUnit || '')
-                        return `${formatQuantity(value)}${unit ? ` ${unit}` : ''}`
+                        return `${formatQuantity(raw)}${unit ? ` ${unit}` : ''}`
                       }}
                     />
                   </PieChart>

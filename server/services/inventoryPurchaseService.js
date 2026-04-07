@@ -15,15 +15,15 @@ export function composePurchasePayload({ payload, itemById = new Map(), supplier
   const sourceType = String(payload?.sourceType || 'Supplier').trim()
   const invoiceDate = new Date(payload?.invoiceDate)
   const invoiceNumber = String(payload?.invoiceNumber || '').trim()
-  const gstNo = String(payload?.gstNo || '').trim()
+  const gstNo = String(payload?.gstNo ?? payload?.gst ?? '').trim()
 
-  const cgstPercent = toNonNegative(payload?.cgstPercent)
-  const sgstPercent = toNonNegative(payload?.sgstPercent)
-  const igstPercent = toNonNegative(payload?.igstPercent)
-  const deliveryCharge = toNonNegative(payload?.deliveryCharge)
+  const cgstPercent = toNonNegative(payload?.cgstPercent ?? payload?.cgst)
+  const sgstPercent = toNonNegative(payload?.sgstPercent ?? payload?.sgst)
+  const igstPercent = toNonNegative(payload?.igstPercent ?? payload?.igst)
+  const deliveryCharge = toNonNegative(payload?.deliveryCharge ?? payload?.delivery)
 
   const discountType = String(payload?.discountType || 'Fixed').trim() === 'Percentage' ? 'Percentage' : 'Fixed'
-  const discountValue = toNonNegative(payload?.discountValue)
+  const discountValue = toNonNegative(payload?.discountValue ?? payload?.discount)
   const paymentType = String(payload?.paymentType || 'Unpaid').trim() === 'Paid' ? 'Paid' : 'Unpaid'
 
   const items = Array.isArray(payload?.items) ? payload.items : []

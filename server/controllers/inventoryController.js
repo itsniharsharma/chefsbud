@@ -181,7 +181,10 @@ function purchaseBaseUnitExpression() {
 }
 
 function buildStockDistribution(rows = [], metricKey = 'estimatedStockValue', othersUnit = 'mixed') {
-  const candidates = rows.filter((row) => Number(row?.[metricKey] || 0) > 0)
+  const candidates = rows
+    .filter((row) => Number(row?.[metricKey] || 0) > 0)
+    .sort((a, b) => Number(b?.[metricKey] || 0) - Number(a?.[metricKey] || 0))
+
   const topRows = candidates.slice(0, 8)
   const topTotal = topRows.reduce((sum, row) => sum + Number(row?.[metricKey] || 0), 0)
   const remaining = candidates
@@ -189,21 +192,32 @@ function buildStockDistribution(rows = [], metricKey = 'estimatedStockValue', ot
     .reduce((sum, row) => sum + Number(row?.[metricKey] || 0), 0)
   const total = topTotal + remaining
 
-  const distribution = topRows.map((row) => ({
-    itemId: row.itemId,
-    name: row.name,
-    value: round2(Number(row?.[metricKey] || 0)),
-    stockUnit: row.stockUnit,
-    stockQuantity: row.stockQuantity,
-    estimatedStockValue: row.estimatedStockValue,
-    sharePercent: toPercent(row?.[metricKey], total),
-  }))
+  const distribution = topRows.map((row) => {
+    const rawValue = Number(row?.[metricKey] || 0)
+    const roundedValue =
+      metricKey === 'stockQuantity'
+        ? round6(rawValue)
+        : round2(rawValue)
+
+    return {
+      itemId: row.itemId,
+      name: row.name,
+      value: roundedValue > 0 ? roundedValue : rawValue,
+      valueRaw: rawValue,
+      stockUnit: row.stockUnit,
+      stockQuantity: row.stockQuantity,
+      estimatedStockValue: row.estimatedStockValue,
+      sharePercent: toPercent(rawValue, total),
+    }
+  })
 
   if (remaining > 0) {
+    const roundedRemaining = metricKey === 'stockQuantity' ? round6(remaining) : round2(remaining)
     distribution.push({
       itemId: 'others',
       name: 'Others',
-      value: round2(remaining),
+      value: roundedRemaining > 0 ? roundedRemaining : remaining,
+      valueRaw: remaining,
       stockUnit: othersUnit,
       stockQuantity: 0,
       estimatedStockValue: 0,
@@ -984,6 +998,20 @@ export async function listInventoryPurchaseRows(req, res, next) {
           _id: 1,
           invoiceDate: 1,
           invoiceNumber: 1,
+          gstNo: 1,
+          cgstPercent: 1,
+          sgstPercent: 1,
+          igstPercent: 1,
+          deliveryCharge: 1,
+          discountType: 1,
+          discountValue: 1,
+          totalDiscountAmount: 1,
+          subtotalAmount: 1,
+          taxableAmount: 1,
+          cgstAmount: 1,
+          sgstAmount: 1,
+          igstAmount: 1,
+          grandTotalAmount: 1,
           sourceType: 1,
           supplierNameSnapshot: 1,
           paymentType: 1,
@@ -1000,6 +1028,20 @@ export async function listInventoryPurchaseRows(req, res, next) {
           itemIndex: '$itemIndex',
           invoiceDate: '$invoiceDate',
           invoiceNumber: '$invoiceNumber',
+          gstNo: '$gstNo',
+          cgstPercent: '$cgstPercent',
+          sgstPercent: '$sgstPercent',
+          igstPercent: '$igstPercent',
+          deliveryCharge: '$deliveryCharge',
+          discountType: '$discountType',
+          discountValue: '$discountValue',
+          totalDiscountAmount: '$totalDiscountAmount',
+          subtotalAmount: '$subtotalAmount',
+          taxableAmount: '$taxableAmount',
+          cgstAmount: '$cgstAmount',
+          sgstAmount: '$sgstAmount',
+          igstAmount: '$igstAmount',
+          grandTotalAmount: '$grandTotalAmount',
           sourceType: '$sourceType',
           supplierName: '$supplierNameSnapshot',
           paymentType: '$paymentType',
@@ -1139,6 +1181,20 @@ export async function updateInventoryPurchaseItem(req, res, next) {
         itemIndex,
         invoiceDate: purchase.invoiceDate,
         invoiceNumber: purchase.invoiceNumber,
+        gstNo: purchase.gstNo,
+        cgstPercent: purchase.cgstPercent,
+        sgstPercent: purchase.sgstPercent,
+        igstPercent: purchase.igstPercent,
+        deliveryCharge: purchase.deliveryCharge,
+        discountType: purchase.discountType,
+        discountValue: purchase.discountValue,
+        totalDiscountAmount: purchase.totalDiscountAmount,
+        subtotalAmount: purchase.subtotalAmount,
+        taxableAmount: purchase.taxableAmount,
+        cgstAmount: purchase.cgstAmount,
+        sgstAmount: purchase.sgstAmount,
+        igstAmount: purchase.igstAmount,
+        grandTotalAmount: purchase.grandTotalAmount,
         sourceType: purchase.sourceType,
         supplierName: purchase.supplierNameSnapshot,
         paymentType: purchase.paymentType,
@@ -1843,6 +1899,7 @@ export async function bootstrapInventoryStock(req, res, next) {
     }
 
     const mode = String(req.body?.mode || 'bootstrap_and_reconcile').trim()
+    const inventoryItemId = String(req.body?.inventoryItemId || '').trim() || null
     let bootstrapResult = null
     let reconcileResult = null
 
@@ -1851,6 +1908,7 @@ export async function bootstrapInventoryStock(req, res, next) {
         restaurantId: restaurant._id,
         createdBy: req.user?._id || null,
         batchSize: Number(req.body?.batchSize || 200),
+        inventoryItemId,
       })
     }
 
@@ -1858,6 +1916,7 @@ export async function bootstrapInventoryStock(req, res, next) {
       reconcileResult = await reconcileStockFromSavedPurchases({
         restaurantId: restaurant._id,
         createdBy: req.user?._id || null,
+        inventoryItemId,
       })
     }
 

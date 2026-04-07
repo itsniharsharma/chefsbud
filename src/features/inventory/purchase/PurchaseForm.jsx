@@ -91,7 +91,7 @@ export default function PurchaseForm() {
     invoiceNumber: '',
     deliveryCharge: '',
     sgst: '',
-    paymentType: 'Unpaid',
+    paymentType: 'Paid',
     items: [initialRow()],
   })
 
@@ -255,12 +255,18 @@ export default function PurchaseForm() {
       invoiceDate: form.invoiceDate,
       invoiceNumber: form.invoiceNumber,
       gstNo: form.gstNo,
+      gst: form.gstNo,
       cgstPercent: toNumber(form.cgst),
+      cgst: toNumber(form.cgst),
       sgstPercent: toNumber(form.sgst),
+      sgst: toNumber(form.sgst),
       igstPercent: toNumber(form.igst),
+      igst: toNumber(form.igst),
       deliveryCharge: toNumber(form.deliveryCharge),
+      delivery: toNumber(form.deliveryCharge),
       discountType: form.discountType,
       discountValue: toNumber(form.discountValue),
+      discount: toNumber(form.discountValue),
       paymentType: form.paymentType,
       items: form.items.map((row) => ({
         itemId: row.itemId,
@@ -275,15 +281,6 @@ export default function PurchaseForm() {
       setStatusMessage(`Purchase saved successfully with id ${String(saved?._id || '').slice(-6)}.`)
       setForm((prev) => ({
         ...prev,
-        supplierId: '',
-        invoiceDate: getTodayDateString(),
-        invoiceNumber: '',
-        gstNo: '',
-        cgst: '',
-        igst: '',
-        discountValue: '',
-        deliveryCharge: '',
-        sgst: '',
         items: [initialRow()],
       }))
     } catch (error) {

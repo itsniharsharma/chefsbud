@@ -41,6 +41,20 @@ function mapPurchaseToRows(purchase) {
     itemIndex,
     invoiceDate: purchase.invoiceDate,
     invoiceNumber: purchase.invoiceNumber,
+    gstNo: purchase.gstNo,
+    cgstPercent: purchase.cgstPercent,
+    sgstPercent: purchase.sgstPercent,
+    igstPercent: purchase.igstPercent,
+    deliveryCharge: purchase.deliveryCharge,
+    discountType: purchase.discountType,
+    discountValue: purchase.discountValue,
+    totalDiscountAmount: purchase.totalDiscountAmount,
+    subtotalAmount: purchase.subtotalAmount,
+    taxableAmount: purchase.taxableAmount,
+    cgstAmount: purchase.cgstAmount,
+    sgstAmount: purchase.sgstAmount,
+    igstAmount: purchase.igstAmount,
+    grandTotalAmount: purchase.grandTotalAmount,
     sourceType: purchase.sourceType,
     supplierName: purchase.supplierNameSnapshot,
     paymentType: purchase.paymentType,
@@ -219,6 +233,7 @@ export function useBootstrapInventoryStock({ restaurantId }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.inventory.items(restaurantId), refetchType: 'active' })
       queryClient.invalidateQueries({ queryKey: ['inventory', 'stock', restaurantId], refetchType: 'active' })
       queryClient.invalidateQueries({ queryKey: ['inventory', 'purchases', restaurantId], refetchType: 'active' })
+      queryClient.invalidateQueries({ queryKey: queryKeys.inventory.analyticsOverview(restaurantId), refetchType: 'active' })
     },
   })
 }
@@ -258,7 +273,7 @@ export function useCreatePurchase({ restaurantId }) {
       }
 
       queryClient.invalidateQueries({
-        queryKey: ['inventory', 'purchases', restaurantId],
+        queryKey: queryKeys.inventory.analyticsOverview(restaurantId),
         refetchType: 'active',
       })
     },

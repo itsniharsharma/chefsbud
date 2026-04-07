@@ -128,6 +128,7 @@ router.post(
   '/stock/bootstrap',
   [
     body('batchSize').optional().isInt({ min: 25, max: 1000 }),
+    body('inventoryItemId').optional().isMongoId(),
     body('mode').optional().isIn(['bootstrap_only', 'reconcile_only', 'bootstrap_and_reconcile']),
   ],
   validateRequest,
@@ -227,7 +228,7 @@ router.get(
       const limit = Number(req.query?.limit || 100)
       const paymentType = String(req.query?.paymentType || '').trim()
       const sourceType = String(req.query?.sourceType || '').trim()
-      return `inventory:purchases:${restaurantId}:l:${limit}:p:${paymentType}:s:${sourceType}`
+      return `inventory:purchases:v2:${restaurantId}:l:${limit}:p:${paymentType}:s:${sourceType}`
     },
     tagsBuilder: (req) => [`inventory:purchases:${String(req.restaurant?._id || req.user?._id || '')}`],
   }),

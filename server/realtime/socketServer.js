@@ -10,6 +10,13 @@ const REDIS_ERROR_LOG_WINDOW_MS = Math.max(10_000, Number(process.env.SOCKET_RED
 const REDIS_ERROR_LOG_BURST_LIMIT = Math.max(1, Number(process.env.SOCKET_REDIS_ERROR_LOG_BURST_LIMIT || 3))
 const redisErrorBuckets = new Map()
 
+function isRedisAdapterEnabled() {
+  const explicit = String(process.env.SOCKET_ENABLE_REDIS_ADAPTER || '').trim().toLowerCase()
+  if (explicit === 'true' || explicit === '1' || explicit === 'yes') return true
+  if (explicit === 'false' || explicit === '0' || explicit === 'no') return false
+  return process.env.NODE_ENV === 'production'
+}
+
 function logSocketRedisError(eventKey, error) {
   const now = Date.now()
   const message = String(error?.message || `unknown_${eventKey}_error`)
@@ -77,6 +84,14 @@ function isValidMenuSlug(slug) {
 }
 
 async function configureRedisAdapter(io) {
+  if (!isRedisAdapterEnabled()) {
+    logger.info('socket_redis_adapter_skipped', {
+      reason: 'disabled_by_environment',
+      nodeEnv: process.env.NODE_ENV || 'development',
+    })
+    return
+  }
+
   const redisUrl = String(process.env.REDIS_URL || '').trim()
   if (!redisUrl) return
 

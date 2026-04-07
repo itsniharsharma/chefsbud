@@ -496,7 +496,13 @@ export async function getCurrentStock({ inventoryItemId, restaurantId, preferCac
   }
 }
 
-function buildBootstrapPurchaseEntries({ restaurantId, purchase, createdBy = null }) {
+function buildBootstrapPurchaseEntries({
+  restaurantId,
+  purchase,
+  createdBy = null,
+  inventoryItemIdFilter = '',
+}) {
+  const normalizedFilterItemId = toObjectIdString(inventoryItemIdFilter)
   const rows = Array.isArray(purchase?.items) ? purchase.items : []
   return rows
     .map((row, index) => {
@@ -504,6 +510,10 @@ function buildBootstrapPurchaseEntries({ restaurantId, purchase, createdBy = nul
       const quantity = Number(row?.quantity)
       const unit = String(row?.unit || '').trim()
       if (!inventoryItemId || !Number.isFinite(quantity) || quantity <= 0 || !unit) {
+        return null
+      }
+
+      if (normalizedFilterItemId && inventoryItemId !== normalizedFilterItemId) {
         return null
       }
 
@@ -556,11 +566,18 @@ async function filterExistingIdempotencyRows(restaurantId, rows = [], { session 
   })
 }
 
-export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy = null, batchSize = 200 } = {}) {
+export async function bootstrapStockFromSavedPurchases({
+  restaurantId,
+  createdBy = null,
+  batchSize = 200,
+  inventoryItemId = null,
+} = {}) {
   const tenantId = toObjectIdString(restaurantId)
   if (!tenantId) {
     throw new Error('restaurantId is required for bootstrap')
   }
+
+  const scopedItemId = toObjectIdString(inventoryItemId)
 
   const safeBatchSize = Math.max(25, Math.min(Number(batchSize || 200), 1000))
   let cursorCreatedAt = null
@@ -572,6 +589,9 @@ export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy
 
   while (true) {
     const query = { restaurantId: tenantId }
+    if (scopedItemId) {
+      query['items.itemId'] = scopedItemId
+    }
     if (cursorCreatedAt && cursorId) {
       query.$or = [
         { createdAt: { $gt: cursorCreatedAt } },
@@ -595,6 +615,7 @@ export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy
         restaurantId: tenantId,
         purchase,
         createdBy,
+        inventoryItemIdFilter: scopedItemId,
       })
 
       attemptedLedgerRows += rawRows.length
@@ -623,6 +644,7 @@ export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy
   }
 
   return {
+    inventoryItemId: scopedItemId || null,
     scannedPurchases,
     attemptedLedgerRows,
     insertedLedgerRows,
@@ -630,16 +652,38 @@ export async function bootstrapStockFromSavedPurchases({ restaurantId, createdBy
   }
 }
 
-export async function reconcileStockFromSavedPurchases({ restaurantId, createdBy = null } = {}) {
+export async function reconcileStockFromSavedPurchases({
+  restaurantId,
+  createdBy = null,
+  inventoryItemId = null,
+} = {}) {
   const tenantId = toObjectIdString(restaurantId)
   if (!tenantId) {
     throw new Error('restaurantId is required for reconciliation')
   }
 
+  const scopedItemId = toObjectIdString(inventoryItemId)
+  const tenantObjectId = new mongoose.Types.ObjectId(tenantId)
+  const scopedObjectId = scopedItemId ? new mongoose.Types.ObjectId(scopedItemId) : null
+
   const EPSILON = 0.000001
+  const aggregateMatch = { restaurantId: tenantObjectId }
+  if (scopedObjectId) {
+    aggregateMatch['items.itemId'] = scopedObjectId
+  }
+
   const aggregateRows = await InventoryPurchase.aggregate([
-    { $match: { restaurantId: new mongoose.Types.ObjectId(tenantId) } },
+    { $match: aggregateMatch },
     { $unwind: '$items' },
+    ...(scopedObjectId
+      ? [
+          {
+            $match: {
+              'items.itemId': scopedObjectId,
+            },
+          },
+        ]
+      : []),
     {
       $project: {
         _id: 0,
@@ -683,7 +727,12 @@ export async function reconcileStockFromSavedPurchases({ restaurantId, createdBy
     expectedByItem.set(itemId, current)
   }
 
-  const items = await InventoryItem.find({ restaurantId: tenantId })
+  const itemQuery = { restaurantId: tenantId }
+  if (scopedItemId) {
+    itemQuery._id = scopedItemId
+  }
+
+  const items = await InventoryItem.find(itemQuery)
     .select('_id currentStock currentStockUnit')
     .lean()
 
@@ -781,7 +830,8 @@ export async function reconcileStockFromSavedPurchases({ restaurantId, createdBy
   }
 
   return {
-    scannedPurchases: await InventoryPurchase.countDocuments({ restaurantId: tenantId }),
+    inventoryItemId: scopedItemId || null,
+    scannedPurchases: await InventoryPurchase.countDocuments(aggregateMatch),
     adjustedItems: insertedAdjustments,
     conflictItems: conflictItemIds.length,
     conflictItemIds,
