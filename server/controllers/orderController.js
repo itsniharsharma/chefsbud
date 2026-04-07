@@ -400,13 +400,15 @@ export async function updateOrderStatus(req, res, next) {
     }
 
     if (isCompleted && !wasCompleted) {
-      await runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id))
-      await runMetricsTask('rebuild_order_metrics_on_complete', () =>
-        rebuildOrderMetricsForDate({
-          restaurantId: restaurant._id,
-          date: order.completedAt || new Date(),
-        }),
-      )
+      await Promise.all([
+        runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id)),
+        runMetricsTask('rebuild_order_metrics_on_complete', () =>
+          rebuildOrderMetricsForDate({
+            restaurantId: restaurant._id,
+            date: order.completedAt || new Date(),
+          }),
+        ),
+      ])
     }
 
     invalidateCacheByTags(

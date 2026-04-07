@@ -13,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { useMemo } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { useInventoryRealtimeSync } from '../../../hooks/useInventoryRealtimeSync'
 import { useInventoryAnalyticsOverview } from '../../../hooks/useInventoryPurchaseQueries'
@@ -70,22 +71,34 @@ export default function InventoryAnalyticsModule() {
   const purchasing = data?.purchasing || {}
   const movement = data?.movement || {}
 
-  const sourceMixChart = (Array.isArray(purchasing.sourceMix) ? purchasing.sourceMix : []).map((row) => ({
-    name: row.sourceType,
-    invoices: Number(row.invoices || 0),
-    spend: Number(row.spend || 0),
-  }))
+  const sourceMixChart = useMemo(
+    () =>
+      (Array.isArray(purchasing.sourceMix) ? purchasing.sourceMix : []).map((row) => ({
+        name: row.sourceType,
+        invoices: Number(row.invoices || 0),
+        spend: Number(row.spend || 0),
+      })),
+    [purchasing.sourceMix],
+  )
 
-  const movementTrend = Array.isArray(movement.trend14d) ? movement.trend14d : []
-  const movementByType = Array.isArray(movement.byType) ? movement.byType : []
-  const stockValueDistribution = Array.isArray(stock.stockValueDistribution)
-    ? stock.stockValueDistribution
-    : []
-  const stockQuantityDistribution = Array.isArray(stock.stockQuantityDistribution)
-    ? stock.stockQuantityDistribution
-    : []
-  const topItemsByValue = Array.isArray(stock.topItemsByEstimatedValue) ? stock.topItemsByEstimatedValue : []
-  const topWastageItems = Array.isArray(movement.topWastageItems) ? movement.topWastageItems : []
+  const movementTrend = useMemo(() => (Array.isArray(movement.trend14d) ? movement.trend14d : []), [movement.trend14d])
+  const movementByType = useMemo(() => (Array.isArray(movement.byType) ? movement.byType : []), [movement.byType])
+  const stockValueDistribution = useMemo(
+    () => (Array.isArray(stock.stockValueDistribution) ? stock.stockValueDistribution : []),
+    [stock.stockValueDistribution],
+  )
+  const stockQuantityDistribution = useMemo(
+    () => (Array.isArray(stock.stockQuantityDistribution) ? stock.stockQuantityDistribution : []),
+    [stock.stockQuantityDistribution],
+  )
+  const topItemsByValue = useMemo(
+    () => (Array.isArray(stock.topItemsByEstimatedValue) ? stock.topItemsByEstimatedValue : []),
+    [stock.topItemsByEstimatedValue],
+  )
+  const topWastageItems = useMemo(
+    () => (Array.isArray(movement.topWastageItems) ? movement.topWastageItems : []),
+    [movement.topWastageItems],
+  )
 
   return (
     <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.08)] md:p-6">

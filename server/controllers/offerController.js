@@ -24,7 +24,10 @@ export async function getOffers(req, res, next) {
       return res.status(403).json({ message: 'Forbidden' })
     }
 
-    const offers = await Offer.find({ restaurantId: restaurant._id }).sort({ createdAt: -1 }).lean()
+    const offers = await Offer.find({ restaurantId: restaurant._id })
+      .sort({ createdAt: -1 })
+      .select(offerPreviewProjection)
+      .lean()
     return res.json(offers)
   } catch (error) {
     next(error)

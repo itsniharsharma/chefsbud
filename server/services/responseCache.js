@@ -164,8 +164,10 @@ async function writeToRedisCache({ key, status, payload, tags, ttlSeconds }) {
       await Promise.all(
         tagsToSync.map(async (tag) => {
           const tagKey = redisTagKey(tag)
-          await redis.sadd(tagKey, redisCacheKey(key))
-          await redis.expire(tagKey, Math.max(60, ttlSeconds + 30))
+          await Promise.all([
+            redis.sadd(tagKey, redisCacheKey(key)),
+            redis.expire(tagKey, Math.max(60, ttlSeconds + 30)),
+          ])
         }),
       )
     },

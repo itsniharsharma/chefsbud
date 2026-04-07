@@ -125,6 +125,8 @@ export function useInventoryAnalyticsOverview({ restaurantId }) {
     enabled: Boolean(restaurantId),
     queryFn: () => inventoryService.getAnalyticsOverview(),
     staleTime: 60_000,
+    gcTime: 5 * 60_000,
+    placeholderData: (previousData) => previousData,
     refetchInterval: hasRealtimeConnection ? false : 90_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
