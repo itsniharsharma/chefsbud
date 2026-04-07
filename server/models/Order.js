@@ -52,6 +52,7 @@ const orderSchema = new mongoose.Schema(
       default: [],
     },
     couponCode: { type: String, default: '' },
+    idempotencyKey: { type: String, default: '', trim: true, maxlength: 120 },
     customerNote: { type: String, default: '', trim: true, maxlength: 500 },
     totalAmount: { type: Number, required: true, min: 0 },
     paymentProvider: { type: String, enum: ['', 'razorpay', 'razorpay_me'], default: '' },
@@ -129,5 +130,9 @@ orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, deleted
 
 orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
 orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })
+orderSchema.index(
+  { restaurantId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true, $ne: '' } } },
+)
 
 export default mongoose.model('Order', orderSchema)

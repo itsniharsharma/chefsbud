@@ -37,6 +37,7 @@ router.post(
 		body('items.*.menuItemId').isString().trim().isMongoId(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
 		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
+		body('idempotencyKey').optional().isString().trim().isLength({ min: 8, max: 120 }),
 		body('customerNote').optional().isString().trim().isLength({ max: 500 }),
 	],
 	validateRequest,

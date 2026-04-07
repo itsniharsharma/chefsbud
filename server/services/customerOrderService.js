@@ -97,8 +97,10 @@ export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, flo
     floorNumber,
   })
 
-  const orderItems = await buildOrderItems(restaurant._id, items)
-  const offers = await Offer.find({ restaurantId: restaurant._id, active: true }).lean()
+  const [orderItems, offers] = await Promise.all([
+    buildOrderItems(restaurant._id, items),
+    Offer.find({ restaurantId: restaurant._id, active: true }).lean(),
+  ])
   const pricing = applyOffersToOrder({
     orderItems,
     offers,

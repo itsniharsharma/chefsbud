@@ -1,0 +1,16 @@
+{
+  "description": "Dual-mode simulation: steady normal traffic + explicit peak concurrency",
+  "steady": {
+    "executor": "constant-arrival-rate",
+    "duration": "20m",
+    "rate": 8,
+    "timeUnit": "1s",
+    "preAllocatedVUs": 30,
+    "maxVUs": 80
+  },
+  "peak": {
+    "executor": "constant-vus",
+    "vus": 80,
+    "duration": "15m"
+  }
+}

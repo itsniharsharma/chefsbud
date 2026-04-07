@@ -1,0 +1,16 @@
+{
+  "assumptions": {
+    "daysPerMonth": 30,
+    "mongoBaseClusterUsdPerMonth": 57,
+    "mongoReadUsdPerMillion": 0.2,
+    "mongoWriteUsdPerMillion": 0.5,
+    "mongoStorageUsdPerGbMonth": 0.25,
+    "mongoNetworkEgressUsdPerGb": 0.09,
+    "redisBaseUsdPerMonth": 15,
+    "redisMemoryUsdPerGbMonth": 5,
+    "redisOpUsdPerMillion": 0.08,
+    "backendInstanceUsdPerMonth": 25,
+    "backendInstancesPerRestaurant": 1,
+    "backendRequestUsdPerMillion": 1.2
+  }
+}

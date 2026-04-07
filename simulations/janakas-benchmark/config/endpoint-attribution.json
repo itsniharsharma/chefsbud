@@ -1,0 +1,54 @@
+{
+  "notes": "Read/write weights are workload-model estimates per request for Janakas flow; adjust using profiler traces for tighter accuracy.",
+  "endpoints": {
+    "qr_entry": {
+      "label": "GET /r/:restaurantSlug/t/:tableNumber",
+      "cacheable": false,
+      "estimatedReadsPerRequest": 0,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 0.2
+    },
+    "menu_fetch": {
+      "label": "GET /api/menu/:restaurantSlug",
+      "cacheable": true,
+      "estimatedReadsPerRequest": 3,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 0.8
+    },
+    "offer_preview": {
+      "label": "POST /api/offers/preview/:restaurantSlug",
+      "cacheable": false,
+      "estimatedReadsPerRequest": 2,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 1.1
+    },
+    "create_order": {
+      "label": "POST /api/orders",
+      "cacheable": false,
+      "estimatedReadsPerRequest": 4,
+      "estimatedWritesPerRequest": 3,
+      "computeWeight": 2.4
+    },
+    "track_table": {
+      "label": "GET /api/orders/track/:restaurantSlug/:tableNumber",
+      "cacheable": true,
+      "estimatedReadsPerRequest": 2,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 0.7
+    },
+    "track_order": {
+      "label": "GET /api/orders/track/:restaurantSlug/:tableNumber/:orderId",
+      "cacheable": true,
+      "estimatedReadsPerRequest": 1,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 0.6
+    },
+    "orders_board": {
+      "label": "GET /api/orders/:restaurantId?view=active",
+      "cacheable": true,
+      "estimatedReadsPerRequest": 5,
+      "estimatedWritesPerRequest": 0,
+      "computeWeight": 1.6
+    }
+  }
+}

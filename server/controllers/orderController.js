@@ -15,6 +15,10 @@ import {
   reserveStockForOrder,
 } from '../services/inventoryV2Service.js'
 import {
+  isOrderInventoryAsyncEnabled,
+} from '../services/orderInventoryQueueService.js'
+import { createOrderCreatedOutboxEvent } from '../services/orderOutboxService.js'
+import {
   getOrderInventoryBehavior,
   isInventoryConstraintError,
 } from '../config/inventoryRuntime.js'
@@ -638,8 +642,13 @@ export async function deleteOrder(req, res, next) {
 
 export async function createOrder(req, res, next) {
   try {
+    const totalStartedAt = Date.now()
     const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '', customerNote = '' } = req.body
+    const headerIdempotencyKey = String(req.headers['x-idempotency-key'] || '').trim()
+    const payloadIdempotencyKey = String(req.body?.idempotencyKey || '').trim()
+    const normalizedIdempotencyKey = (payloadIdempotencyKey || headerIdempotencyKey).slice(0, 120)
 
+    const draftStartedAt = Date.now()
     const draft = await buildCustomerOrderDraft({
       restaurantSlug,
       tableNumber,
@@ -647,51 +656,147 @@ export async function createOrder(req, res, next) {
       items,
       couponCode,
     })
+    const draftDurationMs = Date.now() - draftStartedAt
 
-    const order = await Order.create({
-      restaurantId: draft.restaurant._id,
-      restaurantSlug: draft.restaurantSlug,
-      floorNumber: draft.floorNumber,
-      tableNumber: draft.tableNumber,
-      items: draft.orderItems,
-      subtotalAmount: draft.pricing.subtotalAmount,
-      discountTotal: draft.pricing.discountTotal,
-      appliedOffers: draft.pricing.appliedOffers,
-      couponCode: draft.pricing.couponCodeApplied,
-      customerNote: String(customerNote || '').trim(),
-      totalAmount: draft.pricing.totalAmount,
-      paymentStatus: 'Unpaid',
-      orderStatus: 'Pending',
-      hiddenFromActive: false,
-      hiddenFromRecent: false,
-    })
+    if (normalizedIdempotencyKey) {
+      const existingOrder = await Order.findOne({
+        restaurantId: draft.restaurant._id,
+        idempotencyKey: normalizedIdempotencyKey,
+        isArchived: false,
+      }).lean()
+
+      if (existingOrder) {
+        logger.info('order_create_idempotent_replay', {
+          orderId: String(existingOrder._id || ''),
+          restaurantId: String(draft.restaurant._id || ''),
+          totalMs: Date.now() - totalStartedAt,
+          draftMs: draftDurationMs,
+        })
+        return res.status(200).json(existingOrder)
+      }
+    }
 
     const inventoryBehavior = getOrderInventoryBehavior()
-    if (inventoryBehavior.reserveOnCreate) {
-      try {
-        const reservationSession = await mongoose.startSession()
+    const useAsyncInventory = inventoryBehavior.reserveOnCreate && isOrderInventoryAsyncEnabled()
+
+    const createStartedAt = Date.now()
+    let order
+    try {
+      if (useAsyncInventory) {
+        const orderCreateSession = await mongoose.startSession()
         try {
-          await reservationSession.withTransaction(async () => {
-            await reserveStockForOrder({
+          await orderCreateSession.withTransaction(async () => {
+            const createdOrders = await Order.create(
+              [
+                {
+                  restaurantId: draft.restaurant._id,
+                  restaurantSlug: draft.restaurantSlug,
+                  floorNumber: draft.floorNumber,
+                  tableNumber: draft.tableNumber,
+                  items: draft.orderItems,
+                  subtotalAmount: draft.pricing.subtotalAmount,
+                  discountTotal: draft.pricing.discountTotal,
+                  appliedOffers: draft.pricing.appliedOffers,
+                  couponCode: draft.pricing.couponCodeApplied,
+                  idempotencyKey: normalizedIdempotencyKey,
+                  customerNote: String(customerNote || '').trim(),
+                  totalAmount: draft.pricing.totalAmount,
+                  paymentStatus: 'Unpaid',
+                  orderStatus: 'Pending',
+                  hiddenFromActive: false,
+                  hiddenFromRecent: false,
+                },
+              ],
+              { session: orderCreateSession },
+            )
+
+            order = createdOrders[0]
+
+            await createOrderCreatedOutboxEvent({
+              orderId: order._id,
               restaurantId: draft.restaurant._id,
-              order,
-              createdBy: null,
               policy: inventoryBehavior.consumptionPolicy,
               idempotencyPrefix: 'order',
-              session: reservationSession,
+              session: orderCreateSession,
             })
           })
         } finally {
-          reservationSession.endSession()
+          orderCreateSession.endSession()
         }
-      } catch (reservationError) {
-        logger.warn('order_inventory_reservation_failed', {
-          orderId: String(order?._id || ''),
-          restaurantId: String(draft?.restaurant?._id || ''),
-          message: reservationError?.message || 'inventory_reservation_failed',
+      } else {
+        order = await Order.create({
+          restaurantId: draft.restaurant._id,
+          restaurantSlug: draft.restaurantSlug,
+          floorNumber: draft.floorNumber,
+          tableNumber: draft.tableNumber,
+          items: draft.orderItems,
+          subtotalAmount: draft.pricing.subtotalAmount,
+          discountTotal: draft.pricing.discountTotal,
+          appliedOffers: draft.pricing.appliedOffers,
+          couponCode: draft.pricing.couponCodeApplied,
+          idempotencyKey: normalizedIdempotencyKey,
+          customerNote: String(customerNote || '').trim(),
+          totalAmount: draft.pricing.totalAmount,
+          paymentStatus: 'Unpaid',
+          orderStatus: 'Pending',
+          hiddenFromActive: false,
+          hiddenFromRecent: false,
         })
       }
+    } catch (createError) {
+      if (createError?.code === 11000 && normalizedIdempotencyKey) {
+        const duplicate = await Order.findOne({
+          restaurantId: draft.restaurant._id,
+          idempotencyKey: normalizedIdempotencyKey,
+          isArchived: false,
+        }).lean()
+        if (duplicate) {
+          logger.info('order_create_idempotent_duplicate_resolved', {
+            orderId: String(duplicate._id || ''),
+            restaurantId: String(draft.restaurant._id || ''),
+            totalMs: Date.now() - totalStartedAt,
+            draftMs: draftDurationMs,
+          })
+          return res.status(200).json(duplicate)
+        }
+      }
+      throw createError
     }
+    const createDurationMs = Date.now() - createStartedAt
+
+    const inventoryStartedAt = Date.now()
+    let inventoryMode = 'skipped'
+    if (inventoryBehavior.reserveOnCreate) {
+      if (useAsyncInventory) {
+        inventoryMode = 'async-outbox'
+      } else {
+        inventoryMode = 'sync'
+        try {
+          const reservationSession = await mongoose.startSession()
+          try {
+            await reservationSession.withTransaction(async () => {
+              await reserveStockForOrder({
+                restaurantId: draft.restaurant._id,
+                order,
+                createdBy: null,
+                policy: inventoryBehavior.consumptionPolicy,
+                idempotencyPrefix: 'order',
+                session: reservationSession,
+              })
+            })
+          } finally {
+            reservationSession.endSession()
+          }
+        } catch (reservationError) {
+          logger.warn('order_inventory_reservation_failed', {
+            orderId: String(order?._id || ''),
+            restaurantId: String(draft?.restaurant?._id || ''),
+            message: reservationError?.message || 'inventory_reservation_failed',
+          })
+        }
+      }
+    }
+    const inventoryDurationMs = Date.now() - inventoryStartedAt
 
     invalidateCacheByTags(
       buildOrderCacheTags({
@@ -706,6 +811,16 @@ export async function createOrder(req, res, next) {
       type: 'created',
       orderId: order._id,
       extra: { orderStatus: order.orderStatus },
+    })
+
+    logger.info('order_create_timing', {
+      orderId: String(order?._id || ''),
+      restaurantId: String(draft?.restaurant?._id || ''),
+      draftMs: draftDurationMs,
+      createMs: createDurationMs,
+      inventoryMs: inventoryDurationMs,
+      inventoryMode,
+      totalMs: Date.now() - totalStartedAt,
     })
 
     return res.status(201).json(order)

@@ -4,7 +4,6 @@ import InventoryItem from '../models/InventoryItem.js'
 import InventoryLocation from '../models/InventoryLocation.js'
 import InventoryReservation from '../models/InventoryReservation.js'
 import Recipe from '../models/Recipe.js'
-import RecipeVersion from '../models/RecipeVersion.js'
 import { addLedgerEntries } from './inventoryService.js'
 
 function toObjectIdString(value) {
@@ -33,6 +32,143 @@ function unitToBase(unit = '') {
     return { unit: 'unit', factor: 1 }
   }
   throw new Error(`Unsupported unit conversion: ${unit}`)
+}
+
+function balanceKey(locationId, inventoryItemId) {
+  return `${toObjectIdString(locationId)}:${toObjectIdString(inventoryItemId)}`
+}
+
+function aggregateBalanceDeltas(rows = []) {
+  const deltas = new Map()
+
+  for (const row of rows) {
+    const locationId = toObjectIdString(row?.locationId)
+    const inventoryItemId = toObjectIdString(row?.inventoryItemId)
+    if (!locationId || !inventoryItemId) continue
+
+    const onHandDelta = Number(row?.onHandDelta || 0)
+    const reservedDelta = Number(row?.reservedDelta || 0)
+    if (!Number.isFinite(onHandDelta) || !Number.isFinite(reservedDelta)) {
+      throw new Error('Invalid inventory balance delta')
+    }
+
+    const baseUnit = String(row?.baseUnit || row?.unit || 'unit').trim() || 'unit'
+    const key = balanceKey(locationId, inventoryItemId)
+    const current = deltas.get(key) || {
+      locationId,
+      inventoryItemId,
+      baseUnit,
+      onHandDelta: 0,
+      reservedDelta: 0,
+    }
+
+    if (current.baseUnit !== baseUnit) {
+      throw new Error('Cannot mix balance units for the same inventory item in one batch')
+    }
+
+    current.onHandDelta = round6(current.onHandDelta + onHandDelta)
+    current.reservedDelta = round6(current.reservedDelta + reservedDelta)
+    deltas.set(key, current)
+  }
+
+  return [...deltas.values()]
+}
+
+async function applyBalanceBatch({ restaurantId, deltas = [], policy = 'soft', session = null }) {
+  const tenantId = toObjectIdString(restaurantId)
+  if (!tenantId || !Array.isArray(deltas) || !deltas.length) {
+    return { updatedCount: 0 }
+  }
+
+  const normalized = aggregateBalanceDeltas(deltas)
+  const groupedByLocation = new Map()
+
+  for (const delta of normalized) {
+    const locationKey = toObjectIdString(delta.locationId)
+    if (!groupedByLocation.has(locationKey)) {
+      groupedByLocation.set(locationKey, [])
+    }
+    groupedByLocation.get(locationKey).push(delta)
+  }
+
+  const bulkOps = []
+
+  for (const [locationId, locationDeltas] of groupedByLocation.entries()) {
+    const itemIds = [...new Set(locationDeltas.map((row) => toObjectIdString(row.inventoryItemId)).filter(Boolean))]
+    if (!itemIds.length) continue
+
+    const existingBalances = await InventoryBalance.find({
+      restaurantId: tenantId,
+      locationId,
+      inventoryItemId: { $in: itemIds },
+    })
+      .select('_id inventoryItemId onHandQty reservedQty baseUnit')
+      .session(session || null)
+      .lean()
+
+    const balanceByItemId = new Map(existingBalances.map((row) => [String(row.inventoryItemId), row]))
+
+    for (const delta of locationDeltas) {
+      const existing = balanceByItemId.get(delta.inventoryItemId)
+      const currentOnHand = Number(existing?.onHandQty || 0)
+      const currentReserved = Number(existing?.reservedQty || 0)
+      const nextOnHand = round6(currentOnHand + Number(delta.onHandDelta || 0))
+      const nextReserved = round6(currentReserved + Number(delta.reservedDelta || 0))
+      const nextAvailable = round6(nextOnHand - Math.max(0, nextReserved))
+
+      if (nextReserved < -0.000001) {
+        throw new Error('Reserved stock cannot become negative')
+      }
+
+      if (policy === 'hard' && nextAvailable < -0.000001) {
+        throw new Error('Insufficient available stock under hard policy')
+      }
+
+      if (policy === 'soft' && nextAvailable < -0.000001) {
+        // allow soft negative availability while still recording full traceability
+      }
+
+      const update = {
+        $set: {
+          onHandQty: nextOnHand,
+          reservedQty: Math.max(0, nextReserved),
+          availableQty: nextAvailable,
+        },
+      }
+
+      if (!existing) {
+        update.$setOnInsert = {
+          restaurantId: tenantId,
+          locationId,
+          inventoryItemId: delta.inventoryItemId,
+          baseUnit: delta.baseUnit,
+          onHandQty: nextOnHand,
+          reservedQty: Math.max(0, nextReserved),
+          availableQty: nextAvailable,
+          rowVersion: 0,
+        }
+      }
+
+      bulkOps.push({
+        updateOne: {
+          filter: existing
+            ? { _id: existing._id }
+            : { restaurantId: tenantId, locationId, inventoryItemId: delta.inventoryItemId },
+          update,
+          upsert: true,
+        },
+      })
+    }
+  }
+
+  if (bulkOps.length) {
+    await InventoryBalance.bulkWrite(bulkOps, {
+      ordered: true,
+      session: session || undefined,
+    })
+  }
+
+  return { updatedCount: bulkOps.length }
 }
 
 export async function ensureDefaultInventoryLocation(restaurantId, { session = null } = {}) {
@@ -83,74 +219,6 @@ export async function ensureDefaultInventoryLocation(restaurantId, { session = n
   return created[0].toObject()
 }
 
-async function ensureBalanceRow({ restaurantId, locationId, inventoryItemId, baseUnit, session = null }) {
-  const tenantId = toObjectIdString(restaurantId)
-  const locId = toObjectIdString(locationId)
-  const itemId = toObjectIdString(inventoryItemId)
-
-  let balance = await InventoryBalance.findOne({
-    restaurantId: tenantId,
-    locationId: locId,
-    inventoryItemId: itemId,
-  }).session(session || null)
-
-  if (balance) return balance
-
-  const created = await InventoryBalance.create(
-    [
-      {
-        restaurantId: tenantId,
-        locationId: locId,
-        inventoryItemId: itemId,
-        baseUnit,
-        onHandQty: 0,
-        reservedQty: 0,
-        availableQty: 0,
-      },
-    ],
-    { session: session || undefined },
-  )
-
-  return created[0]
-}
-
-async function applyBalanceDelta({
-  restaurantId,
-  locationId,
-  inventoryItemId,
-  baseUnit,
-  onHandDelta = 0,
-  reservedDelta = 0,
-  policy = 'soft',
-  session = null,
-}) {
-  const balance = await ensureBalanceRow({ restaurantId, locationId, inventoryItemId, baseUnit, session })
-
-  const nextOnHand = round6(Number(balance.onHandQty || 0) + Number(onHandDelta || 0))
-  const nextReserved = round6(Number(balance.reservedQty || 0) + Number(reservedDelta || 0))
-  const nextAvailable = round6(nextOnHand - nextReserved)
-
-  if (nextReserved < -0.000001) {
-    throw new Error('Reserved stock cannot become negative')
-  }
-
-  if (policy === 'hard' && nextAvailable < -0.000001) {
-    throw new Error('Insufficient available stock under hard policy')
-  }
-
-  if (policy === 'soft' && nextAvailable < -0.000001) {
-    // allow soft negative availability while still recording full traceability
-  }
-
-  balance.onHandQty = nextOnHand
-  balance.reservedQty = Math.max(0, nextReserved)
-  balance.availableQty = round6(nextOnHand - balance.reservedQty)
-  balance.rowVersion = Number(balance.rowVersion || 0) + 1
-  await balance.save({ session: session || undefined })
-
-  return balance
-}
-
 async function getDemandRowsFromOrderItems({ restaurantId, orderItems = [], session = null }) {
   const menuItemIds = [...new Set(orderItems.map((item) => toObjectIdString(item?.menuItemId)).filter(Boolean))]
   if (!menuItemIds.length) return []
@@ -166,8 +234,6 @@ async function getDemandRowsFromOrderItems({ restaurantId, orderItems = [], sess
   const recipeByMenuItemId = new Map(recipes.map((row) => [toObjectIdString(row.menuItemId), row]))
 
   const demandByItem = new Map()
-  const recipeVersionRows = []
-
   for (const orderItem of orderItems) {
     const menuItemId = toObjectIdString(orderItem?.menuItemId)
     const orderQty = Number(orderItem?.quantity || 0)
@@ -190,13 +256,6 @@ async function getDemandRowsFromOrderItems({ restaurantId, orderItems = [], sess
       }
     }).filter((row) => row.inventoryItemId && row.quantity > 0)
 
-    recipeVersionRows.push({
-      restaurantId,
-      menuItemId,
-      version,
-      ingredients: normalizedIngredients,
-    })
-
     for (const ingredient of normalizedIngredients) {
       const key = ingredient.inventoryItemId
       const current = demandByItem.get(key) || {
@@ -212,32 +271,6 @@ async function getDemandRowsFromOrderItems({ restaurantId, orderItems = [], sess
       current.recipeVersion = Math.max(current.recipeVersion, version)
       demandByItem.set(key, current)
     }
-  }
-
-  if (recipeVersionRows.length) {
-    const ops = recipeVersionRows.map((row) => ({
-      updateOne: {
-        filter: {
-          restaurantId: row.restaurantId,
-          menuItemId: row.menuItemId,
-          version: row.version,
-        },
-        update: {
-          $setOnInsert: {
-            restaurantId: row.restaurantId,
-            menuItemId: row.menuItemId,
-            version: row.version,
-            ingredients: row.ingredients,
-          },
-        },
-        upsert: true,
-      },
-    }))
-
-    await RecipeVersion.bulkWrite(ops, {
-      ordered: false,
-      session: session || undefined,
-    })
   }
 
   return [...demandByItem.values()]
@@ -282,25 +315,39 @@ export async function reserveStockForOrder({
   const itemById = new Map(items.map((row) => [String(row._id), row]))
   const expiresAt = new Date(Date.now() + Math.max(5, Number(reservationTtlMinutes || 240)) * 60 * 1000)
 
+  const idempotencyKeys = demandRows.map((demand) => `${idempotencyPrefix}:${orderId}:reserve:${demand.inventoryItemId}`)
+  const existingReservations = idempotencyKeys.length
+    ? await InventoryReservation.find({
+      restaurantId: tenantId,
+      idempotencyKey: { $in: idempotencyKeys },
+    })
+      .select('idempotencyKey')
+      .session(session || null)
+      .lean()
+    : []
+  const existingIdempotencyKeys = new Set(existingReservations.map((row) => String(row.idempotencyKey || '')))
+
   const ledgerEntries = []
   const reservationOps = []
+  const balanceDeltas = []
 
   for (const demand of demandRows) {
     const item = itemById.get(demand.inventoryItemId)
     if (!item) continue
 
-    await applyBalanceDelta({
+    balanceDeltas.push({
       restaurantId: tenantId,
       locationId: defaultLocation._id,
       inventoryItemId: demand.inventoryItemId,
       baseUnit: demand.unit,
       reservedDelta: demand.quantity,
       onHandDelta: 0,
-      policy,
-      session,
     })
 
     const idempotencyKey = `${idempotencyPrefix}:${orderId}:reserve:${demand.inventoryItemId}`
+    if (existingIdempotencyKeys.has(idempotencyKey)) {
+      continue
+    }
 
     reservationOps.push({
       updateOne: {
@@ -347,6 +394,13 @@ export async function reserveStockForOrder({
     })
   }
 
+  await applyBalanceBatch({
+    restaurantId: tenantId,
+    deltas: balanceDeltas,
+    policy,
+    session,
+  })
+
   if (reservationOps.length) {
     await InventoryReservation.bulkWrite(reservationOps, {
       ordered: false,
@@ -378,29 +432,42 @@ export async function releaseReservationsForOrder({
     restaurantId: tenantId,
     orderId: normalizedOrderId,
     status: 'active',
-  }).session(session || null)
+  })
+    .session(session || null)
+    .lean()
 
   if (!reservations.length) {
     return { releasedCount: 0 }
   }
 
   const ledgerEntries = []
+  const balanceDeltas = []
+  const reservationOps = []
 
   for (const row of reservations) {
-    await applyBalanceDelta({
+    const reservedQty = Number(row.reservedQty || 0)
+    if (reservedQty <= 0) continue
+
+    balanceDeltas.push({
       restaurantId: tenantId,
       locationId: row.locationId,
       inventoryItemId: row.inventoryItemId,
       baseUnit: row.unit,
-      reservedDelta: -Number(row.reservedQty || 0),
+      reservedDelta: -reservedQty,
       onHandDelta: 0,
-      policy: 'soft',
-      session,
     })
 
-    row.releasedQty = Number(row.reservedQty || 0)
-    row.status = 'released'
-    await row.save({ session: session || undefined })
+    reservationOps.push({
+      updateOne: {
+        filter: { _id: row._id },
+        update: {
+          $set: {
+            releasedQty: reservedQty,
+            status: 'released',
+          },
+        },
+      },
+    })
 
     ledgerEntries.push({
       restaurantId: tenantId,
@@ -415,6 +482,20 @@ export async function releaseReservationsForOrder({
       metadata: { reason },
       createdBy,
       idempotencyKey: `order:${normalizedOrderId}:release:${String(row.inventoryItemId)}`,
+    })
+  }
+
+  await applyBalanceBatch({
+    restaurantId: tenantId,
+    deltas: balanceDeltas,
+    policy: 'soft',
+    session,
+  })
+
+  if (reservationOps.length) {
+    await InventoryReservation.bulkWrite(reservationOps, {
+      ordered: true,
+      session: session || undefined,
     })
   }
 
@@ -443,32 +524,42 @@ export async function consumeReservationsForOrder({
     restaurantId: tenantId,
     orderId: normalizedOrderId,
     status: 'active',
-  }).session(session || null)
+  })
+    .session(session || null)
+    .lean()
 
   if (!reservations.length) {
     return { consumedCount: 0 }
   }
 
   const ledgerEntries = []
+  const balanceDeltas = []
+  const reservationOps = []
 
   for (const row of reservations) {
     const qty = Number(row.reservedQty || 0)
     if (qty <= 0) continue
 
-    await applyBalanceDelta({
+    balanceDeltas.push({
       restaurantId: tenantId,
       locationId: row.locationId,
       inventoryItemId: row.inventoryItemId,
       baseUnit: row.unit,
       reservedDelta: -qty,
       onHandDelta: -qty,
-      policy,
-      session,
     })
 
-    row.consumedQty = qty
-    row.status = 'consumed'
-    await row.save({ session: session || undefined })
+    reservationOps.push({
+      updateOne: {
+        filter: { _id: row._id },
+        update: {
+          $set: {
+            consumedQty: qty,
+            status: 'consumed',
+          },
+        },
+      },
+    })
 
     ledgerEntries.push({
       restaurantId: tenantId,
@@ -488,6 +579,20 @@ export async function consumeReservationsForOrder({
       },
       createdBy,
       idempotencyKey: `order:${normalizedOrderId}:cycle:${Number(cycle || 1)}:consumption:${String(row.inventoryItemId)}`,
+    })
+  }
+
+  await applyBalanceBatch({
+    restaurantId: tenantId,
+    deltas: balanceDeltas,
+    policy,
+    session,
+  })
+
+  if (reservationOps.length) {
+    await InventoryReservation.bulkWrite(reservationOps, {
+      ordered: true,
+      session: session || undefined,
     })
   }
 
