@@ -1,9 +1,15 @@
 import MenuItem from '../models/MenuItem.js'
 import Offer from '../models/Offer.js'
-import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import mongoose from 'mongoose'
 import { applyOffersToOrder } from './offerEngine.js'
+import {
+  buildOrderDraftItemsHash,
+  getCachedDraftResult,
+  resolveCatalogVersion,
+  resolveRestaurantIdentityBySlug,
+  setCachedDraftResult,
+} from './orderDraftCache.js'
 
 function buildHttpError(message, statusCode) {
   const error = new Error(message)
@@ -54,11 +60,9 @@ async function buildOrderItems(restaurantId, items) {
 }
 
 async function resolveRestaurantAndTable({ restaurantSlug, tableNumber, floorNumber }) {
-  const restaurant = await Restaurant.findOne({ slug: restaurantSlug })
-    .select('_id name slug paymentConfig')
-    .lean()
+  const restaurantLookup = await resolveRestaurantIdentityBySlug(restaurantSlug)
 
-  if (!restaurant) {
+  if (!restaurantLookup) {
     throw buildHttpError('Restaurant not found', 404)
   }
 
@@ -70,41 +74,80 @@ async function resolveRestaurantAndTable({ restaurantSlug, tableNumber, floorNum
   const parsedFloorNumber = Number(floorNumber)
   const normalizedFloorNumber = Number.isFinite(parsedFloorNumber) && parsedFloorNumber >= 1 ? Math.floor(parsedFloorNumber) : null
 
-  const table = await Table.findOne({
-    restaurantId: restaurant._id,
-    tableNumber: normalizedTableNumber,
-    active: true,
-    ...(normalizedFloorNumber ? { floorNumber: normalizedFloorNumber } : {}),
-  })
-    .select('tableNumber floorNumber active')
-    .lean()
-
-  if (!table) {
-    throw buildHttpError('Table not found for this restaurant', 404)
-  }
-
   return {
-    restaurant,
+    restaurant: {
+      _id: restaurantLookup.restaurantId,
+      slug: restaurantLookup.restaurantSlug,
+    },
     normalizedTableNumber,
-    resolvedFloorNumber: Number(table.floorNumber || normalizedFloorNumber || 1),
+    requestedFloorNumber: normalizedFloorNumber,
   }
 }
 
 export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, floorNumber, items, couponCode = '' }) {
-  const { restaurant, normalizedTableNumber, resolvedFloorNumber } = await resolveRestaurantAndTable({
+  const { restaurant, normalizedTableNumber, requestedFloorNumber } = await resolveRestaurantAndTable({
     restaurantSlug,
     tableNumber,
     floorNumber,
   })
 
+  const itemsHash = buildOrderDraftItemsHash(items, couponCode)
+  const menuVersionPromise = resolveCatalogVersion(restaurant._id)
+  const tablePromise = Table.findOne({
+    restaurantId: restaurant._id,
+    tableNumber: normalizedTableNumber,
+    active: true,
+    ...(requestedFloorNumber ? { floorNumber: requestedFloorNumber } : {}),
+  })
+    .select('tableNumber floorNumber')
+    .lean()
+
+  const [menuVersion, table] = await Promise.all([menuVersionPromise, tablePromise])
+
+  if (!table) {
+    throw buildHttpError('Table not found for this restaurant', 404)
+  }
+
+  const cachedDraft = await getCachedDraftResult({
+    restaurantId: restaurant._id,
+    menuVersion,
+    itemsHash,
+  })
+
+  if (cachedDraft) {
+    return {
+      ...cachedDraft,
+      restaurant,
+      tableNumber: normalizedTableNumber,
+      floorNumber: Number(table.floorNumber || requestedFloorNumber || 1),
+      cacheHit: true,
+    }
+  }
+
   const [orderItems, offers] = await Promise.all([
     buildOrderItems(restaurant._id, items),
-    Offer.find({ restaurantId: restaurant._id, active: true }).lean(),
+    Offer.find({ restaurantId: restaurant._id, active: true })
+      .select('name ruleType stackingPolicy priority conditions actions couponCode active startTime endTime createdAt updatedAt')
+      .lean(),
   ])
   const pricing = applyOffersToOrder({
     orderItems,
     offers,
     couponCode,
+  })
+
+  await setCachedDraftResult({
+    restaurantId: restaurant._id,
+    menuVersion,
+    itemsHash,
+    draft: {
+      restaurant,
+      orderItems,
+      pricing,
+      restaurantSlug: restaurant.slug,
+      tableNumber: normalizedTableNumber,
+      floorNumber: Number(table.floorNumber || requestedFloorNumber || 1),
+    },
   })
 
   return {
@@ -113,6 +156,7 @@ export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, flo
     pricing,
     restaurantSlug: restaurant.slug,
     tableNumber: normalizedTableNumber,
-    floorNumber: resolvedFloorNumber,
+    floorNumber: Number(table.floorNumber || requestedFloorNumber || 1),
+    cacheHit: false,
   }
 }

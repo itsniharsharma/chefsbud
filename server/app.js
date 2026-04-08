@@ -39,7 +39,8 @@ const globalLimiter = createRateLimiter({
   keyFn: (req) => req.ip,
   skip: (req) =>
     req.path === '/api/health' ||
-    (req.method === 'GET' && (req.path.startsWith('/api/menu/') || req.path.startsWith('/api/orders/track/'))),
+    (req.method === 'GET' && (req.path.startsWith('/api/menu/') || req.path.startsWith('/api/orders/track/'))) ||
+    (req.method === 'POST' && req.path === '/api/orders')
 })
 
 const originConfig = (process.env.CORS_ORIGIN || 'http://localhost:5173')

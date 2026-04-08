@@ -14,7 +14,7 @@ import {
 } from '../controllers/orderController.js'
 import { requireAuth } from '../middleware/auth.js'
 import { requireActiveBilling } from '../middleware/billing.js'
-import { createRateLimiter } from '../middleware/rateLimit.js'
+import { createRateLimiter, shouldApplyOrderCreateBurstLimit } from '../middleware/rateLimit.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
 
@@ -27,8 +27,20 @@ const publicOrderRatingLimiter = createRateLimiter({
 	keyFn: (req) => req.ip,
 })
 
+const orderCreateSuspiciousLimiter = createRateLimiter({
+	id: 'orders-create-suspicious',
+	capacity: Number(process.env.RATE_LIMIT_ORDER_CREATE_CAPACITY || 12),
+	windowMs: Number(process.env.RATE_LIMIT_ORDER_CREATE_WINDOW_MS || 60_000),
+	keyFn: (req) => req.ip,
+	skip: (req) => !shouldApplyOrderCreateBurstLimit(req),
+})
+
 router.post(
 	'/',
+	(req, _res, next) => {
+		req._orderCreateStartedAtNs = process.hrtime.bigint()
+		next()
+	},
 	[
 		body('restaurantSlug').isString().trim().isLength({ min: 1, max: 140 }),
 		body('tableNumber').isInt({ min: 1, max: 500 }),
@@ -41,6 +53,7 @@ router.post(
 		body('customerNote').optional().isString().trim().isLength({ max: 500 }),
 	],
 	validateRequest,
+		orderCreateSuspiciousLimiter,
 	createOrder,
 )
 router.get(

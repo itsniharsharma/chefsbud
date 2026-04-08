@@ -108,7 +108,7 @@ orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, completedAt:
 orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, createdAt: -1 })
 
 // Active table transfer checks and updates.
-orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 })
+orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, tableNumber: 1 })
 
 // Public table order timeline and status checks.
 orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
@@ -121,12 +121,6 @@ orderSchema.index({ isArchived: 1, archivedAt: 1, orderStatus: 1 })
 
 // Analytics backfill scanner prefers oldest completed, untracked records.
 orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, analyticsTrackedAt: 1, completedAt: 1, createdAt: 1 })
-
-// Manager listing by table within restaurant (fallback for non-public flows).
-orderSchema.index({ restaurantId: 1, isArchived: 1, tableNumber: 1, createdAt: -1 })
-
-// Optional cleanup/backoffice path for hidden active rows.
-orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, deletedByOwnerAt: 1 })
 
 orderSchema.index({ providerOrderId: 1 }, { unique: true, sparse: true })
 orderSchema.index({ providerPaymentId: 1 }, { unique: true, sparse: true })

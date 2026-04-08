@@ -58,8 +58,8 @@ function buildTargetIndexSpecs() {
       options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_floorNumber_1_createdAt_-1' },
     },
     {
-      key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, tableNumber: 1, createdAt: -1 },
-      options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_floorNumber_1_tableNumber_1_createdAt_-1' },
+      key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNumber: 1, tableNumber: 1 },
+      options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_floorNumber_1_tableNumber_1' },
     },
     {
       key: { restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 },
@@ -76,14 +76,6 @@ function buildTargetIndexSpecs() {
     {
       key: { restaurantId: 1, isArchived: 1, orderStatus: 1, analyticsTrackedAt: 1, completedAt: 1, createdAt: 1 },
       options: { name: 'restaurantId_1_isArchived_1_orderStatus_1_analyticsTrackedAt_1_completedAt_1_createdAt_1' },
-    },
-    {
-      key: { restaurantId: 1, isArchived: 1, tableNumber: 1, createdAt: -1 },
-      options: { name: 'restaurantId_1_isArchived_1_tableNumber_1_createdAt_-1' },
-    },
-    {
-      key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, deletedByOwnerAt: 1 },
-      options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_deletedByOwnerAt_1' },
     },
     {
       key: { providerOrderId: 1 },

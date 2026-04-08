@@ -12,7 +12,6 @@ import {
 } from '../services/inventoryService.js'
 import {
   consumeReservationsForOrder,
-  reserveStockForOrder,
 } from '../services/inventoryV2Service.js'
 import {
   isOrderInventoryAsyncEnabled,
@@ -83,6 +82,15 @@ function runNonCriticalTask(taskName, taskFn) {
       })
     }
   })
+}
+
+function hrNowNs() {
+  return process.hrtime.bigint()
+}
+
+function nsToMs(startNs, endNs = hrNowNs()) {
+  if (typeof startNs !== 'bigint' || typeof endNs !== 'bigint') return 0
+  return Number(endNs - startNs) / 1_000_000
 }
 
 async function runMetricsTask(taskName, taskFn) {
@@ -642,12 +650,22 @@ export async function deleteOrder(req, res, next) {
 
 export async function createOrder(req, res, next) {
   try {
+    const traceEnabled = String(process.env.ORDER_CREATE_TRACE_TIMING || 'false') === 'true'
+    if (traceEnabled) console.time('order_total')
+
+    const controllerStartedAtNs = hrNowNs()
+    const routeStartedAtNs = typeof req?._orderCreateStartedAtNs === 'bigint' ? req._orderCreateStartedAtNs : null
+    const validatedAtNs = typeof req?._orderCreateValidatedAtNs === 'bigint' ? req._orderCreateValidatedAtNs : null
+    const middlewareAndValidationMs = routeStartedAtNs ? nsToMs(routeStartedAtNs, controllerStartedAtNs) : 0
+    const validationMs = routeStartedAtNs && validatedAtNs ? nsToMs(routeStartedAtNs, validatedAtNs) : 0
+
     const totalStartedAt = Date.now()
     const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '', customerNote = '' } = req.body
     const headerIdempotencyKey = String(req.headers['x-idempotency-key'] || '').trim()
     const payloadIdempotencyKey = String(req.body?.idempotencyKey || '').trim()
     const normalizedIdempotencyKey = (payloadIdempotencyKey || headerIdempotencyKey).slice(0, 120)
 
+    if (traceEnabled) console.time('draft')
     const draftStartedAt = Date.now()
     const draft = await buildCustomerOrderDraft({
       restaurantSlug,
@@ -657,34 +675,37 @@ export async function createOrder(req, res, next) {
       couponCode,
     })
     const draftDurationMs = Date.now() - draftStartedAt
+    if (traceEnabled) console.timeEnd('draft')
 
-    if (normalizedIdempotencyKey) {
-      const existingOrder = await Order.findOne({
-        restaurantId: draft.restaurant._id,
-        idempotencyKey: normalizedIdempotencyKey,
-        isArchived: false,
-      }).lean()
+    const inventoryBehavior = getOrderInventoryBehavior()
+    const asyncInventoryEnabled = isOrderInventoryAsyncEnabled()
 
-      if (existingOrder) {
-        logger.info('order_create_idempotent_replay', {
-          orderId: String(existingOrder._id || ''),
-          restaurantId: String(draft.restaurant._id || ''),
-          totalMs: Date.now() - totalStartedAt,
-          draftMs: draftDurationMs,
-        })
-        return res.status(200).json(existingOrder)
+    if (inventoryBehavior.reserveOnCreate && !asyncInventoryEnabled) {
+      logger.error('order_inventory_async_mode_required', {
+        restaurantSlug: String(restaurantSlug || ''),
+        tableNumber: Number(tableNumber || 0),
+        rolloutMode: inventoryBehavior.mode,
+        note: 'Sync inventory reservation is disabled for createOrder.',
+      })
+
+      if (String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+        const inventoryModeError = new Error('Async inventory is required for order creation in production.')
+        inventoryModeError.statusCode = 503
+        throw inventoryModeError
       }
     }
 
-    const inventoryBehavior = getOrderInventoryBehavior()
-    const useAsyncInventory = inventoryBehavior.reserveOnCreate && isOrderInventoryAsyncEnabled()
-
+    if (traceEnabled) console.time('db')
     const createStartedAt = Date.now()
     let order
+    let transactionDurationMs = 0
+    let idempotencyReplayLookupMs = 0
     try {
-      if (useAsyncInventory) {
+      if (inventoryBehavior.reserveOnCreate) {
         const orderCreateSession = await mongoose.startSession()
         try {
+          if (traceEnabled) console.time('transaction')
+          const transactionStartedAt = Date.now()
           await orderCreateSession.withTransaction(async () => {
             const createdOrders = await Order.create(
               [
@@ -720,6 +741,8 @@ export async function createOrder(req, res, next) {
               session: orderCreateSession,
             })
           })
+          transactionDurationMs = Date.now() - transactionStartedAt
+          if (traceEnabled) console.timeEnd('transaction')
         } finally {
           orderCreateSession.endSession()
         }
@@ -745,86 +768,97 @@ export async function createOrder(req, res, next) {
       }
     } catch (createError) {
       if (createError?.code === 11000 && normalizedIdempotencyKey) {
+        const replayStartedAt = Date.now()
         const duplicate = await Order.findOne({
           restaurantId: draft.restaurant._id,
           idempotencyKey: normalizedIdempotencyKey,
           isArchived: false,
         }).lean()
+        idempotencyReplayLookupMs = Date.now() - replayStartedAt
         if (duplicate) {
           logger.info('order_create_idempotent_duplicate_resolved', {
             orderId: String(duplicate._id || ''),
             restaurantId: String(draft.restaurant._id || ''),
             totalMs: Date.now() - totalStartedAt,
             draftMs: draftDurationMs,
+            middlewareAndValidationMs,
+            validationMs,
+            idempotencyReplayLookupMs,
           })
+          if (traceEnabled) {
+            console.timeEnd('db')
+            console.timeEnd('order_total')
+          }
           return res.status(200).json(duplicate)
         }
       }
       throw createError
     }
     const createDurationMs = Date.now() - createStartedAt
+    if (traceEnabled) console.timeEnd('db')
 
+    if (traceEnabled) console.time('inventory')
     const inventoryStartedAt = Date.now()
     let inventoryMode = 'skipped'
     if (inventoryBehavior.reserveOnCreate) {
-      if (useAsyncInventory) {
-        inventoryMode = 'async-outbox'
-      } else {
-        inventoryMode = 'sync'
-        try {
-          const reservationSession = await mongoose.startSession()
-          try {
-            await reservationSession.withTransaction(async () => {
-              await reserveStockForOrder({
-                restaurantId: draft.restaurant._id,
-                order,
-                createdBy: null,
-                policy: inventoryBehavior.consumptionPolicy,
-                idempotencyPrefix: 'order',
-                session: reservationSession,
-              })
-            })
-          } finally {
-            reservationSession.endSession()
-          }
-        } catch (reservationError) {
-          logger.warn('order_inventory_reservation_failed', {
-            orderId: String(order?._id || ''),
-            restaurantId: String(draft?.restaurant?._id || ''),
-            message: reservationError?.message || 'inventory_reservation_failed',
-          })
-        }
-      }
+      inventoryMode = asyncInventoryEnabled ? 'async-outbox' : 'async-forced'
     }
     const inventoryDurationMs = Date.now() - inventoryStartedAt
+    if (traceEnabled) console.timeEnd('inventory')
 
-    invalidateCacheByTags(
-      buildOrderCacheTags({
-        restaurant: draft.restaurant,
-        tableNumber: draft.tableNumber,
-        orderId: order._id,
-        includeAnalytics: true,
-      }),
-    )
-    publishOrderChange({
-      restaurantId: draft.restaurant._id,
-      type: 'created',
-      orderId: order._id,
-      extra: { orderStatus: order.orderStatus },
+    const responsePayload = order?.toObject ? order.toObject() : order
+    const responseStartedAt = Date.now()
+    if (traceEnabled) console.time('response')
+    res.status(201).json(responsePayload)
+    const responseHandoffMs = Date.now() - responseStartedAt
+    if (traceEnabled) {
+      console.timeEnd('response')
+      console.timeEnd('order_total')
+    }
+
+    runNonCriticalTask('order_create_post_response_side_effects', async () => {
+      invalidateCacheByTags(
+        buildOrderCacheTags({
+          restaurant: draft.restaurant,
+          tableNumber: draft.tableNumber,
+          orderId: responsePayload._id,
+          includeAnalytics: true,
+        }),
+      )
+      publishOrderChange({
+        restaurantId: draft.restaurant._id,
+        type: 'created',
+        orderId: responsePayload._id,
+        extra: { orderStatus: responsePayload.orderStatus },
+      })
     })
 
     logger.info('order_create_timing', {
-      orderId: String(order?._id || ''),
+      orderId: String(responsePayload?._id || ''),
       restaurantId: String(draft?.restaurant?._id || ''),
+      middlewareAndValidationMs,
+      validationMs,
       draftMs: draftDurationMs,
       createMs: createDurationMs,
+      transactionMs: transactionDurationMs,
       inventoryMs: inventoryDurationMs,
       inventoryMode,
+      idempotencyReplayLookupMs,
+      responseHandoffMs,
       totalMs: Date.now() - totalStartedAt,
+      sideEffectsDeferred: true,
+      draftCacheHit: Boolean(draft?.cacheHit),
     })
 
-    return res.status(201).json(order)
+    return null
   } catch (error) {
+    if (String(process.env.ORDER_CREATE_TRACE_TIMING || 'false') === 'true') {
+      try {
+        console.timeEnd('order_total')
+      } catch {
+        // no-op
+      }
+    }
     next(error)
   }
 }

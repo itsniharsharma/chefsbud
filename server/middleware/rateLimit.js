@@ -4,8 +4,46 @@ function nowMs() {
   return Date.now()
 }
 
+const orderCreateBurstStore = new Map()
+const ORDER_CREATE_BURST_WINDOW_MS = Math.max(5000, Number(process.env.ORDER_CREATE_BURST_WINDOW_MS || 15_000))
+const ORDER_CREATE_BURST_THRESHOLD = Math.max(3, Number(process.env.ORDER_CREATE_BURST_THRESHOLD || 4))
+
 function secondsFromMs(ms) {
   return Math.max(1, Math.ceil(ms / 1000))
+}
+
+function cleanupOrderCreateBurstStore() {
+  const cutoff = nowMs() - Math.max(ORDER_CREATE_BURST_WINDOW_MS * 4, 60_000)
+  for (const [key, entry] of orderCreateBurstStore.entries()) {
+    if (entry.lastSeenAt < cutoff) {
+      orderCreateBurstStore.delete(key)
+    }
+  }
+}
+
+export function shouldApplyOrderCreateBurstLimit(req) {
+  const ip = String(req?.ip || '').trim() || 'unknown'
+  const currentMs = nowMs()
+  const existing = orderCreateBurstStore.get(ip) || {
+    windowStartedAt: currentMs,
+    hitCount: 0,
+    lastSeenAt: currentMs,
+  }
+
+  if (currentMs - existing.windowStartedAt > ORDER_CREATE_BURST_WINDOW_MS) {
+    existing.windowStartedAt = currentMs
+    existing.hitCount = 0
+  }
+
+  existing.hitCount += 1
+  existing.lastSeenAt = currentMs
+  orderCreateBurstStore.set(ip, existing)
+
+  if (orderCreateBurstStore.size > 5000) {
+    cleanupOrderCreateBurstStore()
+  }
+
+  return existing.hitCount >= ORDER_CREATE_BURST_THRESHOLD
 }
 
 export function createRateLimiter({
