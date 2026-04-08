@@ -651,6 +651,7 @@ export async function deleteOrder(req, res, next) {
 export async function createOrder(req, res, next) {
   try {
     const traceEnabled = String(process.env.ORDER_CREATE_TRACE_TIMING || 'false') === 'true'
+    const debugEnabled = String(process.env.DEBUG || 'false').trim().toLowerCase() === 'true'
     if (traceEnabled) console.time('order_total')
 
     const controllerStartedAtNs = hrNowNs()
@@ -661,9 +662,17 @@ export async function createOrder(req, res, next) {
 
     const totalStartedAt = Date.now()
     const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '', customerNote = '' } = req.body
-    const headerIdempotencyKey = String(req.headers['x-idempotency-key'] || '').trim()
-    const payloadIdempotencyKey = String(req.body?.idempotencyKey || '').trim()
-    const normalizedIdempotencyKey = (payloadIdempotencyKey || headerIdempotencyKey).slice(0, 120)
+    const headerIdempotencyKey = typeof req.headers['x-idempotency-key'] === 'string'
+      ? req.headers['x-idempotency-key'].trim()
+      : ''
+    const payloadIdempotencyKey = typeof req.body?.idempotencyKey === 'string'
+      ? req.body.idempotencyKey.trim()
+      : ''
+    const normalizedIdempotencyKey = payloadIdempotencyKey || headerIdempotencyKey
+
+    if (!normalizedIdempotencyKey || normalizedIdempotencyKey.length > 120) {
+      return res.status(400).json({ message: 'idempotencyKey is required and must be at most 120 characters' })
+    }
 
     if (traceEnabled) console.time('draft')
     const draftStartedAt = Date.now()
@@ -831,6 +840,14 @@ export async function createOrder(req, res, next) {
         orderId: responsePayload._id,
         extra: { orderStatus: responsePayload.orderStatus },
       })
+
+      if (debugEnabled) {
+        logger.info('order_create_debug', {
+          orderId: String(responsePayload?._id || ''),
+          inventoryMode,
+          draftCacheHit: Boolean(draft?.cacheHit),
+        })
+      }
     })
 
     logger.info('order_create_timing', {

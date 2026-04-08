@@ -10,6 +10,7 @@ const OUTBOX_RETRY_MAX_MS = Math.max(5000, Number(process.env.ORDER_OUTBOX_RETRY
 const OUTBOX_LOCK_TIMEOUT_MS = Math.max(10_000, Number(process.env.ORDER_OUTBOX_LOCK_TIMEOUT_MS || 120_000))
 
 let outboxTimer = null
+let outboxSummaryTimer = null
 let outboxRunning = false
 
 function buildWorkerId() {
@@ -110,18 +111,29 @@ async function markEventFailure(event, workerId, error) {
   const retries = Number(event?.retries || 1)
   const maxRetries = Number(event?.maxRetries || 8)
   const hasRetriesLeft = retries < maxRetries
+  const status = hasRetriesLeft ? 'retry' : 'failed'
 
   await OutboxEvent.updateOne(
     { _id: event._id, workerId },
     {
       $set: {
-        status: hasRetriesLeft ? 'retry' : 'failed',
+        status,
         nextRunAt: hasRetriesLeft ? new Date(Date.now() + backoffMs(retries)) : new Date(),
         processedAt: hasRetriesLeft ? null : new Date(),
         lastError: String(error?.message || 'outbox_processing_failed').slice(0, 1900),
       },
     },
   )
+
+  if (!hasRetriesLeft) {
+    logger.error('outbox_event_terminal_failure', {
+      outboxEventId: String(event?._id || ''),
+      orderId: String(event?.payload?.orderId || ''),
+      retries,
+      maxRetries,
+      message: String(error?.message || 'outbox_processing_failed'),
+    })
+  }
 }
 
 async function processNextEvent(workerId) {
@@ -186,11 +198,30 @@ export function startOrderOutboxWorker() {
     intervalMs: OUTBOX_WORKER_INTERVAL_MS,
     batchSize: OUTBOX_WORKER_BATCH_SIZE,
   })
+
+  outboxSummaryTimer = setInterval(async () => {
+    try {
+      const failedCount = await OutboxEvent.countDocuments({
+        type: 'ORDER_CREATED',
+        status: 'failed',
+      })
+      logger.info('order_outbox_failed_summary', { failedCount })
+    } catch (summaryError) {
+      logger.warn('order_outbox_failed_summary_error', {
+        message: String(summaryError?.message || 'outbox_failed_summary_error'),
+      })
+    }
+  }, 60_000)
+  outboxSummaryTimer.unref?.()
 }
 
 export function stopOrderOutboxWorker() {
   if (!outboxTimer) return
   clearInterval(outboxTimer)
   outboxTimer = null
+  if (outboxSummaryTimer) {
+    clearInterval(outboxSummaryTimer)
+    outboxSummaryTimer = null
+  }
   logger.info('order_outbox_worker_stopped')
 }

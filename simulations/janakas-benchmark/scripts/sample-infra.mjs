@@ -44,8 +44,12 @@ async function setupRedis() {
   if (!redisUrl) return
   redisClient = new Redis(redisUrl, {
     lazyConnect: true,
-    maxRetriesPerRequest: 1,
-    enableOfflineQueue: false,
+    maxRetriesPerRequest: 2,
+    enableOfflineQueue: true,
+    retryStrategy: (times) => Math.min(1000 * times, 5000),
+  })
+  redisClient.on('reconnecting', () => {
+    writeSample('redis_meta', { message: 'reconnecting' })
   })
   await redisClient.connect()
 }
@@ -81,6 +85,10 @@ async function sampleMongo() {
 
 async function sampleRedis() {
   if (!redisClient) return
+  if (redisClient.status !== 'ready') {
+    writeSample('redis_meta', { message: 'not_ready', status: redisClient.status })
+    return
+  }
   const [memoryInfo, statsInfo] = await Promise.all([
     redisClient.info('memory'),
     redisClient.info('stats'),

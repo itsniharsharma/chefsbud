@@ -35,6 +35,12 @@ const orderCreateSuspiciousLimiter = createRateLimiter({
 	skip: (req) => !shouldApplyOrderCreateBurstLimit(req),
 })
 
+function resolveIncomingIdempotencyKey(req) {
+	const bodyKey = String(req.body?.idempotencyKey || '').trim()
+	const headerKey = String(req.headers['x-idempotency-key'] || '').trim()
+	return bodyKey || headerKey
+}
+
 router.post(
 	'/',
 	(req, _res, next) => {
@@ -49,11 +55,23 @@ router.post(
 		body('items.*.menuItemId').isString().trim().isMongoId(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
 		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
-		body('idempotencyKey').optional().isString().trim().isLength({ min: 8, max: 120 }),
+		body('idempotencyKey').optional().isString(),
+		body('idempotencyKey').custom((_value, { req }) => {
+			const idempotencyKey = resolveIncomingIdempotencyKey(req)
+			if (!idempotencyKey) {
+				throw new Error('idempotencyKey is required in body or x-idempotency-key header')
+			}
+
+			if (idempotencyKey.length > 120) {
+				throw new Error('idempotencyKey must be at most 120 characters')
+			}
+
+			return true
+		}),
 		body('customerNote').optional().isString().trim().isLength({ max: 500 }),
 	],
 	validateRequest,
-		orderCreateSuspiciousLimiter,
+	orderCreateSuspiciousLimiter,
 	createOrder,
 )
 router.get(

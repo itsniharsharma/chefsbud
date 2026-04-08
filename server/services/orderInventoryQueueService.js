@@ -14,6 +14,7 @@ const ORDER_INVENTORY_RETRY_MAX_MS = Math.max(5000, Number(process.env.ORDER_INV
 const ORDER_INVENTORY_LOCK_TIMEOUT_MS = Math.max(10_000, Number(process.env.ORDER_INVENTORY_LOCK_TIMEOUT_MS || 90_000))
 
 let workerTimer = null
+let workerSummaryTimer = null
 let workerRunning = false
 
 function toObjectIdString(value) {
@@ -170,6 +171,16 @@ async function markJobFailure(job, workerId, error) {
       },
     },
   )
+
+  if (!hasAttemptsLeft) {
+    logger.error('order_inventory_job_terminal_failure', {
+      jobId: String(job?._id || ''),
+      orderId: String(job?.orderId || ''),
+      attempts,
+      maxAttempts,
+      error: String(error?.message || 'order_inventory_job_failed'),
+    })
+  }
 }
 
 async function processNextJob(workerId) {
@@ -233,11 +244,30 @@ export function startOrderInventoryWorker() {
     concurrency: ORDER_INVENTORY_WORKER_CONCURRENCY,
     asyncEnabled: ORDER_INVENTORY_ASYNC_ENABLED,
   })
+
+  workerSummaryTimer = setInterval(async () => {
+    try {
+      const deadCount = await OrderInventoryJob.countDocuments({
+        jobType: 'reserve_order_inventory',
+        status: 'dead',
+      })
+      logger.info('order_inventory_dead_summary', { deadCount })
+    } catch (summaryError) {
+      logger.warn('order_inventory_dead_summary_error', {
+        error: String(summaryError?.message || 'order_inventory_dead_summary_error'),
+      })
+    }
+  }, 60_000)
+  workerSummaryTimer.unref?.()
 }
 
 export function stopOrderInventoryWorker() {
   if (!workerTimer) return
   clearInterval(workerTimer)
   workerTimer = null
+  if (workerSummaryTimer) {
+    clearInterval(workerSummaryTimer)
+    workerSummaryTimer = null
+  }
   logger.info('order_inventory_worker_stopped')
 }
