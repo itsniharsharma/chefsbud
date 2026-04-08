@@ -3,7 +3,7 @@ import { useAuth } from '../hooks/useAuth'
 import { preloadRouteByPath } from '../utils/routePreload'
 
 const links = [
-  { label: 'Dashboard', to: '/dashboard', roles: ['owner'] },
+  { label: 'Dashboard', to: '/dashboard', roles: ['owner', 'staff'] },
   { label: 'Orders', to: '/dashboard/orders', roles: ['owner', 'staff'] },
   { label: 'Menu', to: '/dashboard/menu', roles: ['owner', 'staff'] },
   { label: 'Inventory', to: '/inventory', roles: ['owner', 'staff'] },

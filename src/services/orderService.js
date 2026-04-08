@@ -26,7 +26,11 @@ export const orderService = {
     return api.delete(`/orders/${orderId}`).then((response) => response.data)
   },
   create(payload) {
-    return api.post('/orders', payload).then((response) => response.data)
+    const idempotencyKey = String(payload?.idempotencyKey || '').trim()
+    const requestConfig = idempotencyKey
+      ? { headers: { 'x-idempotency-key': idempotencyKey } }
+      : undefined
+    return api.post('/orders', payload, requestConfig).then((response) => response.data)
   },
   track(restaurantSlug, tableNumber, orderId) {
     return api

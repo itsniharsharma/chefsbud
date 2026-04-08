@@ -3,10 +3,22 @@ import { useAuth } from '../hooks/useAuth'
 import { hasBillingAccess } from '../utils/billingAccess'
 
 const staffAllowedPaths = new Set([
+  '/dashboard',
   '/dashboard/orders',
   '/dashboard/menu',
   '/dashboard/offers',
   '/dashboard/recent-orders',
+  '/inventory',
+  '/inventory/indent',
+  '/inventory/wastage',
+  '/inventory/stock',
+  '/inventory/reports',
+  '/inventory/purchase',
+  '/inventory/purchase/add',
+  '/inventory/conversion',
+  '/inventory/recipes',
+  '/inventory/request',
+  '/inventory/analytics',
 ])
 
 function normalizeStaffPath(pathname) {

@@ -26,9 +26,36 @@ export default function CustomerCheckoutPage() {
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
-  const floorNumber = Number(searchParams.get('floor') || 1)
+  const rawFloorParam = searchParams.get('floor')
+  const parsedFloorNumber = Number(rawFloorParam)
+  const floorNumber = Number.isFinite(parsedFloorNumber) && parsedFloorNumber >= 1
+    ? Math.floor(parsedFloorNumber)
+    : 1
 
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
+
+  const idempotencyKey = useMemo(() => {
+    const normalizedItems = cart
+      .map((item) => `${String(item.menuItemId || '').trim()}:${Number(item.quantity || 0)}`)
+      .sort()
+      .join('|')
+    const fingerprint = [
+      restaurantSlug,
+      tableNumber,
+      floorNumber,
+      couponCode.trim().toUpperCase(),
+      customerNote.trim().slice(0, 500),
+      normalizedItems,
+    ].join('::')
+
+    let hash = 2166136261
+    for (let index = 0; index < fingerprint.length; index += 1) {
+      hash ^= fingerprint.charCodeAt(index)
+      hash = Math.imul(hash, 16777619)
+    }
+
+    return `cust-order-${(hash >>> 0).toString(16)}`
+  }, [cart, couponCode, customerNote, floorNumber, restaurantSlug, tableNumber])
 
   useEffect(() => {
     if (!cart.length) {
@@ -70,13 +97,32 @@ export default function CustomerCheckoutPage() {
     setMessage('')
 
     try {
+      const parsedTableNumber = Number(tableNumber)
+      if (!Number.isFinite(parsedTableNumber) || parsedTableNumber < 1) {
+        setMessage('Invalid table reference in QR/session. Please rescan the QR code and try again.')
+        return
+      }
+
+      const normalizedItems = cart
+        .map((item) => ({
+          menuItemId: String(item?.menuItemId || '').trim(),
+          quantity: Math.floor(Number(item?.quantity || 0)),
+        }))
+        .filter((item) => /^[a-fA-F0-9]{24}$/.test(item.menuItemId) && item.quantity >= 1)
+
+      if (!normalizedItems.length) {
+        setMessage('Your cart contains invalid items. Please go back, refresh menu, and add items again.')
+        return
+      }
+
       const order = await orderService.create({
         restaurantSlug,
-        tableNumber: Number(tableNumber),
+        tableNumber: Math.floor(parsedTableNumber),
         floorNumber,
         couponCode,
         customerNote,
-        items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
+        idempotencyKey,
+        items: normalizedItems,
       })
 
       if (order?._id) {
@@ -89,7 +135,16 @@ export default function CustomerCheckoutPage() {
         navigate(buildCustomerStatusUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
       }, 900)
     } catch (requestError) {
-      const errorMessage = requestError?.response?.data?.message || requestError?.message || 'Unable to place order'
+      const backendErrors = Array.isArray(requestError?.response?.data?.errors)
+        ? requestError.response.data.errors
+        : []
+      const firstBackendError = backendErrors[0]
+      const backendField = String(firstBackendError?.path || '').trim()
+      const backendDetail = String(firstBackendError?.msg || '').trim()
+      const detailedMessage = backendField && backendDetail
+        ? `${backendField}: ${backendDetail}`
+        : backendDetail
+      const errorMessage = detailedMessage || requestError?.response?.data?.message || requestError?.message || 'Unable to place order'
       setMessage(errorMessage)
     } finally {
       setPlacingOrder(false)

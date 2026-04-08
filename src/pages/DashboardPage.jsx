@@ -5,10 +5,11 @@ import { formatCurrencyINR } from '../utils/currency'
 import { useDashboardAnalyticsCardsQuery } from '../hooks/useDashboardQueries'
 
 export default function DashboardPage() {
-  const { restaurant } = useAuth()
+  const { restaurant, user } = useAuth()
   const { data } = useDashboardAnalyticsCardsQuery({
     restaurantId: restaurant?._id,
   })
+  const isStaff = user?.role === 'staff'
 
   const cards = useMemo(() => {
     if (!data?.cards) {
@@ -31,6 +32,34 @@ export default function DashboardPage() {
   const lowStockNotifications = Array.isArray(data?.notifications?.lowStock)
     ? data.notifications.lowStock
     : []
+
+  if (isStaff) {
+    return (
+      <div className="card p-4 md:p-5">
+        <h2 className="text-lg font-semibold">Alert Notifications</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Operational alerts only. Revenue and performance metrics are hidden for staff.
+        </p>
+
+        {!lowStockNotifications.length ? (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            No alert notifications right now.
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            {lowStockNotifications.map((notification, index) => (
+              <article
+                key={String(notification?.itemId || `${notification?.itemName || 'item'}-${index}`)}
+                className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+              >
+                {notification?.message || 'Stock level is below threshold. Kindly refill.'}
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-5">
