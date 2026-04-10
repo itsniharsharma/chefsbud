@@ -6,7 +6,7 @@ import { applyOffersToOrder } from '../services/offerEngine.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const offerPreviewProjection =
-  '_id name ruleType stackingPolicy active startTime endTime priority createdAt couponCode conditions actions'
+  '_id name ruleType stackingPolicy active startTime endTime priority createdAt conditions actions'
 
 async function loadRestaurantMenuItemIds(restaurantId) {
   const ids = await MenuItem.distinct('_id', { restaurantId })
@@ -48,7 +48,6 @@ export async function createOffer(req, res, next) {
       discountValue,
       conditions,
       actions = null,
-      couponCode = '',
       stackingPolicy = 'stackable',
       priority = 100,
       sourcePrompt = '',
@@ -65,7 +64,6 @@ export async function createOffer(req, res, next) {
       discountValue,
       conditions,
       actions,
-      couponCode,
       stackingPolicy,
       priority,
       sourcePrompt,
@@ -99,7 +97,6 @@ export async function updateOffer(req, res, next) {
       'discountValue',
       'conditions',
       'actions',
-      'couponCode',
       'stackingPolicy',
       'priority',
       'sourcePrompt',
@@ -218,7 +215,6 @@ export async function publishOfferDraft(req, res, next) {
       discountValue: draft.discountValue || '',
       conditions: draft.conditions || null,
       actions: draft.actions || null,
-      couponCode: draft.couponCode || draft.conditions?.couponCode || '',
       stackingPolicy: draft.stackingPolicy || 'stackable',
       priority: Number(draft.priority || 100),
       sourcePrompt: draft.sourcePrompt || '',
@@ -247,7 +243,6 @@ export async function previewOfferPricing(req, res, next) {
         discountTotal: 0,
         totalAmount: 0,
         appliedOffers: [],
-        couponCodeApplied: '',
       })
     }
 
@@ -283,7 +278,6 @@ export async function previewOfferPricing(req, res, next) {
     const preview = applyOffersToOrder({
       orderItems,
       offers,
-      couponCode: req.body?.couponCode || '',
     })
 
     return res.json(preview)

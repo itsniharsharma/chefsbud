@@ -128,7 +128,7 @@ export default function CustomerStatusPage() {
                 <div>
                   {order.discountTotal > 0 ? (
                     <p className="text-xs text-emerald-600">
-                      Saved {formatCurrencyINR(order.discountTotal)}{order.couponCode ? ` using ${order.couponCode}` : ''}
+                      Saved {formatCurrencyINR(order.discountTotal)}
                     </p>
                   ) : null}
                   <p className="text-sm font-semibold text-gray-900">Total: {formatCurrencyINR(order.totalAmount)}</p>

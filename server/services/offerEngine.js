@@ -86,44 +86,15 @@ function applyBxgy(offer, itemMap) {
   }
 }
 
-function applyCoupon(offer, subtotal, normalizedCoupon) {
-  const expectedCode = String(offer.conditions?.couponCode || offer.couponCode || '').trim().toUpperCase()
-  if (!expectedCode || !normalizedCoupon) return null
-  if (expectedCode !== normalizedCoupon) return null
-
-  const minSubtotal = Number(offer.conditions?.minSubtotal || 0)
-  if (subtotal < minSubtotal) return null
-
-  const discountPercent = Number(offer.actions?.discountPercent || 0)
-  const discountAmount = Number(offer.actions?.discountAmount || 0)
-
-  let computedDiscount = 0
-  if (discountPercent > 0) {
-    computedDiscount = subtotal * (discountPercent / 100)
-  } else if (discountAmount > 0) {
-    computedDiscount = discountAmount
-  }
-
-  if (computedDiscount <= 0) return null
-
-  return {
-    discountAmount: round2(computedDiscount),
-    description: `Coupon ${expectedCode}`,
-    couponCode: expectedCode,
-  }
-}
-
-function evaluateOffer(offer, itemMap, subtotal, normalizedCoupon) {
+function evaluateOffer(offer, itemMap, subtotal) {
   const ruleType = offer.ruleType
   if (ruleType === 'item_percent_qty') return applyItemPercentQty(offer, itemMap)
   if (ruleType === 'cart_flat_threshold') return applyCartFlatThreshold(offer, subtotal)
   if (ruleType === 'bxgy') return applyBxgy(offer, itemMap)
-  if (ruleType === 'coupon') return applyCoupon(offer, subtotal, normalizedCoupon)
   return null
 }
 
-export function applyOffersToOrder({ orderItems, offers, couponCode }) {
-  const normalizedCoupon = String(couponCode || '').trim().toUpperCase()
+export function applyOffersToOrder({ orderItems, offers }) {
   const itemMap = mapItemTotals(orderItems)
   const subtotalAmount = round2(orderItems.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0))
 
@@ -141,7 +112,7 @@ export function applyOffersToOrder({ orderItems, offers, couponCode }) {
   const exclusiveCandidates = []
 
   for (const offer of eligibleOffers) {
-    const evaluation = evaluateOffer(offer, itemMap, subtotalAmount, normalizedCoupon)
+    const evaluation = evaluateOffer(offer, itemMap, subtotalAmount)
     if (!evaluation || evaluation.discountAmount <= 0) continue
 
     const applied = {
@@ -151,10 +122,6 @@ export function applyOffersToOrder({ orderItems, offers, couponCode }) {
       stackingPolicy: offer.stackingPolicy || 'stackable',
       discountAmount: round2(evaluation.discountAmount),
       description: evaluation.description,
-    }
-
-    if (evaluation.couponCode) {
-      applied.couponCode = evaluation.couponCode
     }
 
     if (offer.stackingPolicy === 'exclusive') {
@@ -182,6 +149,5 @@ export function applyOffersToOrder({ orderItems, offers, couponCode }) {
     discountTotal,
     totalAmount,
     appliedOffers,
-    couponCodeApplied: appliedOffers.find((offer) => offer.couponCode)?.couponCode || '',
   }
 }

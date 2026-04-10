@@ -12,9 +12,17 @@ import {
 } from '../realtime/menuEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
-const menuProjection = '_id categoryId name description price available isVeg bestseller'
+const menuProjection = '_id categoryId name description price available isVeg portionSize bestseller'
 const categoryProjection = '_id name orderIndex'
 const offerProjection = '_id name type discountValue conditions active startTime endTime'
+
+function normalizePortionSize(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'small' || normalized === 'medium' || normalized === 'large') {
+    return normalized
+  }
+  return 'medium'
+}
 
 function invalidateMenuCache(restaurantSlug) {
   invalidateCacheByTags([`menu:${restaurantSlug}`])
@@ -110,7 +118,7 @@ export async function createMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const { categoryId, name, description, price, available, isVeg, bestseller } = req.body
+    const { categoryId, name, description, price, available, isVeg, portionSize, bestseller } = req.body
 
     const category = await Category.findOne({ _id: categoryId, restaurantId: restaurant._id }).lean()
     if (!category) {
@@ -125,6 +133,7 @@ export async function createMenuItem(req, res, next) {
       price,
       available,
       isVeg,
+      portionSize: normalizePortionSize(portionSize),
       bestseller,
     })
 
@@ -144,11 +153,11 @@ export async function updateMenuItem(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const updates = ['categoryId', 'name', 'description', 'price', 'available', 'isVeg', 'bestseller']
+    const updates = ['categoryId', 'name', 'description', 'price', 'available', 'isVeg', 'portionSize', 'bestseller']
     const patch = {}
     updates.forEach((field) => {
       if (field in req.body) {
-        patch[field] = req.body[field]
+        patch[field] = field === 'portionSize' ? normalizePortionSize(req.body[field]) : req.body[field]
       }
     })
 
@@ -159,7 +168,7 @@ export async function updateMenuItem(req, res, next) {
     const item = await MenuItem.findOneAndUpdate(
       { _id: req.params.id, restaurantId: restaurant._id },
       { $set: patch },
-      { new: true, runValidators: true },
+      { returnDocument: 'after', runValidators: true },
     )
     if (!item) {
       return res.status(404).json({ message: 'Menu item not found' })
@@ -256,6 +265,7 @@ export async function importMenuDraft(req, res, next) {
               price,
               available: item?.available !== false,
               isVeg: item?.isVeg !== false,
+              portionSize: normalizePortionSize(item?.portionSize),
               bestseller: Boolean(item?.bestseller),
             }
           })
@@ -316,6 +326,7 @@ export async function importMenuDraft(req, res, next) {
           price: item.price,
           available: item.available,
           isVeg: item.isVeg,
+          portionSize: item.portionSize,
           bestseller: item.bestseller,
         })
       }

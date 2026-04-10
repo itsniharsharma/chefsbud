@@ -20,7 +20,6 @@ export default function CustomerCheckoutPage() {
   const { getSession, removeItem, addItem, clearSession } = useCustomerCart()
   const [placingOrder, setPlacingOrder] = useState(false)
   const [message, setMessage] = useState('')
-  const [couponCode, setCouponCode] = useState('')
   const [customerNote, setCustomerNote] = useState('')
   const [pricing, setPricing] = useState({ subtotalAmount: 0, discountTotal: 0, totalAmount: 0, appliedOffers: [] })
 
@@ -43,7 +42,6 @@ export default function CustomerCheckoutPage() {
       restaurantSlug,
       tableNumber,
       floorNumber,
-      couponCode.trim().toUpperCase(),
       customerNote.trim().slice(0, 500),
       normalizedItems,
     ].join('::')
@@ -55,7 +53,7 @@ export default function CustomerCheckoutPage() {
     }
 
     return `cust-order-${(hash >>> 0).toString(16)}`
-  }, [cart, couponCode, customerNote, floorNumber, restaurantSlug, tableNumber])
+  }, [cart, customerNote, floorNumber, restaurantSlug, tableNumber])
 
   useEffect(() => {
     if (!cart.length) {
@@ -66,7 +64,6 @@ export default function CustomerCheckoutPage() {
     offerService
       .preview(restaurantSlug, {
         items: cart.map((item) => ({ menuItemId: item.menuItemId, quantity: item.quantity })),
-        couponCode,
       })
       .then((preview) => {
         setPricing(preview)
@@ -74,7 +71,7 @@ export default function CustomerCheckoutPage() {
       .catch(() => {
         setPricing({ subtotalAmount: subtotal, discountTotal: 0, totalAmount: subtotal, appliedOffers: [] })
       })
-  }, [cart, couponCode, restaurantSlug, subtotal])
+  }, [cart, restaurantSlug, subtotal])
 
   const seedCustomerOrderCaches = (order) => {
     if (!order?._id) return
@@ -119,7 +116,6 @@ export default function CustomerCheckoutPage() {
         restaurantSlug,
         tableNumber: Math.floor(parsedTableNumber),
         floorNumber,
-        couponCode,
         customerNote,
         idempotencyKey,
         items: normalizedItems,
@@ -228,16 +224,6 @@ export default function CustomerCheckoutPage() {
           <p className="text-xl font-bold royal-highlight">{formatCurrencyINR(pricing.totalAmount ?? subtotal)}</p>
           <p className="mt-1 text-xs royal-muted">Includes all selected items for table {tableNumber}</p>
         </div>
-
-        <label className="mt-3 block">
-          <span className="mb-1 block text-sm font-medium text-gray-800">Coupon Code (optional)</span>
-          <input
-            className="input bg-white/95"
-            value={couponCode}
-            onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
-            placeholder="Enter coupon code"
-          />
-        </label>
 
         <label className="mt-3 block">
           <span className="mb-1 block text-sm font-medium text-gray-800">Note for Kitchen (optional)</span>

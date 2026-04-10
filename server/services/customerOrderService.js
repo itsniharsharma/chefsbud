@@ -84,14 +84,14 @@ async function resolveRestaurantAndTable({ restaurantSlug, tableNumber, floorNum
   }
 }
 
-export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, floorNumber, items, couponCode = '' }) {
+export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, floorNumber, items }) {
   const { restaurant, normalizedTableNumber, requestedFloorNumber } = await resolveRestaurantAndTable({
     restaurantSlug,
     tableNumber,
     floorNumber,
   })
 
-  const itemsHash = buildOrderDraftItemsHash(items, couponCode)
+  const itemsHash = buildOrderDraftItemsHash(items)
   const menuVersionPromise = resolveCatalogVersion(restaurant._id)
   const tablePromise = Table.findOne({
     restaurantId: restaurant._id,
@@ -127,13 +127,12 @@ export async function buildCustomerOrderDraft({ restaurantSlug, tableNumber, flo
   const [orderItems, offers] = await Promise.all([
     buildOrderItems(restaurant._id, items),
     Offer.find({ restaurantId: restaurant._id, active: true })
-      .select('name ruleType stackingPolicy priority conditions actions couponCode active startTime endTime createdAt updatedAt')
+      .select('name ruleType stackingPolicy priority conditions actions active startTime endTime createdAt updatedAt')
       .lean(),
   ])
   const pricing = applyOffersToOrder({
     orderItems,
     offers,
-    couponCode,
   })
 
   await setCachedDraftResult({

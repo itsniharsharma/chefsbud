@@ -32,7 +32,6 @@ function buildDraft({
   conditions,
   actions,
   discountValue,
-  couponCode = '',
   stackingPolicy = 'stackable',
   priority = 100,
   sourcePrompt,
@@ -44,7 +43,6 @@ function buildDraft({
     discountValue,
     conditions,
     actions,
-    couponCode,
     stackingPolicy,
     priority,
     active: true,
@@ -165,58 +163,6 @@ function parseBxgy({ prompt, menuItems, selectedItems }) {
   }
 }
 
-function parseCoupon({ prompt }) {
-  const rawPrompt = normalizeText(prompt)
-  const lowerPrompt = toLower(prompt)
-  if (!/coupon|code/.test(lowerPrompt)) {
-    return null
-  }
-
-  const codeMatch = rawPrompt.match(/(?:coupon\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{3,})/i)
-  const couponCode = String(codeMatch?.[1] || '').toUpperCase()
-  if (!couponCode) {
-    return {
-      error: 'Coupon code not found. Example: coupon code BURGER30 for 30% off.',
-    }
-  }
-
-  const discountPercent = extractNumber(lowerPrompt, /(\d+(?:\.\d+)?)\s*%/)
-  const discountAmount = extractNumber(lowerPrompt, /(?:rs|inr|₹)\s*(\d+(?:\.\d+)?)/)
-  const minSubtotal = extractNumber(lowerPrompt, /(?:above|over|minimum|min)\s*(?:of\s*)?(?:rs|inr|₹)?\s*(\d+(?:\.\d+)?)/)
-
-  const actions = {}
-  let discountValue = ''
-  if (discountPercent !== null) {
-    actions.discountPercent = discountPercent
-    discountValue = `${discountPercent}%`
-  } else if (discountAmount !== null) {
-    actions.discountAmount = discountAmount
-    discountValue = `Rs ${discountAmount}`
-  } else {
-    return {
-      error: 'Coupon discount value missing. Include % off or flat Rs amount.',
-    }
-  }
-
-  return {
-    draft: buildDraft({
-      name: `Coupon ${couponCode}`,
-      type: 'Coupon Code',
-      ruleType: 'coupon',
-      discountValue,
-      conditions: {
-        couponCode,
-        minSubtotal: minSubtotal || 0,
-      },
-      actions,
-      couponCode,
-      sourcePrompt: prompt,
-      stackingPolicy: 'exclusive',
-    }),
-    summary: `Coupon ${couponCode} configured with ${discountValue}${minSubtotal ? ` on minimum subtotal Rs ${minSubtotal}` : ''}.`,
-  }
-}
-
 export function validateOfferDraft({ draft, restaurantMenuItemIds = [] }) {
   const errors = []
   const warnings = []
@@ -228,9 +174,9 @@ export function validateOfferDraft({ draft, restaurantMenuItemIds = [] }) {
   if (!normalizeText(draft.name)) errors.push('Offer name is required')
   if (!normalizeText(draft.type)) errors.push('Offer type is required')
 
-  const supportedRuleTypes = new Set(['item_percent_qty', 'cart_flat_threshold', 'bxgy', 'coupon'])
+  const supportedRuleTypes = new Set(['item_percent_qty', 'cart_flat_threshold', 'bxgy'])
   if (!supportedRuleTypes.has(draft.ruleType)) {
-    errors.push('Unsupported ruleType. Use one of item_percent_qty, cart_flat_threshold, bxgy, coupon')
+    errors.push('Unsupported ruleType. Use one of item_percent_qty, cart_flat_threshold, bxgy')
   }
 
   const menuItemIdSet = new Set((Array.isArray(restaurantMenuItemIds) ? restaurantMenuItemIds : []).map(String))
@@ -280,17 +226,6 @@ export function validateOfferDraft({ draft, restaurantMenuItemIds = [] }) {
     if (freeItemId && !menuItemIdSet.has(freeItemId)) errors.push(`freeItemId ${freeItemId} is invalid`)
   }
 
-  if (draft.ruleType === 'coupon') {
-    const couponCode = String(draft.conditions?.couponCode || draft.couponCode || '').trim().toUpperCase()
-    if (!couponCode) errors.push('coupon rule requires coupon code')
-
-    const discountPercent = Number(draft.actions?.discountPercent)
-    const discountAmount = Number(draft.actions?.discountAmount)
-    if ((!Number.isFinite(discountPercent) || discountPercent <= 0) && (!Number.isFinite(discountAmount) || discountAmount <= 0)) {
-      errors.push('coupon requires discountPercent or discountAmount in actions')
-    }
-  }
-
   if (draft.stackingPolicy === 'exclusive') {
     warnings.push('Exclusive offer can block stacking with other active offers.')
   }
@@ -314,7 +249,6 @@ export function parseOfferPrompt({ prompt, menuItems, selectedItemIds }) {
   const selectedItems = getSelectedItems(items, selectedItemIds)
 
   const parsers = [
-    () => parseCoupon({ prompt: cleanPrompt }),
     () => parseBxgy({ prompt: cleanPrompt, menuItems: items, selectedItems }),
     () => parseItemPercentQty({ prompt: cleanPrompt, selectedItems }),
     () => parseCartFlatThreshold({ prompt: cleanPrompt }),
@@ -331,6 +265,6 @@ export function parseOfferPrompt({ prompt, menuItems, selectedItemIds }) {
   }
 
   return {
-    error: 'Could not parse prompt into a supported phase-1 offer type. Try % off, flat discount, Buy X Get Y, or coupon code.',
+    error: 'Could not parse prompt into a supported phase-1 offer type. Try % off, flat discount, or Buy X Get Y.',
   }
 }

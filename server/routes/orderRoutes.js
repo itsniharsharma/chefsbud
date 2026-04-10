@@ -54,7 +54,6 @@ router.post(
 		body('items').isArray({ min: 1, max: 50 }),
 		body('items.*.menuItemId').isString().trim().isMongoId(),
 		body('items.*.quantity').optional().isInt({ min: 1, max: 100 }),
-		body('couponCode').optional().isString().trim().isLength({ max: 40 }),
 		body('idempotencyKey').optional().isString(),
 		body('idempotencyKey').custom((_value, { req }) => {
 			const idempotencyKey = resolveIncomingIdempotencyKey(req)

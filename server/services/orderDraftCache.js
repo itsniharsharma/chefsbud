@@ -78,7 +78,7 @@ async function writeJsonToRedis(key, value, ttlSeconds) {
   await withRedis('order_draft_cache_write', (redis) => redis.set(key, JSON.stringify(value), { ex: ttlSeconds }), null)
 }
 
-export function buildOrderDraftItemsHash(items = [], couponCode = '') {
+export function buildOrderDraftItemsHash(items = []) {
   const normalizedItems = Array.isArray(items)
     ? items
         .map((item) => ({
@@ -94,7 +94,7 @@ export function buildOrderDraftItemsHash(items = [], couponCode = '') {
 
   return crypto
     .createHash('sha256')
-    .update(JSON.stringify({ items: normalizedItems, couponCode: String(couponCode || '').trim().toUpperCase() }))
+    .update(JSON.stringify({ items: normalizedItems }))
     .digest('hex')
 }
 

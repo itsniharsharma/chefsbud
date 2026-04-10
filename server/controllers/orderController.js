@@ -37,7 +37,7 @@ const ORDER_STATUS_ALLOWED = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Ser
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers couponCode customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
@@ -328,7 +328,7 @@ export async function updateOrderStatus(req, res, next) {
         order = await Order.findOneAndUpdate(
           { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
           { $set: update },
-          { new: true, runValidators: true, session },
+          { returnDocument: 'after', runValidators: true, session },
         )
 
         if (!order) {
@@ -661,7 +661,7 @@ export async function createOrder(req, res, next) {
     const validationMs = routeStartedAtNs && validatedAtNs ? nsToMs(routeStartedAtNs, validatedAtNs) : 0
 
     const totalStartedAt = Date.now()
-    const { restaurantSlug, tableNumber, floorNumber, items, couponCode = '', customerNote = '' } = req.body
+    const { restaurantSlug, tableNumber, floorNumber, items, customerNote = '' } = req.body
     const headerIdempotencyKey = typeof req.headers['x-idempotency-key'] === 'string'
       ? req.headers['x-idempotency-key'].trim()
       : ''
@@ -681,7 +681,6 @@ export async function createOrder(req, res, next) {
       tableNumber,
       floorNumber,
       items,
-      couponCode,
     })
     const draftDurationMs = Date.now() - draftStartedAt
     if (traceEnabled) console.timeEnd('draft')
@@ -727,7 +726,6 @@ export async function createOrder(req, res, next) {
                   subtotalAmount: draft.pricing.subtotalAmount,
                   discountTotal: draft.pricing.discountTotal,
                   appliedOffers: draft.pricing.appliedOffers,
-                  couponCode: draft.pricing.couponCodeApplied,
                   idempotencyKey: normalizedIdempotencyKey,
                   customerNote: String(customerNote || '').trim(),
                   totalAmount: draft.pricing.totalAmount,
@@ -765,7 +763,6 @@ export async function createOrder(req, res, next) {
           subtotalAmount: draft.pricing.subtotalAmount,
           discountTotal: draft.pricing.discountTotal,
           appliedOffers: draft.pricing.appliedOffers,
-          couponCode: draft.pricing.couponCodeApplied,
           idempotencyKey: normalizedIdempotencyKey,
           customerNote: String(customerNote || '').trim(),
           totalAmount: draft.pricing.totalAmount,
@@ -891,7 +888,7 @@ export async function getPublicOrderStatus(req, res, next) {
       isArchived: false,
     })
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
       )
       .lean()
 
@@ -927,7 +924,7 @@ export async function getPublicTableOrders(req, res, next) {
       .sort({ createdAt: -1 })
       .limit(PUBLIC_TABLE_ORDER_LIMIT)
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers couponCode customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
       )
       .lean()
 
@@ -989,7 +986,7 @@ export async function ratePublicOrder(req, res, next) {
         },
       },
       {
-        new: true,
+        returnDocument: 'after',
         projection: '_id customerRating customerRatedAt orderStatus completedAt restaurantId restaurantSlug tableNumber',
       },
     ).lean()
@@ -1092,7 +1089,7 @@ export async function markOrderKotPrinted(req, res, next) {
     const order = await Order.findOneAndUpdate(
       { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
-      { new: true, runValidators: true },
+      { returnDocument: 'after', runValidators: true },
     )
 
     if (isReprint) {
@@ -1180,7 +1177,7 @@ export async function markOrderBillPrinted(req, res, next) {
     const order = await Order.findOneAndUpdate(
       { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
-      { new: true, runValidators: true },
+      { returnDocument: 'after', runValidators: true },
     )
 
     invalidateCacheByTags(

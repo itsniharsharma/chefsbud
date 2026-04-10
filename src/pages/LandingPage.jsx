@@ -76,7 +76,7 @@ const stackCards = [
   },
   {
     title: 'Customer Ordering Surface',
-    bullets: ['QR table route with branded menu experience', 'Cart, coupon, and checkout journey', 'Order tracking and status timeline'],
+    bullets: ['QR table route with branded menu experience', 'Cart and checkout journey', 'Order tracking and status timeline'],
   },
   {
     title: 'Data + Automation Layer',

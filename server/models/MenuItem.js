@@ -9,6 +9,7 @@ const menuItemSchema = new mongoose.Schema(
     price: { type: Number, required: true, min: 0 },
     available: { type: Boolean, default: true },
     isVeg: { type: Boolean, default: true },
+    portionSize: { type: String, enum: ['small', 'medium', 'large'], default: 'medium' },
     bestseller: { type: Boolean, default: false },
   },
   { timestamps: true },
@@ -19,6 +20,7 @@ menuItemSchema.index({ restaurantId: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, available: 1, updatedAt: -1 })
 menuItemSchema.index({ restaurantId: 1, categoryId: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, categoryId: 1, isVeg: 1, available: 1, createdAt: -1 })
+menuItemSchema.index({ restaurantId: 1, categoryId: 1, portionSize: 1, available: 1, createdAt: -1 })
 menuItemSchema.index({ restaurantId: 1, createdAt: -1 })
 
 export default mongoose.model('MenuItem', menuItemSchema)

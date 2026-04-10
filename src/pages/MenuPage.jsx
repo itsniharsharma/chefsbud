@@ -16,6 +16,7 @@ const initialForm = {
   categoryId: '',
   available: true,
   isVeg: true,
+  portionSize: 'medium',
   bestseller: false,
 }
 
@@ -25,6 +26,7 @@ const newDraftItem = {
   price: '',
   available: true,
   isVeg: true,
+  portionSize: 'medium',
   bestseller: false,
 }
 
@@ -218,7 +220,7 @@ export default function MenuPage() {
 
   const onEdit = (item) => {
     setEditingId(item._id)
-    setForm({ ...item, price: String(item.price) })
+    setForm({ ...item, price: String(item.price), portionSize: item.portionSize || 'medium' })
   }
 
   const onDelete = (id) => {
@@ -303,6 +305,7 @@ export default function MenuPage() {
           price: String(item.price ?? ''),
           available: item.available ?? true,
           isVeg: item.isVeg ?? true,
+          portionSize: item.portionSize || 'medium',
           bestseller: item.bestseller ?? false,
         })),
       }))
@@ -504,6 +507,15 @@ export default function MenuPage() {
                         />
                         Veg
                       </label>
+                      <select
+                        className="input md:col-span-1"
+                        value={item.portionSize || 'medium'}
+                        onChange={(e) => updateDraftItem(categoryIndex, itemIndex, 'portionSize', e.target.value)}
+                      >
+                        <option value="small">Small</option>
+                        <option value="medium">Medium</option>
+                        <option value="large">Large</option>
+                      </select>
                       <label className="md:col-span-1 flex items-center justify-center gap-1 text-xs text-slate-600">
                         <input
                           type="checkbox"
@@ -586,6 +598,18 @@ export default function MenuPage() {
             />
             Veg Dish
           </label>
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Portion Size</span>
+            <select
+              className="input"
+              value={form.portionSize || 'medium'}
+              onChange={(e) => setForm((prev) => ({ ...prev, portionSize: e.target.value }))}
+            >
+              <option value="small">Small</option>
+              <option value="medium">Medium</option>
+              <option value="large">Large</option>
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
               type="checkbox"
@@ -615,6 +639,9 @@ export default function MenuPage() {
               </span>
               <span className={`rounded px-2 py-1 ${item.isVeg === false ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
                 {item.isVeg === false ? 'Non-Veg' : 'Veg'}
+              </span>
+              <span className="rounded bg-slate-100 px-2 py-1 text-slate-700">
+                {(item.portionSize || 'medium').toUpperCase()}
               </span>
               {item.bestseller && <span className="rounded bg-red-50 px-2 py-1 text-[var(--primary)]">Bestseller</span>}
             </div>

@@ -10,6 +10,14 @@ import { formatCurrencyINR } from '../utils/currency'
 import { createCustomerAnalyticsEventId, getCustomerAnalyticsSessionId } from '../utils/customerAnalytics'
 import { buildCustomerCheckoutUrl } from '../utils/customerUrl'
 
+function normalizePortionSize(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'small' || normalized === 'medium' || normalized === 'large') {
+    return normalized
+  }
+  return 'medium'
+}
+
 export default function CustomerMenuPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber } = useParams()
@@ -19,6 +27,7 @@ export default function CustomerMenuPage() {
   const [error, setError] = useState('')
   const [menu, setMenu] = useState({ restaurant: null, categories: [], items: [], offers: [] })
   const [dietFilter, setDietFilter] = useState('all')
+  const [sizeFilter, setSizeFilter] = useState('all')
   // null = category grid view; a category._id = items view for that category
   const [activeCategory, setActiveCategory] = useState(null)
   const isMountedRef = useRef(true)
@@ -257,16 +266,22 @@ export default function CustomerMenuPage() {
   const availableItems = useMemo(() => menu.items.filter((item) => item.available), [menu.items])
 
   const filteredItems = useMemo(() => {
+    let scopedItems = availableItems
+
     if (dietFilter === 'veg') {
-      return availableItems.filter((item) => item.isVeg !== false)
+      scopedItems = scopedItems.filter((item) => item.isVeg !== false)
     }
 
     if (dietFilter === 'nonveg') {
-      return availableItems.filter((item) => item.isVeg === false)
+      scopedItems = scopedItems.filter((item) => item.isVeg === false)
     }
 
-    return availableItems
-  }, [availableItems, dietFilter])
+    if (sizeFilter !== 'all') {
+      scopedItems = scopedItems.filter((item) => normalizePortionSize(item.portionSize) === sizeFilter)
+    }
+
+    return scopedItems
+  }, [availableItems, dietFilter, sizeFilter])
 
   const itemCountByCategory = useMemo(() => {
     const counts = new Map()
@@ -432,6 +447,7 @@ export default function CustomerMenuPage() {
 
   const openCheckout = () => navigate(buildCustomerCheckoutUrl({ slug: restaurantSlug, tableNumber, floorNumber }))
   const dietFilterLabel = dietFilter === 'veg' ? 'Veg' : dietFilter === 'nonveg' ? 'Non-Veg' : 'All'
+  const sizeFilterLabel = sizeFilter === 'small' ? 'Small' : sizeFilter === 'large' ? 'Large' : sizeFilter === 'medium' ? 'Medium' : 'All'
 
   if (loading) {
     return <div className="customer-shell-v2 min-h-screen p-4 text-sm text-gray-500">Loading menu…</div>
@@ -501,6 +517,22 @@ export default function CustomerMenuPage() {
                 </button>
               </div>
             </div>
+            <div className="mb-3">
+              <div className="customer-diet-toggle" role="tablist" aria-label="Portion size filter">
+                <button type="button" className={sizeFilter === 'all' ? 'active' : ''} onClick={() => setSizeFilter('all')}>
+                  All Sizes
+                </button>
+                <button type="button" className={sizeFilter === 'small' ? 'active' : ''} onClick={() => setSizeFilter('small')}>
+                  Small
+                </button>
+                <button type="button" className={sizeFilter === 'medium' ? 'active' : ''} onClick={() => setSizeFilter('medium')}>
+                  Medium
+                </button>
+                <button type="button" className={sizeFilter === 'large' ? 'active' : ''} onClick={() => setSizeFilter('large')}>
+                  Large
+                </button>
+              </div>
+            </div>
             {!visibleCategories.length ? (
               <div className="customer-empty-card">No categories available yet.</div>
             ) : (
@@ -541,7 +573,7 @@ export default function CustomerMenuPage() {
             <div className="mb-3 flex items-center justify-between gap-3">
               <h2 className="text-2xl font-bold text-gray-900">{selectedCategoryName}</h2>
               <div className="flex items-center gap-3">
-                <p className="text-xs text-gray-500">{dietFilterLabel}: {visibleItems.length} items</p>
+                <p className="text-xs text-gray-500">{dietFilterLabel} • {sizeFilterLabel}: {visibleItems.length} items</p>
                 <div className="customer-diet-toggle" role="tablist" aria-label="Diet filter">
                   <button type="button" className={dietFilter === 'all' ? 'active' : ''} onClick={() => setDietFilter('all')}>
                     All
@@ -553,6 +585,22 @@ export default function CustomerMenuPage() {
                     NonVeg
                   </button>
                 </div>
+              </div>
+            </div>
+            <div className="mb-3">
+              <div className="customer-diet-toggle" role="tablist" aria-label="Portion size filter">
+                <button type="button" className={sizeFilter === 'all' ? 'active' : ''} onClick={() => setSizeFilter('all')}>
+                  All Sizes
+                </button>
+                <button type="button" className={sizeFilter === 'small' ? 'active' : ''} onClick={() => setSizeFilter('small')}>
+                  Small
+                </button>
+                <button type="button" className={sizeFilter === 'medium' ? 'active' : ''} onClick={() => setSizeFilter('medium')}>
+                  Medium
+                </button>
+                <button type="button" className={sizeFilter === 'large' ? 'active' : ''} onClick={() => setSizeFilter('large')}>
+                  Large
+                </button>
               </div>
             </div>
 
@@ -576,6 +624,9 @@ export default function CustomerMenuPage() {
                             }`}
                           >
                             {isVeg ? 'Veg' : 'Non-Veg'}
+                          </span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
+                            {normalizePortionSize(item.portionSize)}
                           </span>
                         </div>
                         <h3 className="text-base font-bold text-gray-900">{item.name}</h3>
