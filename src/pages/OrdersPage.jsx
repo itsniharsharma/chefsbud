@@ -10,7 +10,7 @@ import { useOrdersBoardQuery, useTablesQuery } from '../hooks/useDashboardQuerie
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
-const statusFilters = ['All', 'Confirmed', 'Preparing', 'Ready', 'Served']
+const statusFilters = ['All', 'Preparing', 'Served']
 
 export default function OrdersPage() {
   const { restaurant } = useAuth()

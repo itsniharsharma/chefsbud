@@ -33,7 +33,7 @@ import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 const CUSTOMER_FEEDBACK_WINDOW_MINUTES = Math.max(5, Math.min(Number(process.env.CUSTOMER_FEEDBACK_WINDOW_MINUTES || 60), 24 * 60))
-const ORDER_STATUS_ALLOWED = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
+const ORDER_STATUS_ALLOWED = ['Preparing', 'Served', 'Completed']
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
 
 const orderListProjection =
@@ -730,7 +730,7 @@ export async function createOrder(req, res, next) {
                   customerNote: String(customerNote || '').trim(),
                   totalAmount: draft.pricing.totalAmount,
                   paymentStatus: 'Unpaid',
-                  orderStatus: 'Pending',
+                  orderStatus: 'Preparing',
                   hiddenFromActive: false,
                   hiddenFromRecent: false,
                 },
@@ -767,7 +767,7 @@ export async function createOrder(req, res, next) {
           customerNote: String(customerNote || '').trim(),
           totalAmount: draft.pricing.totalAmount,
           paymentStatus: 'Unpaid',
-          orderStatus: 'Pending',
+          orderStatus: 'Preparing',
           hiddenFromActive: false,
           hiddenFromRecent: false,
         })

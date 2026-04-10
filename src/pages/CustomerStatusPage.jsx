@@ -8,10 +8,7 @@ import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl } from '../utils/cu
 import { orderService } from '../services/orderService'
 
 const statusTone = {
-  Pending: 'border-amber-200 bg-amber-50 text-amber-700',
-  Confirmed: 'border-rose-200 bg-rose-50 text-rose-700',
   Preparing: 'border-sky-200 bg-sky-50 text-sky-700',
-  Ready: 'border-violet-200 bg-violet-50 text-violet-700',
   Served: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   Completed: 'border-gray-200 bg-gray-50 text-gray-600',
 }

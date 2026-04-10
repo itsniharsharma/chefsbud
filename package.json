@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "cleanup:inventory-monitoring": "node server/scripts/cleanupInventoryMonitoring.js",
+    "migrate:order-statuses:v3": "node server/scripts/migrateOrderStatusesToThreeState.js",
     "indexes:orders:plan": "node server/scripts/optimizeOrderIndexes.js",
     "indexes:orders:apply": "node server/scripts/optimizeOrderIndexes.js --dry-run=false",
     "indexes:orders:prune": "node server/scripts/optimizeOrderIndexes.js --dry-run=false --drop-extra=true"

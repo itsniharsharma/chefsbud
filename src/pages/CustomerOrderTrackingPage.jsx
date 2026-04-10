@@ -6,7 +6,7 @@ import { useCustomerOrderStatusQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildCustomerStatusUrl } from '../utils/customerUrl'
 
-const steps = ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']
+const steps = ['Preparing', 'Served', 'Completed']
 
 export default function CustomerOrderTrackingPage() {
   const navigate = useNavigate()

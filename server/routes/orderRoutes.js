@@ -134,7 +134,7 @@ router.patch(
 	requireAuth,
 	requireActiveBilling,
 	[
-		body('orderStatus').isIn(['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed']),
+		body('orderStatus').isIn(['Preparing', 'Served', 'Completed']),
 	],
 	validateRequest,
 	updateOrderStatus,

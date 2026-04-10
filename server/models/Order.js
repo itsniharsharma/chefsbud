@@ -69,8 +69,8 @@ const orderSchema = new mongoose.Schema(
     lastKotReprintAt: { type: Date, default: null },
     orderStatus: {
       type: String,
-      enum: ['Pending', 'Confirmed', 'Preparing', 'Ready', 'Served', 'Completed'],
-      default: 'Pending',
+      enum: ['Preparing', 'Served', 'Completed'],
+      default: 'Preparing',
     },
     customerRating: { type: Number, min: 1, max: 5, default: null },
     customerRatedAt: { type: Date, default: null },
