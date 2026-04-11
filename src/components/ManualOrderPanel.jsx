@@ -339,7 +339,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
   return (
     <div className="flex h-full flex-col overflow-y-scroll rounded-2xl border border-red-200 bg-gradient-to-b from-red-50 to-white p-4 shadow-sm">
       {/* Header */}
-      <div className="mb-4 border-b border-red-200 pb-3">
+      <div className="mb-3 border-b border-red-200 pb-2">
         <h3 className="text-base font-semibold text-slate-900">Manual Order Creation</h3>
         <p className="mt-1 text-xs text-slate-600">Select items, choose table, and create</p>
       </div>
@@ -350,7 +350,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
       )}
 
       {/* Floor & Table Selection */}
-      <div className="mb-4 space-y-2 border-b border-red-200 pb-3">
+      <div className="mb-3 space-y-2 border-b border-red-200 pb-2">
         <div className="grid grid-cols-2 gap-2">
           <label className="flex flex-col gap-1 text-xs text-slate-700">
             <span className="font-medium">Floor</span>
@@ -406,7 +406,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
         <>
           {/* Categories Tabs */}
           {!hasActiveSearch ? (
-            <div className="mb-3 h-[124px] overflow-x-auto overflow-y-hidden pb-2 pr-1">
+            <div className="mb-2 h-[112px] overflow-x-auto overflow-y-hidden pb-1 pr-1">
               <div className="grid grid-flow-col grid-rows-3 auto-cols-max gap-1">
                 {menuCategories.map((category) => (
                   <button
@@ -424,11 +424,11 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
               </div>
             </div>
           ) : (
-            <p className="mb-2 text-xs text-slate-600">Search results ({visibleItems.length})</p>
+            <p className="mb-1 text-xs text-slate-600">Search results ({visibleItems.length})</p>
           )}
 
           {/* Items Grid */}
-          <div className="mb-4 flex-1 space-y-2 overflow-y-auto">
+          <div className="mb-3 min-h-[300px] flex-1 space-y-2 overflow-y-auto pr-1">
             {visibleItems.length > 0 ? (
               visibleItems.map((item) => (
                 <div
@@ -466,8 +466,8 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
           {/* Cart Summary */}
           {Object.keys(cart).length > 0 && (
             <>
-              <div className="mb-3 space-y-2 border-t border-red-200 pt-3">
-                <div className="max-h-32 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2">
+              <div className="mb-2 space-y-2 border-t border-red-200 pt-2">
+                <div className="max-h-24 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2">
                   {Object.values(cart).map((item) => (
                     <div
                       key={item.id}
@@ -511,10 +511,10 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
                 </div>
               </div>
 
-              <label className="mb-3 block">
+              <label className="mb-2 block">
                 <span className="mb-1 block text-xs font-medium text-slate-800">Additional Note (optional)</span>
                 <textarea
-                  className="input min-h-[88px] bg-white/95 text-sm"
+                  className="input min-h-[68px] bg-white/95 text-sm"
                   value={customerNote}
                   onChange={(event) => setCustomerNote(event.target.value.slice(0, 500))}
                   placeholder="Example: less spicy, no onion, serve together"

@@ -470,7 +470,7 @@ export default function OrdersPage() {
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {/* Left Column: Orders Board */}
-        <section className="flex h-[calc(100vh-240px)] min-h-[640px] flex-col space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
+        <section className="flex h-[calc(100vh-200px)] min-h-[700px] flex-col space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
           <h2 className="text-base font-semibold text-slate-800">
             {appliedFloor ? `Active Orders - Floor ${appliedFloor}` : 'Active Orders'}
           </h2>
@@ -494,7 +494,7 @@ export default function OrdersPage() {
         </section>
 
         {/* Right Column: Manual Order Creation */}
-        <div className="h-[calc(100vh-240px)] min-h-[640px]">
+        <div className="h-[calc(100vh-200px)] min-h-[700px]">
           <ManualOrderPanel
             restaurantId={restaurant?._id}
             restaurantSlug={restaurant?.slug}
