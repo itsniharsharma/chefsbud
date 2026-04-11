@@ -717,6 +717,13 @@ export async function createOrder(req, res, next) {
 
     const inventoryBehavior = getOrderInventoryBehavior()
     const asyncInventoryEnabled = isOrderInventoryAsyncEnabled()
+    const orderCreationInventoryBehavior =
+      inventoryBehavior.reserveOnCreate && asyncInventoryEnabled
+        ? inventoryBehavior
+        : {
+            ...inventoryBehavior,
+            reserveOnCreate: false,
+          }
 
     const orderDateKey = buildOrderDateKey()
 
@@ -727,12 +734,6 @@ export async function createOrder(req, res, next) {
         rolloutMode: inventoryBehavior.mode,
         note: 'Sync inventory reservation is disabled for createOrder.',
       })
-
-      if (String(process.env.NODE_ENV || '').trim().toLowerCase() === 'production') {
-        const inventoryModeError = new Error('Async inventory is required for order creation in production.')
-        inventoryModeError.statusCode = 503
-        throw inventoryModeError
-      }
     }
 
     if (traceEnabled) console.time('db')
@@ -741,7 +742,7 @@ export async function createOrder(req, res, next) {
     let transactionDurationMs = 0
     let idempotencyReplayLookupMs = 0
     try {
-      if (inventoryBehavior.reserveOnCreate) {
+      if (orderCreationInventoryBehavior.reserveOnCreate) {
         const orderCreateSession = await mongoose.startSession()
         try {
           if (traceEnabled) console.time('transaction')
@@ -783,7 +784,7 @@ export async function createOrder(req, res, next) {
             await createOrderCreatedOutboxEvent({
               orderId: order._id,
               restaurantId: draft.restaurant._id,
-              policy: inventoryBehavior.consumptionPolicy,
+              policy: orderCreationInventoryBehavior.consumptionPolicy,
               idempotencyPrefix: 'order',
               session: orderCreateSession,
             })
@@ -853,7 +854,7 @@ export async function createOrder(req, res, next) {
     if (traceEnabled) console.time('inventory')
     const inventoryStartedAt = Date.now()
     let inventoryMode = 'skipped'
-    if (inventoryBehavior.reserveOnCreate) {
+    if (orderCreationInventoryBehavior.reserveOnCreate) {
       inventoryMode = asyncInventoryEnabled ? 'async-outbox' : 'async-forced'
     }
     const inventoryDurationMs = Date.now() - inventoryStartedAt

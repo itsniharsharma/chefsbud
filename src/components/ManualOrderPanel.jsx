@@ -13,6 +13,32 @@ const portionSizeLabelMap = {
   xlarge: 'XLarge',
 }
 
+function normalizeSearchTerm(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function lowerBound(entries, target) {
+  let lo = 0
+  let hi = entries.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (entries[mid].key < target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function upperBound(entries, target) {
+  let lo = 0
+  let hi = entries.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (entries[mid].key <= target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
 function formatPortionSizeLabel(value) {
   const normalized = String(value || '').trim().toLowerCase()
   return portionSizeLabelMap[normalized] || 'Medium'
@@ -52,6 +78,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
   const [selectedTable, setSelectedTable] = useState('')
   const [cart, setCart] = useState({}) // { itemId: { id, name, price, quantity, portionSize } }
   const [activeCategory, setActiveCategory] = useState('')
+  const [itemSearchTerm, setItemSearchTerm] = useState('')
   const [menuError, setMenuError] = useState('')
   const [customerNote, setCustomerNote] = useState('')
   const queryClient = useQueryClient()
@@ -118,6 +145,82 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
     return categoryIndex.get(String(activeCategory)) || []
   }, [activeCategory, categoryIndex])
 
+  const allAvailableItems = useMemo(() => {
+    if (Array.isArray(menu?.items) && menu.items.length) {
+      return menu.items.filter((item) => item?.available && item?.name)
+    }
+
+    const merged = []
+    for (const list of categoryIndex.values()) {
+      if (!Array.isArray(list)) continue
+      for (const item of list) {
+        if (item?.available && item?.name) merged.push(item)
+      }
+    }
+    return merged
+  }, [menu, categoryIndex])
+
+  const itemExactNameIndex = useMemo(() => {
+    const index = new Map()
+    for (const item of allAvailableItems) {
+      const key = normalizeSearchTerm(item?.name)
+      if (!key) continue
+      const bucket = index.get(key) || []
+      bucket.push(item)
+      index.set(key, bucket)
+    }
+    return index
+  }, [allAvailableItems])
+
+  const sortedItemNameEntries = useMemo(() => {
+    return allAvailableItems
+      .map((item) => ({ key: normalizeSearchTerm(item?.name), item }))
+      .filter((entry) => Boolean(entry.key))
+      .sort((a, b) => a.key.localeCompare(b.key))
+  }, [allAvailableItems])
+
+  const searchedItems = useMemo(() => {
+    const query = normalizeSearchTerm(itemSearchTerm)
+    if (!query) return []
+
+    const seenIds = new Set()
+    const result = []
+
+    const exact = itemExactNameIndex.get(query) || []
+    for (const item of exact) {
+      const id = String(item?._id || '')
+      if (!id || seenIds.has(id)) continue
+      seenIds.add(id)
+      result.push(item)
+    }
+
+    const start = lowerBound(sortedItemNameEntries, query)
+    const end = upperBound(sortedItemNameEntries, `${query}\uffff`)
+    for (let index = start; index < end; index += 1) {
+      const item = sortedItemNameEntries[index]?.item
+      const id = String(item?._id || '')
+      if (!id || seenIds.has(id)) continue
+      seenIds.add(id)
+      result.push(item)
+    }
+
+    if (!result.length) {
+      // Safety fallback to ensure search still returns results when index shape drifts.
+      for (const item of allAvailableItems) {
+        const id = String(item?._id || '')
+        const key = normalizeSearchTerm(item?.name)
+        if (!id || seenIds.has(id) || !key.includes(query)) continue
+        seenIds.add(id)
+        result.push(item)
+      }
+    }
+
+    return result
+  }, [itemSearchTerm, itemExactNameIndex, sortedItemNameEntries, allAvailableItems])
+
+  const hasActiveSearch = Boolean(normalizeSearchTerm(itemSearchTerm))
+  const visibleItems = hasActiveSearch ? searchedItems : categoryItems
+
   // Get available tables for selected floor
   const availableTables = useMemo(() => {
     if (!tables || !Array.isArray(tables)) return []
@@ -126,6 +229,21 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
       .filter((t) => Number(t?.floorNumber || 1) === floor && t?.active)
       .sort((a, b) => Number(a.tableNumber) - Number(b.tableNumber))
   }, [tables, selectedFloor])
+
+  useEffect(() => {
+    if (!availableTables.length) {
+      if (selectedTable) setSelectedTable('')
+      return
+    }
+
+    const isSelectedTableAvailable = availableTables.some(
+      (table) => String(table?.tableNumber || '') === String(selectedTable || ''),
+    )
+
+    if (!isSelectedTableAvailable) {
+      setSelectedTable(String(availableTables[0]?.tableNumber || ''))
+    }
+  }, [availableTables, selectedTable])
 
   // Calculate cart total and item count
   const cartStats = useMemo(() => {
@@ -237,7 +355,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
           <label className="flex flex-col gap-1 text-xs text-slate-700">
             <span className="font-medium">Floor</span>
             <select
-              className="input h-8 text-sm"
+              className="input h-10 text-sm leading-5"
               value={selectedFloor}
               onChange={(e) => {
                 setSelectedFloor(e.target.value)
@@ -255,7 +373,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
           <label className="flex flex-col gap-1 text-xs text-slate-700">
             <span className="font-medium">Table</span>
             <select
-              className="input h-8 text-sm"
+              className="input h-10 text-sm leading-5"
               value={selectedTable}
               onChange={(e) => setSelectedTable(e.target.value)}
             >
@@ -268,6 +386,17 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
             </select>
           </label>
         </div>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700">Search item</span>
+          <input
+            className="input h-10 text-sm"
+            type="text"
+            value={itemSearchTerm}
+            onChange={(event) => setItemSearchTerm(event.target.value)}
+            placeholder="Type item name..."
+          />
+        </label>
       </div>
 
       {/* Content */}
@@ -276,26 +405,32 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
       ) : (
         <>
           {/* Categories Tabs */}
-          <div className="mb-3 flex gap-1 overflow-x-auto pb-2">
-            {menuCategories.map((category) => (
-              <button
-                key={category._id}
-                onClick={() => setActiveCategory(category._id)}
-                className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition ${
-                  activeCategory === category._id
-                    ? 'bg-red-600 text-white'
-                    : 'border border-slate-300 text-slate-700 hover:border-red-400'
-                }`}
-              >
-                {category.name}
-              </button>
-            ))}
-          </div>
+          {!hasActiveSearch ? (
+            <div className="mb-3 h-[124px] overflow-x-auto overflow-y-hidden pb-2 pr-1">
+              <div className="grid grid-flow-col grid-rows-3 auto-cols-max gap-1">
+                {menuCategories.map((category) => (
+                  <button
+                    key={category._id}
+                    onClick={() => setActiveCategory(category._id)}
+                    className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition ${
+                      activeCategory === category._id
+                        ? 'bg-red-600 text-white'
+                        : 'border border-slate-300 text-slate-700 hover:border-red-400'
+                    }`}
+                  >
+                    {category.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="mb-2 text-xs text-slate-600">Search results ({visibleItems.length})</p>
+          )}
 
           {/* Items Grid */}
           <div className="mb-4 flex-1 space-y-2 overflow-y-auto">
-            {categoryItems.length > 0 ? (
-              categoryItems.map((item) => (
+            {visibleItems.length > 0 ? (
+              visibleItems.map((item) => (
                 <div
                   key={item._id}
                   className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-2 text-xs hover:border-red-400"
@@ -322,7 +457,9 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
                 </div>
               ))
             ) : (
-              <p className="py-4 text-center text-xs text-slate-500">No items in category</p>
+              <p className="py-4 text-center text-xs text-slate-500">
+                {hasActiveSearch ? 'No items match your search' : 'No items in category'}
+              </p>
             )}
           </div>
 

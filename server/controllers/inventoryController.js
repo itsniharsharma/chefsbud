@@ -17,6 +17,7 @@ import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitInventoryChanged } from '../realtime/inventoryEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
+import { logger } from '../utils/logger.js'
 
 const supplierProjection = '_id name gstNo phone email address isActive createdAt updatedAt'
 const itemProjection = '_id name defaultUnit currentStock currentStockUnit isActive createdAt updatedAt'
@@ -52,7 +53,7 @@ async function invalidateInventoryCaches(restaurantId, options = {}) {
       await invalidateCacheByTags(tags)
     }
   } catch (cacheError) {
-    console.warn('[Inventory] Cache invalidation warning:', cacheError.message)
+    logger.warn('inventory_cache_invalidation_warning', { message: cacheError?.message })
   }
 
   emitInventoryChanged(normalizedRestaurantId, {
@@ -694,7 +695,7 @@ export async function createInventorySupplier(req, res, next) {
     try {
       await invalidateCacheByTags([`inventory:suppliers:${String(restaurant._id)}`])
     } catch (cacheError) {
-      console.warn('[Inventory] Cache invalidation warning for suppliers:', cacheError.message)
+      logger.warn('inventory_supplier_cache_invalidation', { message: cacheError?.message })
     }
 
     return res.status(201).json(supplier)
@@ -706,10 +707,10 @@ export async function createInventorySupplier(req, res, next) {
       const messages = Object.entries(error.errors)
         .map(([field, err]) => `${field}: ${err.message}`)
         .join(', ')
-      console.warn('[Inventory] Supplier validation error:', messages)
+      logger.warn('inventory_supplier_validation_error', { errors: messages })
       return res.status(400).json({ message: `Validation failed: ${messages}` })
     }
-    console.error('[Inventory] Error creating supplier:', error.message, error.stack)
+    logger.error('inventory_supplier_creation_failed', { message: error?.message })
     next(error)
   }
 }
@@ -773,10 +774,10 @@ export async function createInventoryItem(req, res, next) {
       const messages = Object.entries(error.errors)
         .map(([field, err]) => `${field}: ${err.message}`)
         .join(', ')
-      console.warn('[Inventory] Item validation error:', messages)
+      logger.warn('inventory_item_validation_error', { errors: messages })
       return res.status(400).json({ message: `Validation failed: ${messages}` })
     }
-    console.error('[Inventory] Error creating item:', error.message, error.stack)
+    logger.error('inventory_item_creation_failed', { message: error?.message })
     next(error)
   }
 }
