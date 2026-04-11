@@ -151,9 +151,9 @@ export default function PricingPage() {
   const [successState, setSuccessState] = useState(null)
   const [planSummary, setPlanSummary] = useState({
     setupAmountPaise: 1299900,
-    firstMonthAmountPaise: 99900,
-    totalDueTodayPaise: 1399800,
-    recurringAmountPaise: 99900,
+    firstMonthAmountPaise: 89900,
+    totalDueTodayPaise: 1389800,
+    recurringAmountPaise: 89900,
   })
   const autoLaunchAttemptedRef = useRef(false)
 

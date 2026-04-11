@@ -19,7 +19,7 @@ import {
 import { logger } from '../utils/logger.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1299900
-const HYBRID_MONTHLY_AMOUNT_PAISE = 99900
+const HYBRID_MONTHLY_AMOUNT_PAISE = 89900
 const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
