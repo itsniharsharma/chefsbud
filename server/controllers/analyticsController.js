@@ -24,7 +24,10 @@ const LOW_STOCK_NOTIFICATIONS_ENABLED = String(process.env.LOW_STOCK_NOTIFICATIO
 const LOW_STOCK_THRESHOLD_PERCENT = 10
 const LOW_STOCK_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1000
 const MAX_LOW_STOCK_NOTIFICATIONS = 50
+const LOW_STOCK_CACHE_TTL_MS = Math.max(30_000, Number(process.env.LOW_STOCK_CACHE_TTL_MS || 120_000))
+const LOW_STOCK_CACHE_MAX_ENTRIES = Math.max(100, Number(process.env.LOW_STOCK_CACHE_MAX_ENTRIES || 2000))
 const analyticsWarmStateByRestaurant = new Map()
+const lowStockNotificationsCache = new Map()
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
@@ -43,7 +46,41 @@ function normalizePurchaseUnitFactor(unit = '') {
   return { baseUnit: 'unit', factor: 1 }
 }
 
+function readLowStockCache(restaurantId) {
+  const key = String(restaurantId || '')
+  if (!key) return null
+  const entry = lowStockNotificationsCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    lowStockNotificationsCache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function writeLowStockCache(restaurantId, value) {
+  const key = String(restaurantId || '')
+  if (!key) return
+
+  if (lowStockNotificationsCache.size >= LOW_STOCK_CACHE_MAX_ENTRIES) {
+    const oldestKey = lowStockNotificationsCache.keys().next().value
+    if (oldestKey) {
+      lowStockNotificationsCache.delete(oldestKey)
+    }
+  }
+
+  lowStockNotificationsCache.set(key, {
+    value,
+    expiresAt: Date.now() + LOW_STOCK_CACHE_TTL_MS,
+  })
+}
+
 async function buildLowStockDashboardNotifications(restaurantId) {
+  const cached = readLowStockCache(restaurantId)
+  if (cached) {
+    return cached
+  }
+
   const now = new Date()
   const expiresAt = new Date(now.getTime() + LOW_STOCK_NOTIFICATION_TTL_MS)
 
@@ -61,15 +98,24 @@ async function buildLowStockDashboardNotifications(restaurantId) {
           unit: '$items.unit',
         },
       },
+      {
+        $group: {
+          _id: {
+            itemId: '$itemId',
+            unit: '$unit',
+          },
+          quantity: { $sum: '$quantity' },
+        },
+      },
     ]),
   ])
 
   const purchasedByItem = new Map()
   for (const row of purchaseAggregates) {
-    const itemId = String(row?.itemId || '')
+    const itemId = String(row?._id?.itemId || '')
     if (!itemId) continue
 
-    const { baseUnit, factor } = normalizePurchaseUnitFactor(row?.unit)
+    const { baseUnit, factor } = normalizePurchaseUnitFactor(row?._id?.unit)
     const quantity = Number(row?.quantity || 0)
     if (!Number.isFinite(quantity) || quantity <= 0) continue
 
@@ -150,6 +196,7 @@ async function buildLowStockDashboardNotifications(restaurantId) {
     .select('itemId itemName thresholdPercent currentPercent currentStock purchasedQuantity unit message expiresAt updatedAt')
     .lean()
 
+  writeLowStockCache(restaurantId, active)
   return active
 }
 

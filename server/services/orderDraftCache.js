@@ -6,10 +6,12 @@ import { withRedis } from '../config/redis.js'
 
 const restaurantLookupStore = new Map()
 const draftStore = new Map()
+const catalogVersionStore = new Map()
 
 const RESTAURANT_LOOKUP_TTL_MS = Math.max(60_000, Number(process.env.ORDER_DRAFT_RESTAURANT_LOOKUP_TTL_MS || 15 * 60_000))
 const DRAFT_CACHE_TTL_SECONDS = Math.max(30, Math.min(60, Number(process.env.ORDER_DRAFT_CACHE_TTL_SECONDS || 45)))
 const MAX_LOCAL_ENTRIES = Math.max(100, Number(process.env.ORDER_DRAFT_CACHE_MAX_ENTRIES || 1000))
+const CATALOG_VERSION_TTL_MS = Math.max(5_000, Number(process.env.ORDER_DRAFT_CATALOG_VERSION_TTL_MS || 15_000))
 
 function nowMs() {
   return Date.now()
@@ -25,6 +27,10 @@ function slugCacheKey(restaurantSlug) {
 
 function restaurantLookupRedisKey(restaurantSlug) {
   return `order-draft:restaurant:${slugCacheKey(restaurantSlug)}`
+}
+
+function catalogVersionRedisKey(restaurantId) {
+  return `order-draft:catalog-version:${String(restaurantId || '').trim()}`
 }
 
 function draftCacheKey(restaurantId, menuVersion, itemsHash) {
@@ -142,6 +148,22 @@ export async function resolveCatalogVersion(restaurantId) {
     return '0:0'
   }
 
+  const localCached = readLocalEntry(catalogVersionStore, normalizedRestaurantId)
+  if (typeof localCached === 'string' && localCached) {
+    return localCached
+  }
+
+  const redisCached = await withRedis(
+    'order_draft_catalog_version_read',
+    (redis) => redis.get(catalogVersionRedisKey(normalizedRestaurantId)),
+    null,
+  )
+  if (typeof redisCached === 'string' && redisCached.trim()) {
+    const value = redisCached.trim()
+    writeLocalEntry(catalogVersionStore, normalizedRestaurantId, value, CATALOG_VERSION_TTL_MS)
+    return value
+  }
+
   const [latestMenuItem, latestOffer] = await Promise.all([
     MenuItem.findOne({ restaurantId: normalizedRestaurantId, available: true })
       .sort({ updatedAt: -1, _id: -1 })
@@ -153,10 +175,19 @@ export async function resolveCatalogVersion(restaurantId) {
       .lean(),
   ])
 
-  return [
+  const catalogVersion = [
     latestMenuItem?.updatedAt ? new Date(latestMenuItem.updatedAt).getTime() : 0,
     latestOffer?.updatedAt ? new Date(latestOffer.updatedAt).getTime() : 0,
   ].join(':')
+
+  writeLocalEntry(catalogVersionStore, normalizedRestaurantId, catalogVersion, CATALOG_VERSION_TTL_MS)
+  void withRedis(
+    'order_draft_catalog_version_write',
+    (redis) => redis.set(catalogVersionRedisKey(normalizedRestaurantId), catalogVersion, { ex: Math.ceil(CATALOG_VERSION_TTL_MS / 1000) }),
+    null,
+  )
+
+  return catalogVersion
 }
 
 export async function getCachedDraftResult({ restaurantId, menuVersion, itemsHash }) {
