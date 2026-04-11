@@ -6,6 +6,7 @@ import Button from '../components/Button'
 import KotReprintModal from '../components/KotReprintModal'
 import ManualOrderPanel from '../components/ManualOrderPanel'
 import { orderService } from '../services/orderService'
+import { playOrderAlertSound } from '../services/orderAlertAudio'
 import { useAuth } from '../hooks/useAuth'
 import { useOrdersBoardQuery, useTablesQuery, useMenuQuery } from '../hooks/useDashboardQueries'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
@@ -293,6 +294,11 @@ export default function OrdersPage() {
     setError('')
   }
 
+  const onManualOrderCreated = async () => {
+    await playOrderAlertSound()
+    await refreshBoard()
+  }
+
   const printBillForOrder = async (order, options = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
@@ -500,7 +506,7 @@ export default function OrdersPage() {
             restaurantSlug={restaurant?.slug}
             menu={menu}
             tables={tables}
-            onOrderCreated={() => refreshBoard()}
+            onOrderCreated={onManualOrderCreated}
           />
         </div>
       </div>

@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken'
 import { createAdapter } from '@socket.io/redis-adapter'
 import { createClient } from 'redis'
 import Restaurant from '../models/Restaurant.js'
+import StaffAccount from '../models/StaffAccount.js'
 import { logger } from '../utils/logger.js'
 
 let ioServer = null
@@ -155,6 +156,8 @@ export function initSocketServer(server) {
 
       socket.data.userId = String(decoded.userId)
       socket.data.role = String(decoded.role || 'owner')
+      socket.data.staffId = String(decoded.staffId || '')
+      socket.data.restaurantId = String(decoded.restaurantId || '')
       return next()
     } catch {
       return next(new Error('Unauthorized'))
@@ -175,7 +178,35 @@ export function initSocketServer(server) {
           return
         }
 
-        const hasAccess = await Restaurant.exists({ _id: restaurantId, ownerId: socket.data.userId })
+        let hasAccess = false
+
+        if (socket.data?.role === 'staff') {
+          const tokenRestaurantId = String(socket.data?.restaurantId || '').trim()
+          const tokenStaffId = String(socket.data?.staffId || '').trim()
+
+          if (!tokenRestaurantId || !tokenStaffId) {
+            if (typeof ack === 'function') ack({ ok: false, message: 'Forbidden' })
+            return
+          }
+
+          // Staff can only join their assigned restaurant room.
+          if (tokenRestaurantId && tokenRestaurantId !== restaurantId) {
+            if (typeof ack === 'function') ack({ ok: false, message: 'Forbidden' })
+            return
+          }
+
+          const staffMatchFilter = {
+            _id: tokenStaffId,
+            restaurantId,
+            ownerId: socket.data.userId,
+            isActive: true,
+          }
+
+          hasAccess = Boolean(await StaffAccount.exists(staffMatchFilter))
+        } else {
+          hasAccess = Boolean(await Restaurant.exists({ _id: restaurantId, ownerId: socket.data.userId }))
+        }
+
         if (!hasAccess) {
           if (typeof ack === 'function') ack({ ok: false, message: 'Forbidden' })
           return

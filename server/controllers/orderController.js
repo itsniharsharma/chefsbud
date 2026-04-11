@@ -861,6 +861,22 @@ export async function createOrder(req, res, next) {
     if (traceEnabled) console.timeEnd('inventory')
 
     const responsePayload = order?.toObject ? order.toObject() : order
+
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant: draft.restaurant,
+        tableNumber: draft.tableNumber,
+        orderId: responsePayload._id,
+        includeAnalytics: true,
+      }),
+    )
+    publishOrderChange({
+      restaurantId: draft.restaurant._id,
+      type: 'created',
+      orderId: responsePayload._id,
+      extra: { orderStatus: responsePayload.orderStatus },
+    })
+
     const responseStartedAt = Date.now()
     if (traceEnabled) console.time('response')
     res.status(201).json(responsePayload)
@@ -871,21 +887,6 @@ export async function createOrder(req, res, next) {
     }
 
     runNonCriticalTask('order_create_post_response_side_effects', async () => {
-      invalidateCacheByTags(
-        buildOrderCacheTags({
-          restaurant: draft.restaurant,
-          tableNumber: draft.tableNumber,
-          orderId: responsePayload._id,
-          includeAnalytics: true,
-        }),
-      )
-      publishOrderChange({
-        restaurantId: draft.restaurant._id,
-        type: 'created',
-        orderId: responsePayload._id,
-        extra: { orderStatus: responsePayload.orderStatus },
-      })
-
       if (debugEnabled) {
         logger.info('order_create_debug', {
           orderId: String(responsePayload?._id || ''),

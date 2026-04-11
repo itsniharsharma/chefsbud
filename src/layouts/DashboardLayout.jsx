@@ -44,6 +44,7 @@ export default function DashboardLayout() {
   useOrderRealtimeSync({
     restaurantId: restaurant?._id,
     enabled: Boolean(restaurant?._id),
+    enableSoundNotifications: location.pathname.startsWith('/dashboard/orders'),
   })
 
   useEffect(() => {

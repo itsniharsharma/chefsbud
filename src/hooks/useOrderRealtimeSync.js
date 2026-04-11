@@ -1,12 +1,13 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { getDashboardSocket, setDashboardSocketRoomReady } from '../services/socketService'
+import { bindOrderAlertAudioUnlock, playOrderAlertSound } from '../services/orderAlertAudio'
 import { queryKeys } from '../lib/queryKeys'
 
 const ORDER_INVALIDATION_DEBOUNCE_MS = 250
 const ROOM_JOIN_RETRY_MS = 2500
 
-export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
+export function useOrderRealtimeSync({ restaurantId, enabled = true, enableSoundNotifications = false }) {
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -25,6 +26,10 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
     let invalidationTimer = null
     let joinRetryTimer = null
     let shouldRefreshAnalyticsCards = false
+
+    if (enableSoundNotifications) {
+      bindOrderAlertAudioUnlock()
+    }
 
     const clearJoinRetry = () => {
       if (!joinRetryTimer) return
@@ -94,7 +99,22 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
       requestRoomJoin()
     }
 
-    const onOrderChanged = (payload) => {
+    const onOrderChanged = async (payload) => {
+      const eventType = String(payload?.type || '').trim()
+
+      if (eventType === 'created') {
+        if (enableSoundNotifications) {
+          await playOrderAlertSound()
+        }
+
+        await queryClient.refetchQueries({
+          queryKey: ['dashboard', 'orders-board', restaurantId],
+          type: 'active',
+        })
+
+        return
+      }
+
       invalidateOrders(payload)
     }
 
@@ -117,5 +137,5 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true }) {
       socket.off('order:changed', onOrderChanged)
       socket.disconnect()
     }
-  }, [enabled, restaurantId, queryClient])
+  }, [enabled, restaurantId, queryClient, enableSoundNotifications])
 }
