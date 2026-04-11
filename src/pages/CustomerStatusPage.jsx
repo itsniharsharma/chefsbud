@@ -4,6 +4,7 @@ import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerTableOrdersQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
+import { getOrderDisplayNumber } from '../utils/orderDisplay'
 import { buildCustomerMenuUrl, buildCustomerOrderTrackingUrl } from '../utils/customerUrl'
 import { orderService } from '../services/orderService'
 
@@ -103,7 +104,7 @@ export default function CustomerStatusPage() {
             <div key={order._id} className="lux-card royal-reveal royal-reveal-delay-1 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Order #{order._id.slice(-6).toUpperCase()}</p>
+                  <p className="text-sm font-semibold text-gray-900">Order {getOrderDisplayNumber(order)}</p>
                   <p className="text-xs royal-muted">{new Date(order.createdAt).toLocaleString()}</p>
                 </div>
                 <span

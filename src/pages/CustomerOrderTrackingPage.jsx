@@ -4,6 +4,7 @@ import Button from '../components/Button'
 import CustomerBottomNav from '../components/CustomerBottomNav'
 import { useCustomerOrderStatusQuery } from '../hooks/useCustomerOrderQueries'
 import { formatCurrencyINR } from '../utils/currency'
+import { getOrderDisplayNumber } from '../utils/orderDisplay'
 import { buildCustomerStatusUrl } from '../utils/customerUrl'
 
 const steps = ['Preparing', 'Served', 'Completed']
@@ -48,7 +49,7 @@ export default function CustomerOrderTrackingPage() {
       </header>
 
       <div className="lux-card royal-reveal p-4 md:p-5">
-        <p className="text-sm royal-muted">Order ID: {orderId}</p>
+        <p className="text-sm royal-muted">Order: {order ? getOrderDisplayNumber(order) : orderId}</p>
         <p className="text-sm royal-muted">Table {tableNumber}</p>
 
         {isFetching ? <p className="mt-2 text-xs royal-muted">Refreshing status...</p> : null}

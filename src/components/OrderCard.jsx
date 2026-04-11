@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import Button from './Button'
 import { formatCurrencyINR } from '../utils/currency'
+import { getOrderDisplayNumber } from '../utils/orderDisplay'
 
 const statuses = ['Preparing', 'Served', 'Completed']
 
@@ -17,6 +18,7 @@ function OrderCard({
   statusActionDisabled = false,
 }) {
   const orderId = order._id || order.id
+  const orderDisplayNumber = getOrderDisplayNumber(order)
   const label = order.orderStatus || order.status
   const total = order.billFinalTotalAmount ?? order.totalAmount ?? order.total ?? 0
   const floorNumber = Number(order.floorNumber || 1)
@@ -41,7 +43,7 @@ function OrderCard({
   return (
     <div className="card p-4">
       <div className="mb-2 flex items-center justify-between">
-        <p className="font-semibold text-slate-800">{orderId}</p>
+        <p className="font-semibold text-slate-800">Order {orderDisplayNumber}</p>
         <span className="text-sm text-slate-500">{createdTime}</span>
       </div>
       <p className="text-sm text-slate-600">Floor: {floorNumber} | Table: {order.tableNumber}</p>

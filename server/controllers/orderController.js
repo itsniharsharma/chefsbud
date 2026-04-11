@@ -1,5 +1,6 @@
 import mongoose from 'mongoose'
 import Order from '../models/Order.js'
+import OrderDailyCounter from '../models/OrderDailyCounter.js'
 import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import bcrypt from 'bcrypt'
@@ -35,9 +36,16 @@ const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUB
 const CUSTOMER_FEEDBACK_WINDOW_MINUTES = Math.max(5, Math.min(Number(process.env.CUSTOMER_FEEDBACK_WINDOW_MINUTES || 60), 24 * 60))
 const ORDER_STATUS_ALLOWED = ['Preparing', 'Served', 'Completed']
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
+const ORDER_SEQUENCE_TIMEZONE = String(process.env.ORDER_SEQUENCE_TIMEZONE || 'Asia/Kolkata').trim() || 'Asia/Kolkata'
+const ORDER_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: ORDER_SEQUENCE_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
 
 const orderListProjection =
-  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason'
+  '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason orderDateKey dailyOrderNumber'
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
@@ -82,6 +90,28 @@ function runNonCriticalTask(taskName, taskFn) {
       })
     }
   })
+}
+
+function buildOrderDateKey(date = new Date()) {
+  return ORDER_DATE_KEY_FORMATTER.format(date)
+}
+
+async function allocateDailyOrderNumber({ restaurantId, orderDateKey, session = null }) {
+  const counter = await OrderDailyCounter.findOneAndUpdate(
+    { restaurantId, orderDateKey },
+    {
+      $setOnInsert: { restaurantId, orderDateKey },
+      $inc: { seq: 1 },
+    },
+    {
+      upsert: true,
+      returnDocument: 'after',
+      session,
+      setDefaultsOnInsert: true,
+    },
+  )
+
+  return Math.max(1, Number(counter?.seq || 1))
 }
 
 function hrNowNs() {
@@ -688,6 +718,8 @@ export async function createOrder(req, res, next) {
     const inventoryBehavior = getOrderInventoryBehavior()
     const asyncInventoryEnabled = isOrderInventoryAsyncEnabled()
 
+    const orderDateKey = buildOrderDateKey()
+
     if (inventoryBehavior.reserveOnCreate && !asyncInventoryEnabled) {
       logger.error('order_inventory_async_mode_required', {
         restaurantSlug: String(restaurantSlug || ''),
@@ -715,11 +747,19 @@ export async function createOrder(req, res, next) {
           if (traceEnabled) console.time('transaction')
           const transactionStartedAt = Date.now()
           await orderCreateSession.withTransaction(async () => {
+            const dailyOrderNumber = await allocateDailyOrderNumber({
+              restaurantId: draft.restaurant._id,
+              orderDateKey,
+              session: orderCreateSession,
+            })
+
             const createdOrders = await Order.create(
               [
                 {
                   restaurantId: draft.restaurant._id,
                   restaurantSlug: draft.restaurantSlug,
+                  orderDateKey,
+                  dailyOrderNumber,
                   floorNumber: draft.floorNumber,
                   tableNumber: draft.tableNumber,
                   items: draft.orderItems,
@@ -754,9 +794,16 @@ export async function createOrder(req, res, next) {
           orderCreateSession.endSession()
         }
       } else {
+        const dailyOrderNumber = await allocateDailyOrderNumber({
+          restaurantId: draft.restaurant._id,
+          orderDateKey,
+        })
+
         order = await Order.create({
           restaurantId: draft.restaurant._id,
           restaurantSlug: draft.restaurantSlug,
+          orderDateKey,
+          dailyOrderNumber,
           floorNumber: draft.floorNumber,
           tableNumber: draft.tableNumber,
           items: draft.orderItems,
@@ -888,7 +935,7 @@ export async function getPublicOrderStatus(req, res, next) {
       isArchived: false,
     })
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt orderDateKey dailyOrderNumber',
       )
       .lean()
 
@@ -924,7 +971,7 @@ export async function getPublicTableOrders(req, res, next) {
       .sort({ createdAt: -1 })
       .limit(PUBLIC_TABLE_ORDER_LIMIT)
       .select(
-        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt',
+        '_id floorNumber tableNumber items subtotalAmount discountTotal appliedOffers customerNote totalAmount paymentStatus kotPrinted kotPrintedAt orderStatus createdAt completedAt customerRating customerRatedAt orderDateKey dailyOrderNumber',
       )
       .lean()
 
