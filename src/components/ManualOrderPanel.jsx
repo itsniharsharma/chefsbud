@@ -53,10 +53,11 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
   const [cart, setCart] = useState({}) // { itemId: { id, name, price, quantity, portionSize } }
   const [activeCategory, setActiveCategory] = useState('')
   const [menuError, setMenuError] = useState('')
+  const [customerNote, setCustomerNote] = useState('')
   const queryClient = useQueryClient()
 
   const createOrderMutation = useMutation({
-    mutationFn: async ({ items, tableNumber, floorNumber }) => {
+    mutationFn: async ({ items, tableNumber, floorNumber, customerNote }) => {
       if (!items.length) throw new Error('No items selected')
 
       const normalizedSlug = String(restaurantSlug || '').trim()
@@ -69,6 +70,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
         restaurantSlug: normalizedSlug,
         tableNumber: Number(tableNumber),
         floorNumber: Number(floorNumber),
+        customerNote: String(customerNote || '').trim(),
         items: items.map((item) => ({
           menuItemId: item.id,
           quantity: item.quantity,
@@ -200,12 +202,14 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
       items,
       tableNumber: Number(selectedTable),
       floorNumber: Number(selectedFloor),
+      customerNote,
     })
   }
 
   const handleClearCart = () => {
     setCart({})
     setMenuError('')
+    setCustomerNote('')
   }
 
   const uniqueFloors = useMemo(() => {
@@ -369,6 +373,17 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
                   </div>
                 </div>
               </div>
+
+              <label className="mb-3 block">
+                <span className="mb-1 block text-xs font-medium text-slate-800">Additional Note (optional)</span>
+                <textarea
+                  className="input min-h-[88px] bg-white/95 text-sm"
+                  value={customerNote}
+                  onChange={(event) => setCustomerNote(event.target.value.slice(0, 500))}
+                  placeholder="Example: less spicy, no onion, serve together"
+                />
+                <p className="mt-1 text-xs text-slate-500">{customerNote.length}/500</p>
+              </label>
 
               {/* Actions */}
               <div className="flex gap-2">

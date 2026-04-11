@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Button from '../components/Button'
@@ -22,6 +22,7 @@ export default function CustomerCheckoutPage() {
   const [message, setMessage] = useState('')
   const [customerNote, setCustomerNote] = useState('')
   const [pricing, setPricing] = useState({ subtotalAmount: 0, discountTotal: 0, totalAmount: 0, appliedOffers: [] })
+  const checkoutAttemptKeyRef = useRef('')
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
@@ -33,27 +34,24 @@ export default function CustomerCheckoutPage() {
 
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart])
 
-  const idempotencyKey = useMemo(() => {
-    const normalizedItems = cart
-      .map((item) => `${String(item.menuItemId || '').trim()}:${Number(item.quantity || 0)}`)
-      .sort()
-      .join('|')
-    const fingerprint = [
-      restaurantSlug,
-      tableNumber,
-      floorNumber,
-      customerNote.trim().slice(0, 500),
-      normalizedItems,
-    ].join('::')
-
-    let hash = 2166136261
-    for (let index = 0; index < fingerprint.length; index += 1) {
-      hash ^= fingerprint.charCodeAt(index)
-      hash = Math.imul(hash, 16777619)
-    }
-
-    return `cust-order-${(hash >>> 0).toString(16)}`
+  useEffect(() => {
+    // A changed cart/note means a new checkout intent should get a new idempotency key.
+    checkoutAttemptKeyRef.current = ''
   }, [cart, customerNote, floorNumber, restaurantSlug, tableNumber])
+
+  const resolveCheckoutAttemptKey = () => {
+    if (checkoutAttemptKeyRef.current) return checkoutAttemptKeyRef.current
+
+    const randomPart =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID().replace(/-/g, '')
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+
+    const nextKey = `cust-order-${String(restaurantSlug || '').trim()}-${String(tableNumber || '').trim()}-${randomPart}`
+      .slice(0, 120)
+    checkoutAttemptKeyRef.current = nextKey
+    return nextKey
+  }
 
   useEffect(() => {
     if (!cart.length) {
@@ -117,7 +115,7 @@ export default function CustomerCheckoutPage() {
         tableNumber: Math.floor(parsedTableNumber),
         floorNumber,
         customerNote,
-        idempotencyKey,
+        idempotencyKey: resolveCheckoutAttemptKey(),
         items: normalizedItems,
       })
 
@@ -125,6 +123,7 @@ export default function CustomerCheckoutPage() {
         seedCustomerOrderCaches(order)
       }
 
+      checkoutAttemptKeyRef.current = ''
       clearSession(restaurantSlug, tableNumber)
       setMessage('Order placed successfully. Redirecting...')
       setTimeout(() => {
