@@ -38,16 +38,8 @@ function indexNameFromSpec(spec = {}) {
 function buildTargetIndexSpecs() {
   return [
     {
-      key: { restaurantId: 1, isArchived: 1, createdAt: -1 },
-      options: { name: 'restaurantId_1_isArchived_1_createdAt_-1' },
-    },
-    {
       key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, createdAt: -1 },
       options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_createdAt_-1' },
-    },
-    {
-      key: { restaurantId: 1, isArchived: 1, hiddenFromActive: 1, orderStatus: 1, createdAt: -1 },
-      options: { name: 'restaurantId_1_isArchived_1_hiddenFromActive_1_orderStatus_1_createdAt_-1' },
     },
     {
       key: { restaurantId: 1, isArchived: 1, orderStatus: 1, completedAt: -1, createdAt: -1 },
@@ -64,10 +56,6 @@ function buildTargetIndexSpecs() {
     {
       key: { restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 },
       options: { name: 'restaurantSlug_1_tableNumber_1_isArchived_1_createdAt_-1' },
-    },
-    {
-      key: { restaurantSlug: 1, tableNumber: 1, isArchived: 1, paymentStatus: 1, createdAt: -1 },
-      options: { name: 'restaurantSlug_1_tableNumber_1_isArchived_1_paymentStatus_1_createdAt_-1' },
     },
     {
       key: { isArchived: 1, archivedAt: 1, orderStatus: 1 },

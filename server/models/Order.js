@@ -92,14 +92,8 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true },
 )
 
-// Lifecycle core path expected by startup checks.
-orderSchema.index({ restaurantId: 1, isArchived: 1, createdAt: -1 })
-
 // Active board listing (default path): restaurant + non-archived + active visibility, newest first.
 orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, createdAt: -1 })
-
-// Active board with explicit status filter.
-orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, orderStatus: 1, createdAt: -1 })
 
 // Completed/recent views with completion-time sorting.
 orderSchema.index({ restaurantId: 1, isArchived: 1, orderStatus: 1, completedAt: -1, createdAt: -1 })
@@ -112,9 +106,6 @@ orderSchema.index({ restaurantId: 1, isArchived: 1, hiddenFromActive: 1, floorNu
 
 // Public table order timeline and status checks.
 orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, createdAt: -1 })
-
-// Public table payment-filtered order list.
-orderSchema.index({ restaurantSlug: 1, tableNumber: 1, isArchived: 1, paymentStatus: 1, createdAt: -1 })
 
 // Archival purge path.
 orderSchema.index({ isArchived: 1, archivedAt: 1, orderStatus: 1 })
