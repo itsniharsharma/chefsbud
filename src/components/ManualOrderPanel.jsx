@@ -34,6 +34,14 @@ function buildCategoryIndex(items = []) {
   return categoryMap
 }
 
+function hydrateCategoryIndex(menu = {}) {
+  if (menu?.indexes && typeof menu.indexes === 'object' && menu.indexes.categoryItems) {
+    return new Map(Object.entries(menu.indexes.categoryItems || {}))
+  }
+
+  return buildCategoryIndex(menu?.items)
+}
+
 // Generate unique idempotency key
 const generateIdempotencyKey = () => {
   return `manual-order-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`
@@ -94,7 +102,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
     return menu.categories.filter((cat) => Boolean(cat?.name))
   }, [menu])
 
-  const categoryIndex = useMemo(() => buildCategoryIndex(menu?.items), [menu?.items])
+  const categoryIndex = useMemo(() => hydrateCategoryIndex(menu), [menu])
 
   // Set first category as active on load
   useEffect(() => {

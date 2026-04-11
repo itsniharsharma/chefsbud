@@ -16,12 +16,72 @@ const menuProjection = '_id categoryId name description price available isVeg po
 const categoryProjection = '_id name orderIndex'
 const offerProjection = '_id name type discountValue conditions active startTime endTime'
 
+const DIET_FILTERS = ['all', 'veg', 'nonveg']
+const SIZE_FILTERS = ['all', 'small', 'regular', 'medium', 'large', 'xlarge']
+
+function buildFilterKey(dietFilter, sizeFilter) {
+  return `${String(dietFilter || 'all').trim().toLowerCase()}|${String(sizeFilter || 'all').trim().toLowerCase()}`
+}
+
 function normalizePortionSize(value) {
   const normalized = String(value || '').trim().toLowerCase()
   if (normalized === 'small' || normalized === 'regular' || normalized === 'medium' || normalized === 'large' || normalized === 'xlarge') {
     return normalized
   }
   return 'medium'
+}
+
+function buildMenuIndexes(items = []) {
+  const indexes = {
+    categoryItems: {},
+    categoryCounts: {},
+    categoryItemsByFilter: {},
+    categoryCountsByFilter: {},
+  }
+
+  for (const dietFilter of DIET_FILTERS) {
+    for (const sizeFilter of SIZE_FILTERS) {
+      const filterKey = buildFilterKey(dietFilter, sizeFilter)
+      indexes.categoryItemsByFilter[filterKey] = {}
+      indexes.categoryCountsByFilter[filterKey] = {}
+    }
+  }
+
+  const addToFilterBucket = (filterKey, categoryId, item) => {
+    const categoryBuckets = indexes.categoryItemsByFilter[filterKey]
+    const categoryCounts = indexes.categoryCountsByFilter[filterKey]
+
+    if (!categoryBuckets[categoryId]) {
+      categoryBuckets[categoryId] = []
+    }
+
+    categoryBuckets[categoryId].push(item)
+    categoryCounts[categoryId] = (categoryCounts[categoryId] || 0) + 1
+  }
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item?.available || !item?.name) continue
+
+    const categoryId = String(item?.categoryId || '').trim()
+    if (!categoryId) continue
+
+    const normalizedSize = normalizePortionSize(item?.portionSize)
+    const dietKey = item?.isVeg === false ? 'nonveg' : 'veg'
+
+    if (!indexes.categoryItems[categoryId]) {
+      indexes.categoryItems[categoryId] = []
+    }
+
+    indexes.categoryItems[categoryId].push(item)
+    indexes.categoryCounts[categoryId] = (indexes.categoryCounts[categoryId] || 0) + 1
+
+    addToFilterBucket(buildFilterKey('all', 'all'), categoryId, item)
+    addToFilterBucket(buildFilterKey(dietKey, 'all'), categoryId, item)
+    addToFilterBucket(buildFilterKey('all', normalizedSize), categoryId, item)
+    addToFilterBucket(buildFilterKey(dietKey, normalizedSize), categoryId, item)
+  }
+
+  return indexes
 }
 
 function invalidateMenuCache(restaurantSlug) {
@@ -44,7 +104,13 @@ async function buildMenuPayload(restaurant) {
       .lean(),
   ])
 
-  return { restaurant, categories, items, offers }
+  return {
+    restaurant,
+    categories,
+    items,
+    offers,
+    indexes: buildMenuIndexes(items),
+  }
 }
 
 export async function getMenuBySlug(req, res, next) {

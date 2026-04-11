@@ -131,6 +131,36 @@ function buildCustomerMenuIndexes(items = []) {
   }
 }
 
+function hydrateMenuIndexes(menu = {}) {
+  if (menu?.indexes && typeof menu.indexes === 'object') {
+    const categoryItems = new Map(Object.entries(menu.indexes.categoryItems || {}))
+    const categoryCounts = new Map(Object.entries(menu.indexes.categoryCounts || {}))
+    const categoryFilteredItems = new Map(
+      Object.entries(menu.indexes.categoryItemsByFilter || {}).map(([filterKey, categoryBuckets]) => [
+        filterKey,
+        new Map(Object.entries(categoryBuckets || {})),
+      ]),
+    )
+    const categoryFilteredCounts = new Map(
+      Object.entries(menu.indexes.categoryCountsByFilter || {}).map(([filterKey, categoryCountsByFilter]) => [
+        filterKey,
+        new Map(Object.entries(categoryCountsByFilter || {})),
+      ]),
+    )
+
+    return {
+      categoryItems,
+      categoryCounts,
+      filteredItems: new Map(),
+      filteredCounts: new Map(),
+      categoryFilteredItems,
+      categoryFilteredCounts,
+    }
+  }
+
+  return buildCustomerMenuIndexes(menu.items)
+}
+
 export default function CustomerMenuPage() {
   const navigate = useNavigate()
   const { restaurantSlug, tableNumber } = useParams()
@@ -156,7 +186,7 @@ export default function CustomerMenuPage() {
 
   const session = getSession(restaurantSlug, tableNumber)
   const cart = session.items
-  const menuIndexes = useMemo(() => buildCustomerMenuIndexes(menu.items), [menu.items])
+  const menuIndexes = useMemo(() => hydrateMenuIndexes(menu), [menu])
 
   const fetchMenu = useCallback(async ({ showLoader = false } = {}) => {
     if (!restaurantSlug) return
@@ -379,20 +409,19 @@ export default function CustomerMenuPage() {
 
   const currentFilterKey = useMemo(() => getMenuFilterKey(dietFilter, sizeFilter), [dietFilter, sizeFilter])
 
-  const itemCountByCategory = useMemo(
-    () => menuIndexes.filteredCounts.get(currentFilterKey) || new Map(),
-    [menuIndexes.filteredCounts, currentFilterKey],
-  )
+  const itemCountByCategory = useMemo(() => {
+    const counts = menuIndexes.categoryFilteredCounts.get(currentFilterKey)
+    return counts || new Map()
+  }, [menuIndexes.categoryFilteredCounts, currentFilterKey])
 
-  const visibleCategories = useMemo(
-    () => menu.categories.filter((category) => (itemCountByCategory.get(category._id) || 0) > 0),
-    [menu.categories, itemCountByCategory],
-  )
+  const visibleCategories = useMemo(() => {
+    return menu.categories.filter((category) => (itemCountByCategory.get(category._id) || 0) > 0)
+  }, [menu.categories, itemCountByCategory])
 
-  const visibleItems = useMemo(
-    () => (activeCategory ? menuIndexes.categoryFilteredItems.get(activeCategory)?.get(currentFilterKey) || [] : []),
-    [activeCategory, currentFilterKey, menuIndexes.categoryFilteredItems],
-  )
+  const visibleItems = useMemo(() => {
+    if (!activeCategory) return []
+    return menuIndexes.categoryFilteredItems.get(currentFilterKey)?.get(activeCategory) || []
+  }, [activeCategory, currentFilterKey, menuIndexes.categoryFilteredItems])
 
   const cartQuantityByItemId = useMemo(() => {
     const map = new Map()
