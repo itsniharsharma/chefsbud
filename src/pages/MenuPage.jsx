@@ -33,6 +33,24 @@ const newDraftItem = {
 const MAX_AI_IMAGES = 4
 const MAX_AI_IMAGE_SIZE_BYTES = 2 * 1024 * 1024
 
+const portionSizeOptions = [
+  { value: 'small', label: 'Small' },
+  { value: 'regular', label: 'Regular' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' },
+  { value: 'xlarge', label: 'XLarge' },
+]
+
+function formatPortionSizeLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'small') return 'Small'
+  if (normalized === 'regular') return 'Regular'
+  if (normalized === 'medium') return 'Medium'
+  if (normalized === 'large') return 'Large'
+  if (normalized === 'xlarge') return 'XLarge'
+  return 'Medium'
+}
+
 export default function MenuPage() {
   const { restaurant } = useAuth()
   const [categoryName, setCategoryName] = useState('')
@@ -512,9 +530,11 @@ export default function MenuPage() {
                         value={item.portionSize || 'medium'}
                         onChange={(e) => updateDraftItem(categoryIndex, itemIndex, 'portionSize', e.target.value)}
                       >
-                        <option value="small">Small</option>
-                        <option value="medium">Medium</option>
-                        <option value="large">Large</option>
+                        {portionSizeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
                       </select>
                       <label className="md:col-span-1 flex items-center justify-center gap-1 text-xs text-slate-600">
                         <input
@@ -605,9 +625,11 @@ export default function MenuPage() {
               value={form.portionSize || 'medium'}
               onChange={(e) => setForm((prev) => ({ ...prev, portionSize: e.target.value }))}
             >
-              <option value="small">Small</option>
-              <option value="medium">Medium</option>
-              <option value="large">Large</option>
+              {portionSizeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -641,7 +663,7 @@ export default function MenuPage() {
                 {item.isVeg === false ? 'Non-Veg' : 'Veg'}
               </span>
               <span className="rounded bg-slate-100 px-2 py-1 text-slate-700">
-                {(item.portionSize || 'medium').toUpperCase()}
+                {formatPortionSizeLabel(item.portionSize)}
               </span>
               {item.bestseller && <span className="rounded bg-red-50 px-2 py-1 text-[var(--primary)]">Bestseller</span>}
             </div>

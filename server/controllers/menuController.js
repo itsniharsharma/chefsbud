@@ -18,7 +18,7 @@ const offerProjection = '_id name type discountValue conditions active startTime
 
 function normalizePortionSize(value) {
   const normalized = String(value || '').trim().toLowerCase()
-  if (normalized === 'small' || normalized === 'medium' || normalized === 'large') {
+  if (normalized === 'small' || normalized === 'regular' || normalized === 'medium' || normalized === 'large' || normalized === 'xlarge') {
     return normalized
   }
   return 'medium'

@@ -4,9 +4,10 @@ import BillPrintModal from '../components/BillPrintModal'
 import OrderCard from '../components/OrderCard'
 import Button from '../components/Button'
 import KotReprintModal from '../components/KotReprintModal'
+import ManualOrderPanel from '../components/ManualOrderPanel'
 import { orderService } from '../services/orderService'
 import { useAuth } from '../hooks/useAuth'
-import { useOrdersBoardQuery, useTablesQuery } from '../hooks/useDashboardQueries'
+import { useOrdersBoardQuery, useTablesQuery, useMenuQuery } from '../hooks/useDashboardQueries'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
@@ -40,6 +41,7 @@ export default function OrdersPage() {
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
   const { data: tables = [] } = useTablesQuery({ restaurantId: restaurant?._id })
+  const { data: menu } = useMenuQuery({ restaurantId: restaurant?._id })
   const boardQueryKey = ['dashboard', 'orders-board', restaurant?._id]
 
   const restorePreviousBoards = (previousBoards = []) => {
@@ -466,12 +468,13 @@ export default function OrdersPage() {
         </Button>
       </form>
 
-      <div className="grid grid-cols-1 gap-4">
-        <section className="space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Left Column: Orders Board */}
+        <section className="flex h-[calc(100vh-380px)] flex-col space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
           <h2 className="text-base font-semibold text-slate-800">
             {appliedFloor ? `Active Orders - Floor ${appliedFloor}` : 'Active Orders'}
           </h2>
-          <div className="grid grid-cols-1 gap-4">
+          <div className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto pr-1">
             {activeOrders.map((order) => (
               <OrderCard
                 key={order._id || order.id}
@@ -489,6 +492,17 @@ export default function OrdersPage() {
             {!activeOrders.length && <p className="text-sm text-slate-500">No active orders in this view.</p>}
           </div>
         </section>
+
+        {/* Right Column: Manual Order Creation */}
+        <div className="h-[calc(100vh-380px)]">
+          <ManualOrderPanel
+            restaurantId={restaurant?._id}
+            restaurantSlug={restaurant?.slug}
+            menu={menu}
+            tables={tables}
+            onOrderCreated={() => refreshBoard()}
+          />
+        </div>
       </div>
     </div>
   )

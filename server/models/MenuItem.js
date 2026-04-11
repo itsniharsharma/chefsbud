@@ -9,7 +9,7 @@ const menuItemSchema = new mongoose.Schema(
     price: { type: Number, required: true, min: 0 },
     available: { type: Boolean, default: true },
     isVeg: { type: Boolean, default: true },
-    portionSize: { type: String, enum: ['small', 'medium', 'large'], default: 'medium' },
+    portionSize: { type: String, enum: ['small', 'regular', 'medium', 'large', 'xlarge'], default: 'medium' },
     bestseller: { type: Boolean, default: false },
   },
   { timestamps: true },
