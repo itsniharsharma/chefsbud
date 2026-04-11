@@ -21,7 +21,7 @@ const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(proces
 const ANALYTICS_WARM_STATE_RETENTION_MS = Math.max(3_600_000, Number(process.env.ANALYTICS_WARM_STATE_RETENTION_MS || 24 * 60 * 60 * 1000))
 const ANALYTICS_WARM_STATE_MAX_ENTRIES = Math.max(100, Number(process.env.ANALYTICS_WARM_STATE_MAX_ENTRIES || 10_000))
 const LOW_STOCK_NOTIFICATIONS_ENABLED = String(process.env.LOW_STOCK_NOTIFICATIONS_ENABLED || 'true').trim().toLowerCase() !== 'false'
-const LOW_STOCK_THRESHOLD_PERCENT = 10
+const DEFAULT_LOW_STOCK_THRESHOLD_PERCENT = 10
 const LOW_STOCK_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1000
 const MAX_LOW_STOCK_NOTIFICATIONS = 50
 const LOW_STOCK_CACHE_TTL_MS = Math.max(30_000, Number(process.env.LOW_STOCK_CACHE_TTL_MS || 120_000))
@@ -46,8 +46,20 @@ function normalizePurchaseUnitFactor(unit = '') {
   return { baseUnit: 'unit', factor: 1 }
 }
 
-function readLowStockCache(restaurantId) {
-  const key = String(restaurantId || '')
+function resolveLowStockThresholdPercent(restaurant) {
+  const configured = Number(restaurant?.inventoryAlertConfig?.lowStockThresholdPercent)
+  if (!Number.isFinite(configured)) return DEFAULT_LOW_STOCK_THRESHOLD_PERCENT
+  const normalized = Math.floor(configured)
+  if (normalized < 1 || normalized > 100) return DEFAULT_LOW_STOCK_THRESHOLD_PERCENT
+  return normalized
+}
+
+function buildLowStockCacheKey(restaurantId, thresholdPercent) {
+  return `${String(restaurantId || '')}:${Number(thresholdPercent || DEFAULT_LOW_STOCK_THRESHOLD_PERCENT)}`
+}
+
+function readLowStockCache(restaurantId, thresholdPercent) {
+  const key = buildLowStockCacheKey(restaurantId, thresholdPercent)
   if (!key) return null
   const entry = lowStockNotificationsCache.get(key)
   if (!entry) return null
@@ -58,8 +70,8 @@ function readLowStockCache(restaurantId) {
   return entry.value
 }
 
-function writeLowStockCache(restaurantId, value) {
-  const key = String(restaurantId || '')
+function writeLowStockCache(restaurantId, thresholdPercent, value) {
+  const key = buildLowStockCacheKey(restaurantId, thresholdPercent)
   if (!key) return
 
   if (lowStockNotificationsCache.size >= LOW_STOCK_CACHE_MAX_ENTRIES) {
@@ -75,8 +87,8 @@ function writeLowStockCache(restaurantId, value) {
   })
 }
 
-async function buildLowStockDashboardNotifications(restaurantId) {
-  const cached = readLowStockCache(restaurantId)
+async function buildLowStockDashboardNotifications(restaurantId, thresholdPercent = DEFAULT_LOW_STOCK_THRESHOLD_PERCENT) {
+  const cached = readLowStockCache(restaurantId, thresholdPercent)
   if (cached) {
     return cached
   }
@@ -137,7 +149,7 @@ async function buildLowStockDashboardNotifications(restaurantId) {
 
     const currentStock = Math.max(0, Number(item?.currentStock || 0))
     const currentPercent = purchased > 0 ? (currentStock / purchased) * 100 : 0
-    if (!Number.isFinite(currentPercent) || currentPercent >= LOW_STOCK_THRESHOLD_PERCENT) continue
+    if (!Number.isFinite(currentPercent) || currentPercent >= thresholdPercent) continue
 
     const roundedPercent = round2(currentPercent)
     notifications.push({
@@ -145,12 +157,12 @@ async function buildLowStockDashboardNotifications(restaurantId) {
       type: 'LOW_STOCK_THRESHOLD',
       itemId: item._id,
       itemName: String(item?.name || 'Item'),
-      thresholdPercent: LOW_STOCK_THRESHOLD_PERCENT,
+      thresholdPercent,
       currentPercent: roundedPercent,
       currentStock: round6(currentStock),
       purchasedQuantity: round6(purchased),
       unit,
-      message: `${String(item?.name || 'Item')} is below ${LOW_STOCK_THRESHOLD_PERCENT}% (${roundedPercent}%). Kindly refill stock.`,
+      message: `${String(item?.name || 'Item')} is below ${thresholdPercent}% (${roundedPercent}%). Kindly refill stock.`,
       expiresAt,
     })
   }
@@ -196,7 +208,7 @@ async function buildLowStockDashboardNotifications(restaurantId) {
     .select('itemId itemName thresholdPercent currentPercent currentStock purchasedQuantity unit message expiresAt updatedAt')
     .lean()
 
-  writeLowStockCache(restaurantId, active)
+  writeLowStockCache(restaurantId, thresholdPercent, active)
   return active
 }
 
@@ -256,6 +268,7 @@ export async function getDashboard(req, res, next) {
   try {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
+    const lowStockThresholdPercent = resolveLowStockThresholdPercent(ownerRestaurant)
 
     const now = new Date()
     const startDay = new Date(now)
@@ -270,7 +283,9 @@ export async function getDashboard(req, res, next) {
         endDate: startDay,
       }),
       Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
-      LOW_STOCK_NOTIFICATIONS_ENABLED ? buildLowStockDashboardNotifications(ownerRestaurant._id) : Promise.resolve([]),
+      LOW_STOCK_NOTIFICATIONS_ENABLED
+        ? buildLowStockDashboardNotifications(ownerRestaurant._id, lowStockThresholdPercent)
+        : Promise.resolve([]),
     ])
 
     const metricsByDateKey = new Map(
@@ -308,6 +323,7 @@ export async function getDashboard(req, res, next) {
         lowStock: lowStockNotifications,
         ttlHours: 24,
         enabled: LOW_STOCK_NOTIFICATIONS_ENABLED,
+        thresholdPercent: lowStockThresholdPercent,
       },
     })
   } catch (error) {

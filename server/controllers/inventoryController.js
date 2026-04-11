@@ -1526,10 +1526,7 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
       inventoryItems,
       menuItemsCount,
       recipeCount,
-      purchaseRateRows,
-      purchaseSummaryRows,
-      purchaseSourceRows,
-      purchasePaymentRows,
+      purchaseAnalyticsFacet,
     ] = await Promise.all([
       InventoryItem.find({ restaurantId: restaurant._id, isActive: true })
         .select('_id name currentStock currentStockUnit defaultUnit')
@@ -1538,64 +1535,75 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
       Recipe.countDocuments({ restaurantId: restaurant._id }),
       InventoryPurchase.aggregate([
         { $match: { restaurantId: restaurant._id, createdAt: { $gte: start90d } } },
-        { $unwind: '$items' },
         {
-          $project: {
-            itemId: '$items.itemId',
-            amount: '$items.amount',
-            baseUnit: purchaseBaseUnitExpression(),
-            baseQuantity: {
-              $multiply: ['$items.quantity', purchaseUnitFactorExpression()],
-            },
+          $facet: {
+            purchaseRateRows: [
+              { $unwind: '$items' },
+              {
+                $project: {
+                  itemId: '$items.itemId',
+                  amount: '$items.amount',
+                  baseUnit: purchaseBaseUnitExpression(),
+                  baseQuantity: {
+                    $multiply: ['$items.quantity', purchaseUnitFactorExpression()],
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: { itemId: '$itemId', baseUnit: '$baseUnit' },
+                  totalAmount: { $sum: '$amount' },
+                  totalBaseQuantity: { $sum: '$baseQuantity' },
+                },
+              },
+            ],
+            purchaseSummaryRows: [
+              { $match: { createdAt: { $gte: start30d } } },
+              {
+                $group: {
+                  _id: null,
+                  invoiceCount: { $sum: 1 },
+                  totalSpend: { $sum: '$grandTotalAmount' },
+                  paidInvoices: {
+                    $sum: { $cond: [{ $eq: ['$paymentType', 'Paid'] }, 1, 0] },
+                  },
+                  unpaidInvoices: {
+                    $sum: { $cond: [{ $eq: ['$paymentType', 'Unpaid'] }, 1, 0] },
+                  },
+                },
+              },
+            ],
+            purchaseSourceRows: [
+              { $match: { createdAt: { $gte: start30d } } },
+              {
+                $group: {
+                  _id: '$sourceType',
+                  invoices: { $sum: 1 },
+                  spend: { $sum: '$grandTotalAmount' },
+                },
+              },
+              { $sort: { spend: -1 } },
+            ],
+            purchasePaymentRows: [
+              { $match: { createdAt: { $gte: start30d } } },
+              {
+                $group: {
+                  _id: '$paymentType',
+                  invoices: { $sum: 1 },
+                  spend: { $sum: '$grandTotalAmount' },
+                },
+              },
+              { $sort: { spend: -1 } },
+            ],
           },
         },
-        {
-          $group: {
-            _id: { itemId: '$itemId', baseUnit: '$baseUnit' },
-            totalAmount: { $sum: '$amount' },
-            totalBaseQuantity: { $sum: '$baseQuantity' },
-          },
-        },
-      ]),
-      InventoryPurchase.aggregate([
-        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
-        {
-          $group: {
-            _id: null,
-            invoiceCount: { $sum: 1 },
-            totalSpend: { $sum: '$grandTotalAmount' },
-            paidInvoices: {
-              $sum: { $cond: [{ $eq: ['$paymentType', 'Paid'] }, 1, 0] },
-            },
-            unpaidInvoices: {
-              $sum: { $cond: [{ $eq: ['$paymentType', 'Unpaid'] }, 1, 0] },
-            },
-          },
-        },
-      ]),
-      InventoryPurchase.aggregate([
-        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
-        {
-          $group: {
-            _id: '$sourceType',
-            invoices: { $sum: 1 },
-            spend: { $sum: '$grandTotalAmount' },
-          },
-        },
-        { $sort: { spend: -1 } },
-      ]),
-      InventoryPurchase.aggregate([
-        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start30d } } },
-        {
-          $group: {
-            _id: '$paymentType',
-            invoices: { $sum: 1 },
-            spend: { $sum: '$grandTotalAmount' },
-          },
-        },
-        { $sort: { spend: -1 } },
       ]),
     ])
+
+    const purchaseRateRows = purchaseAnalyticsFacet?.[0]?.purchaseRateRows || []
+    const purchaseSummaryRows = purchaseAnalyticsFacet?.[0]?.purchaseSummaryRows || []
+    const purchaseSourceRows = purchaseAnalyticsFacet?.[0]?.purchaseSourceRows || []
+    const purchasePaymentRows = purchaseAnalyticsFacet?.[0]?.purchasePaymentRows || []
 
     const itemNamesById = new Map(inventoryItems.map((item) => [String(item._id), String(item.name || '')]))
     const unitByItemId = new Map(inventoryItems.map((item) => [String(item._id), String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))]))

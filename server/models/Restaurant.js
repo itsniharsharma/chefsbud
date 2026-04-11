@@ -18,6 +18,13 @@ const kotReprintConfigSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const inventoryAlertConfigSchema = new mongoose.Schema(
+  {
+    lowStockThresholdPercent: { type: Number, default: 10, min: 1, max: 100 },
+  },
+  { _id: false },
+)
+
 const restaurantSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
@@ -28,6 +35,7 @@ const restaurantSchema = new mongoose.Schema(
     ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     paymentConfig: { type: paymentConfigSchema, default: () => ({ provider: 'razorpay_me', enabled: false }) },
     kotReprintConfig: { type: kotReprintConfigSchema, default: () => ({ passkeyHash: '', updatedAt: null }) },
+    inventoryAlertConfig: { type: inventoryAlertConfigSchema, default: () => ({ lowStockThresholdPercent: 10 }) },
   },
   { timestamps: true },
 )

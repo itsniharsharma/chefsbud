@@ -6,6 +6,7 @@ import {
   isRestaurantPaymentConfigComplete,
   serializeRestaurantPaymentConfig,
 } from '../services/restaurantPaymentService.js'
+import { invalidateCacheByTags } from '../services/responseCache.js'
 import { uniqueSlug } from '../utils/slugify.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
@@ -75,7 +76,25 @@ export async function updateMyRestaurant(req, res, next) {
     if (typeof address === 'string') restaurant.address = address
     if (typeof phone === 'string') restaurant.phone = phone
 
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'lowStockThresholdPercent')) {
+      const parsedThreshold = Number(req.body.lowStockThresholdPercent)
+      if (!Number.isFinite(parsedThreshold)) {
+        return res.status(400).json({ message: 'Low stock threshold must be a valid number' })
+      }
+
+      const normalizedThreshold = Math.floor(parsedThreshold)
+      if (normalizedThreshold < 1 || normalizedThreshold > 100) {
+        return res.status(400).json({ message: 'Low stock threshold must be between 1 and 100' })
+      }
+
+      restaurant.inventoryAlertConfig = {
+        ...(restaurant.inventoryAlertConfig?.toObject ? restaurant.inventoryAlertConfig.toObject() : restaurant.inventoryAlertConfig),
+        lowStockThresholdPercent: normalizedThreshold,
+      }
+    }
+
     await restaurant.save()
+    invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
     return res.json(serializeRestaurantForOwner(restaurant))
   } catch (error) {
     next(error)

@@ -9,7 +9,7 @@ import StaffAccount from '../models/StaffAccount.js'
 import { sendRegistrationOtpEmail } from '../services/emailService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
-const sessionRestaurantProjection = '_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt'
+const sessionRestaurantProjection = '_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig'
 
 function serializeSessionRestaurant(restaurant) {
   if (!restaurant) return null

@@ -10,6 +10,7 @@ export default function SettingsPage() {
     restaurantName: '',
     address: '',
     phone: '',
+    lowStockThresholdPercent: '10',
   })
   const [message, setMessage] = useState('')
   const [staffMessage, setStaffMessage] = useState('')
@@ -28,6 +29,7 @@ export default function SettingsPage() {
       restaurantName: restaurant.name || '',
       address: restaurant.address || '',
       phone: restaurant.phone || '',
+      lowStockThresholdPercent: String(restaurant.inventoryAlertConfig?.lowStockThresholdPercent ?? 10),
     })
   }, [restaurant])
 
@@ -51,6 +53,7 @@ export default function SettingsPage() {
         name: form.restaurantName,
         address: form.address,
         phone: form.phone,
+        lowStockThresholdPercent: Number(form.lowStockThresholdPercent || 10),
       })
       .then((updated) => {
         setRestaurant(updated)
@@ -117,6 +120,15 @@ export default function SettingsPage() {
         />
         <FormInput label="Address" value={form.address} onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))} />
         <FormInput label="Phone" value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} />
+        <FormInput
+          label="Low Stock Alert Threshold (%)"
+          type="number"
+          min={1}
+          max={100}
+          step={1}
+          value={form.lowStockThresholdPercent}
+          onChange={(e) => setForm((prev) => ({ ...prev, lowStockThresholdPercent: e.target.value }))}
+        />
         <Button type="submit">Save Changes</Button>
       </form>
 

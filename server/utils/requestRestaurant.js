@@ -1,6 +1,6 @@
 import Restaurant from '../models/Restaurant.js'
 
-const restaurantProjection = '_id ownerId slug name address phone paymentConfig'
+const restaurantProjection = '_id ownerId slug name address phone paymentConfig inventoryAlertConfig'
 
 export async function resolveRequestRestaurant(req, restaurantId = null) {
   const requestedRestaurantId = restaurantId ? String(restaurantId) : ''
