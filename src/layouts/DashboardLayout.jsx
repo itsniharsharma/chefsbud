@@ -9,7 +9,6 @@ import { analyticsService } from '../services/analyticsService'
 import { menuService } from '../services/menuService'
 import { orderService } from '../services/orderService'
 import { tableService } from '../services/tableService'
-import { useOrderRealtimeSync } from '../hooks/useOrderRealtimeSync'
 
 const titles = {
   '/dashboard': 'Dashboard',
@@ -40,12 +39,6 @@ export default function DashboardLayout() {
   const queryClient = useQueryClient()
   const isOwner = user?.role === 'owner'
   const shouldPrefetchDashboardData = location.pathname.startsWith('/dashboard')
-
-  useOrderRealtimeSync({
-    restaurantId: restaurant?._id,
-    enabled: Boolean(restaurant?._id),
-    enableSoundNotifications: location.pathname.startsWith('/dashboard/orders'),
-  })
 
   useEffect(() => {
     if (!shouldPrefetchDashboardData) return

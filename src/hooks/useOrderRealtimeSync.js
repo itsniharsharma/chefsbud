@@ -7,6 +7,47 @@ import { queryKeys } from '../lib/queryKeys'
 const ORDER_INVALIDATION_DEBOUNCE_MS = 250
 const ROOM_JOIN_RETRY_MS = 2500
 
+function showOrderDesktopNotification(payload = {}) {
+  if (typeof window === 'undefined' || typeof Notification === 'undefined') return
+  if (Notification.permission !== 'granted') return
+  if (!document.hidden) return
+
+  const orderId = String(payload?.orderId || payload?._id || '').trim()
+  const suffix = orderId ? orderId.slice(-6).toUpperCase() : ''
+  const notification = new Notification('New QR Order Received', {
+    body: suffix ? `Order #${suffix} is waiting.` : 'A new order is waiting.',
+    tag: orderId ? `order-${orderId}` : 'order-new',
+    renotify: true,
+  })
+
+  notification.onclick = () => {
+    window.focus()
+    notification.close()
+  }
+}
+
+function bindDesktopNotificationPermissionBootstrap() {
+  if (typeof window === 'undefined' || typeof Notification === 'undefined') return () => {}
+  if (Notification.permission !== 'default') return () => {}
+
+  const onInteraction = () => {
+    Notification.requestPermission().catch(() => {})
+    window.removeEventListener('pointerdown', onInteraction)
+    window.removeEventListener('keydown', onInteraction)
+    window.removeEventListener('touchstart', onInteraction)
+  }
+
+  window.addEventListener('pointerdown', onInteraction, { once: true, passive: true })
+  window.addEventListener('keydown', onInteraction, { once: true })
+  window.addEventListener('touchstart', onInteraction, { once: true, passive: true })
+
+  return () => {
+    window.removeEventListener('pointerdown', onInteraction)
+    window.removeEventListener('keydown', onInteraction)
+    window.removeEventListener('touchstart', onInteraction)
+  }
+}
+
 export function useOrderRealtimeSync({ restaurantId, enabled = true, enableSoundNotifications = false }) {
   const queryClient = useQueryClient()
 
@@ -26,9 +67,11 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true, enableSound
     let invalidationTimer = null
     let joinRetryTimer = null
     let shouldRefreshAnalyticsCards = false
+    let unbindNotificationPermissionBootstrap = () => {}
 
     if (enableSoundNotifications) {
       bindOrderAlertAudioUnlock()
+      unbindNotificationPermissionBootstrap = bindDesktopNotificationPermissionBootstrap()
     }
 
     const clearJoinRetry = () => {
@@ -104,6 +147,10 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true, enableSound
 
       if (eventType === 'created') {
         if (enableSoundNotifications) {
+          showOrderDesktopNotification(payload)
+        }
+
+        if (enableSoundNotifications) {
           await playOrderAlertSound()
         }
 
@@ -131,6 +178,7 @@ export function useOrderRealtimeSync({ restaurantId, enabled = true, enableSound
         invalidationTimer = null
       }
       clearJoinRetry()
+      unbindNotificationPermissionBootstrap()
       setDashboardSocketRoomReady(false)
       socket.emit('dashboard:leave-restaurant', roomPayload)
       socket.off('connect', onConnected)

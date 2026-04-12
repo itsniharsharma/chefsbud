@@ -3,6 +3,8 @@ import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-
 import ProtectedRoute from './components/ProtectedRoute'
 import { importers, warmCriticalRoutes, warmCustomerRoutes } from './utils/routePreload'
 import { buildCustomerMenuUrl } from './utils/customerUrl'
+import { useAuth } from './hooks/useAuth'
+import { useOrderRealtimeSync } from './hooks/useOrderRealtimeSync'
 
 const DashboardLayout = lazy(importers.dashboardLayout)
 const LandingPage = lazy(importers.landing)
@@ -32,6 +34,20 @@ function CustomerRouteFallback() {
   const { restaurantSlug, tableNumber } = useParams()
   const target = buildCustomerMenuUrl({ slug: restaurantSlug, tableNumber })
   return <Navigate to={target} replace />
+}
+
+function GlobalOwnerOrderRealtimeBridge() {
+  const { restaurant, user, isAuthenticated, authLoading } = useAuth()
+  const isOwnerOrStaff = user?.role === 'owner' || user?.role === 'staff'
+  const enabled = Boolean(isAuthenticated && !authLoading && restaurant?._id && isOwnerOrStaff)
+
+  useOrderRealtimeSync({
+    restaurantId: restaurant?._id,
+    enabled,
+    enableSoundNotifications: enabled,
+  })
+
+  return null
 }
 
 function App() {
@@ -65,6 +81,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <GlobalOwnerOrderRealtimeBridge />
       <Suspense fallback={<div className="p-6 text-sm text-slate-500">Loading...</div>}>
         <Routes>
           <Route path="/" element={<Navigate to="/overview" replace />} />
