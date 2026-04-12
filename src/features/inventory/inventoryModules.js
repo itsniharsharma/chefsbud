@@ -70,7 +70,7 @@ export const inventoryModules = [
   {
     key: 'analytics',
     title: 'Inventory Analytics',
-    description: 'Get end-to-end raw inventory health, movement, and value intelligence',
+    description: 'Get end-to-end raw inventory health and stock value intelligence',
     icon: ChartPie,
     route: '/inventory/analytics',
   },

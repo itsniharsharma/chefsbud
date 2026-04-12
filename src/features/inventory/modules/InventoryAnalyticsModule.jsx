@@ -1,25 +1,27 @@
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
   Cell,
   Legend,
-  Line,
-  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from 'recharts'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { useInventoryRealtimeSync } from '../../../hooks/useInventoryRealtimeSync'
 import { useInventoryAnalyticsOverview } from '../../../hooks/useInventoryPurchaseQueries'
 import { formatCurrencyINR } from '../../../utils/currency'
 
 const PIE_COLORS = ['#e11d48', '#f97316', '#f59e0b', '#84cc16', '#0ea5e9', '#14b8a6', '#6366f1', '#8b5cf6', '#64748b']
+
+function chunkRows(rows = [], size = 8) {
+  if (!Array.isArray(rows) || size <= 0) return []
+  const chunks = []
+  for (let index = 0; index < rows.length; index += size) {
+    chunks.push(rows.slice(index, index + size))
+  }
+  return chunks
+}
 
 function formatQuantity(value) {
   const numeric = Number(value || 0)
@@ -40,49 +42,16 @@ function InventoryMetricCard({ title, value, subtitle }) {
   )
 }
 
-function ChartTooltip({ active, payload, label }) {
-  if (!active || !Array.isArray(payload) || payload.length === 0) return null
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-lg">
-      {label ? <p className="mb-2 font-semibold text-slate-900">{label}</p> : null}
-      {payload.map((entry) => {
-        const isMoney = String(entry?.dataKey || '').toLowerCase().includes('spend')
-        return (
-          <p key={`${entry.dataKey}-${entry.name}`} className="text-slate-600">
-            <span className="font-medium" style={{ color: entry.color }}>{entry.name}:</span>{' '}
-            {isMoney ? formatCurrencyINR(entry.value) : formatQuantity(entry.value)}
-          </p>
-        )
-      })}
-    </div>
-  )
-}
-
 export default function InventoryAnalyticsModule() {
   const { restaurant } = useAuth()
   const restaurantId = restaurant?._id
+  const [drilldownMetric, setDrilldownMetric] = useState(null)
   useInventoryRealtimeSync({ restaurantId, enabled: Boolean(restaurantId) })
 
   const { data, isLoading, isFetching, refetch } = useInventoryAnalyticsOverview({ restaurantId })
 
   const kpis = data?.kpis || {}
   const stock = data?.stock || {}
-  const purchasing = data?.purchasing || {}
-  const movement = data?.movement || {}
-
-  const sourceMixChart = useMemo(
-    () =>
-      (Array.isArray(purchasing.sourceMix) ? purchasing.sourceMix : []).map((row) => ({
-        name: row.sourceType,
-        invoices: Number(row.invoices || 0),
-        spend: Number(row.spend || 0),
-      })),
-    [purchasing.sourceMix],
-  )
-
-  const movementTrend = useMemo(() => (Array.isArray(movement.trend14d) ? movement.trend14d : []), [movement.trend14d])
-  const movementByType = useMemo(() => (Array.isArray(movement.byType) ? movement.byType : []), [movement.byType])
   const stockValueDistribution = useMemo(
     () => (Array.isArray(stock.stockValueDistribution) ? stock.stockValueDistribution : []),
     [stock.stockValueDistribution],
@@ -91,14 +60,30 @@ export default function InventoryAnalyticsModule() {
     () => (Array.isArray(stock.stockQuantityDistribution) ? stock.stockQuantityDistribution : []),
     [stock.stockQuantityDistribution],
   )
-  const topItemsByValue = useMemo(
-    () => (Array.isArray(stock.topItemsByEstimatedValue) ? stock.topItemsByEstimatedValue : []),
-    [stock.topItemsByEstimatedValue],
+  const stockValueFullDistribution = useMemo(
+    () => (Array.isArray(stock.stockValueFullDistribution) ? stock.stockValueFullDistribution : []),
+    [stock.stockValueFullDistribution],
   )
-  const topWastageItems = useMemo(
-    () => (Array.isArray(movement.topWastageItems) ? movement.topWastageItems : []),
-    [movement.topWastageItems],
+  const stockQuantityFullDistribution = useMemo(
+    () => (Array.isArray(stock.stockQuantityFullDistribution) ? stock.stockQuantityFullDistribution : []),
+    [stock.stockQuantityFullDistribution],
   )
+  const hiddenValueRows = useMemo(
+    () => stockValueFullDistribution.slice(8),
+    [stockValueFullDistribution],
+  )
+  const hiddenQuantityRows = useMemo(
+    () => stockQuantityFullDistribution.slice(8),
+    [stockQuantityFullDistribution],
+  )
+  const drilldownChunks = useMemo(() => {
+    if (drilldownMetric === 'value') return chunkRows(hiddenValueRows, 8)
+    if (drilldownMetric === 'quantity') return chunkRows(hiddenQuantityRows, 8)
+    return []
+  }, [drilldownMetric, hiddenValueRows, hiddenQuantityRows])
+  const drilldownTitle = drilldownMetric === 'value'
+    ? 'Stock Value Others Breakdown'
+    : 'Stock Quantity Others Breakdown'
 
   return (
     <section className="rounded-2xl border border-rose-100 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.08)] md:p-6">
@@ -155,7 +140,20 @@ export default function InventoryAnalyticsModule() {
               <div className="mt-3 h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={stockValueDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={1} minAngle={2}>
+                    <Pie
+                      data={stockValueDistribution}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={62}
+                      outerRadius={95}
+                      paddingAngle={1}
+                      minAngle={2}
+                      onClick={(entry) => {
+                        if (String(entry?.itemId || '') === 'others' && hiddenValueRows.length) {
+                          setDrilldownMetric('value')
+                        }
+                      }}
+                    >
                       {stockValueDistribution.map((row, index) => (
                         <Cell key={`${row.itemId}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                       ))}
@@ -180,7 +178,20 @@ export default function InventoryAnalyticsModule() {
               <div className="mt-3 h-72">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={stockQuantityDistribution} dataKey="value" nameKey="name" innerRadius={62} outerRadius={95} paddingAngle={1} minAngle={2}>
+                    <Pie
+                      data={stockQuantityDistribution}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={62}
+                      outerRadius={95}
+                      paddingAngle={1}
+                      minAngle={2}
+                      onClick={(entry) => {
+                        if (String(entry?.itemId || '') === 'others' && hiddenQuantityRows.length) {
+                          setDrilldownMetric('quantity')
+                        }
+                      }}
+                    >
                       {stockQuantityDistribution.map((row, index) => (
                         <Cell key={`qty-${row.itemId}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                       ))}
@@ -199,126 +210,49 @@ export default function InventoryAnalyticsModule() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {drilldownChunks.length ? (
             <div className="rounded-2xl border border-rose-100 bg-white p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Purchasing Source Mix (30d)</h4>
-              <p className="mt-1 text-sm text-slate-500">
-                {formatQuantity(purchasing.invoiceCount)} invoices • {formatCurrencyINR(purchasing.totalSpend || 0)} spend
-              </p>
-              <div className="mt-3 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={sourceMixChart}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend />
-                    <Bar yAxisId="left" dataKey="invoices" name="Invoices" fill="#e11d48" radius={[8, 8, 0, 0]} />
-                    <Bar yAxisId="right" dataKey="spend" name="Spend" fill="#0f172a" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">{drilldownTitle}</h4>
+                <button
+                  type="button"
+                  onClick={() => setDrilldownMetric(null)}
+                  className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-[var(--primary)] hover:bg-rose-50"
+                >
+                  Close Breakdown
+                </button>
+              </div>
+              <p className="mb-3 text-sm text-slate-500">Clicking Others opens row/column sub-pies for remaining items.</p>
+              <div className="grid grid-cols-1 gap-6 md:gap-8 xl:grid-cols-2">
+                {drilldownChunks.map((chunk, chunkIndex) => (
+                  <div key={`drilldown-${drilldownMetric}-${chunkIndex}`} className="rounded-xl border border-rose-100 bg-rose-50/20 p-4 min-h-[500px] shadow-[0_8px_24px_rgba(15,23,42,0.03)]">
+                    <p className="mb-3 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">Segment {chunkIndex + 1}</p>
+                    <div className="mt-2 h-80">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie data={chunk} dataKey="value" nameKey="name" innerRadius={44} outerRadius={72} paddingAngle={1} minAngle={2}>
+                            {chunk.map((row, index) => (
+                              <Cell key={`drill-${chunkIndex}-${row.itemId}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Legend />
+                          <Tooltip
+                            formatter={(value, _name, entry) => {
+                              const raw = Number(entry?.payload?.valueRaw ?? value)
+                              if (drilldownMetric === 'value') return formatCurrencyINR(raw)
+                              const unit = String(entry?.payload?.stockUnit || '')
+                              return `${formatQuantity(raw)}${unit ? ` ${unit}` : ''}`
+                            }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+          ) : null}
 
-            <div className="rounded-2xl border border-rose-100 bg-white p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Movement Trend (14d)</h4>
-              <p className="mt-1 text-sm text-slate-500">Signed quantity movement by ledger type in base units.</p>
-              <div className="mt-3 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={movementTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend />
-                    <Line type="monotone" dataKey="purchase" name="Purchase" stroke="#16a34a" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="consumption" name="Consumption" stroke="#0ea5e9" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="wastage" name="Wastage" stroke="#dc2626" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="adjustment" name="Adjustment" stroke="#a16207" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="conversionIn" name="Conversion In" stroke="#4f46e5" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="conversionOut" name="Conversion Out" stroke="#7c3aed" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="rounded-2xl border border-rose-100 bg-white p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Inventory Movement Mix (30d)</h4>
-              <p className="mt-1 text-sm text-slate-500">Absolute and net quantity by movement type.</p>
-              <div className="mt-3 h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={movementByType}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="type" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Legend />
-                    <Bar dataKey="absoluteQuantity" name="Absolute Qty" fill="#fb7185" radius={[8, 8, 0, 0]} />
-                    <Bar dataKey="netQuantity" name="Net Qty" fill="#0f172a" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <div className="rounded-2xl border border-rose-100 bg-white p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Top Inventory by Estimated Value</h4>
-              <div className="mt-3 overflow-x-auto">
-                <table className="min-w-full divide-y divide-rose-100 text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-[0.12em] text-slate-500">
-                      <th className="px-3 py-2">Item</th>
-                      <th className="px-3 py-2">Stock</th>
-                      <th className="px-3 py-2">Avg Rate</th>
-                      <th className="px-3 py-2">Estimated Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-rose-50">
-                    {topItemsByValue.slice(0, 10).map((row) => (
-                      <tr key={row.itemId}>
-                        <td className="px-3 py-2 font-semibold text-slate-800">{row.name}</td>
-                        <td className="px-3 py-2 text-slate-700">{formatQuantity(row.stockQuantity)} {row.stockUnit}</td>
-                        <td className="px-3 py-2 text-slate-700">{formatCurrencyINR(row.avgPurchaseRatePerBaseUnit || 0)} / {row.stockUnit}</td>
-                        <td className="px-3 py-2 font-semibold text-slate-900">{formatCurrencyINR(row.estimatedStockValue || 0)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-rose-100 bg-white p-4">
-              <h4 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-500">Top Wastage Items (30d)</h4>
-              <div className="mt-3 overflow-x-auto">
-                <table className="min-w-full divide-y divide-rose-100 text-sm">
-                  <thead>
-                    <tr className="text-left text-xs uppercase tracking-[0.12em] text-slate-500">
-                      <th className="px-3 py-2">Item</th>
-                      <th className="px-3 py-2">Wastage Qty</th>
-                      <th className="px-3 py-2">Unit</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-rose-50">
-                    {topWastageItems.length ? topWastageItems.map((row) => (
-                      <tr key={`${row.itemId}-${row.unit}`}>
-                        <td className="px-3 py-2 font-semibold text-slate-800">{row.name}</td>
-                        <td className="px-3 py-2 text-slate-700">{formatQuantity(row.quantity)}</td>
-                        <td className="px-3 py-2 text-slate-700">{row.unit}</td>
-                      </tr>
-                    )) : (
-                      <tr>
-                        <td className="px-3 py-4 text-sm text-slate-500" colSpan={3}>No wastage records in this window.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
         </div>
       ) : null}
     </section>
