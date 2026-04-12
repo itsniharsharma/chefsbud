@@ -406,13 +406,13 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
         <>
           {/* Categories Tabs */}
           {!hasActiveSearch ? (
-            <div className="mb-2 h-[112px] overflow-x-auto overflow-y-hidden pb-1 pr-1">
-              <div className="grid grid-flow-col grid-rows-3 auto-cols-max gap-1">
+            <div className="mb-2 h-[172px] min-h-[172px] shrink-0 overflow-auto pb-3 pr-1">
+              <div className="grid w-max grid-flow-col grid-rows-3 auto-cols-max auto-rows-[2.25rem] content-start gap-2">
                 {menuCategories.map((category) => (
                   <button
                     key={category._id}
                     onClick={() => setActiveCategory(category._id)}
-                    className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition ${
+                    className={`h-9 whitespace-nowrap rounded-full px-3 text-xs font-medium leading-none transition ${
                       activeCategory === category._id
                         ? 'bg-red-600 text-white'
                         : 'border border-slate-300 text-slate-700 hover:border-red-400'
@@ -428,7 +428,7 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
           )}
 
           {/* Items Grid */}
-          <div className="mb-3 min-h-[300px] flex-1 space-y-2 overflow-y-auto pr-1">
+          <div className="mb-3 min-h-[420px] flex-1 space-y-2 overflow-y-auto pr-1">
             {visibleItems.length > 0 ? (
               visibleItems.map((item) => (
                 <div
