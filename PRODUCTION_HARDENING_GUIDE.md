@@ -1,7 +1,7 @@
 # Production Hardening Guide - v2.0
 
 ## Overview
-This document outlines the production-grade hardening improvements to the ChefsBud inventory system. The system now features distributed orchestration, fault tolerance, comprehensive monitoring, and operational safety mechanisms.
+This document outlines the production-grade hardenin improvements to the ChefsBud inventory system. The system now features distributed orchestration, fault tolerance, comprehensive monitoring, and operational safety mechanisms.
 
 ## Key Features
 
