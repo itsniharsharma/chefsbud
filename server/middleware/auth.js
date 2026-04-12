@@ -2,6 +2,95 @@ import jwt from 'jsonwebtoken'
 import Restaurant from '../models/Restaurant.js'
 import User from '../models/User.js'
 import StaffAccount from '../models/StaffAccount.js'
+import { withRedis } from '../config/redis.js'
+
+const AUTH_CACHE_TTL_SECONDS = Math.max(5, Math.min(Number(process.env.AUTH_CACHE_TTL_SECONDS || 15), 120))
+const AUTH_CACHE_MAX_ENTRIES = Math.max(200, Number(process.env.AUTH_CACHE_MAX_ENTRIES || 5000))
+const AUTH_CACHE_NAMESPACE = 'auth-cache:v1'
+const authCache = new Map()
+
+function nowMs() {
+  return Date.now()
+}
+
+function authEntryKey(scope, payload = {}) {
+  const userId = String(payload?.userId || '').trim()
+  const ownerId = String(payload?.ownerId || '').trim()
+  const staffId = String(payload?.staffId || '').trim()
+  const restaurantId = String(payload?.restaurantId || '').trim()
+  const tokenVersion = Number(payload?.tokenVersion || 0)
+  return `${scope}:${userId}:${ownerId}:${staffId}:${restaurantId}:${tokenVersion}`
+}
+
+function redisAuthKey(key) {
+  return `${AUTH_CACHE_NAMESPACE}:${key}`
+}
+
+function ensureAuthCacheCapacity() {
+  while (authCache.size > AUTH_CACHE_MAX_ENTRIES) {
+    const oldestKey = authCache.keys().next().value
+    if (!oldestKey) break
+    authCache.delete(oldestKey)
+  }
+}
+
+function readMemoryAuthCache(key) {
+  const entry = authCache.get(key)
+  if (!entry) return null
+  if (Number(entry.expiresAt || 0) <= nowMs()) {
+    authCache.delete(key)
+    return null
+  }
+  authCache.delete(key)
+  authCache.set(key, entry)
+  return entry.value
+}
+
+function writeMemoryAuthCache(key, value) {
+  authCache.set(key, {
+    value,
+    expiresAt: nowMs() + AUTH_CACHE_TTL_SECONDS * 1000,
+  })
+  ensureAuthCacheCapacity()
+}
+
+async function readRedisAuthCache(key) {
+  const raw = await withRedis('auth_cache_read', (redis) => redis.get(redisAuthKey(key)), null)
+  if (!raw) return null
+  let parsed = raw
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  return parsed
+}
+
+async function writeRedisAuthCache(key, value) {
+  await withRedis(
+    'auth_cache_write',
+    (redis) => redis.set(redisAuthKey(key), JSON.stringify(value), { ex: AUTH_CACHE_TTL_SECONDS }),
+    null,
+  )
+}
+
+async function getAuthCachedValue(key) {
+  const local = readMemoryAuthCache(key)
+  if (local) return local
+
+  const distributed = await readRedisAuthCache(key)
+  if (!distributed) return null
+  writeMemoryAuthCache(key, distributed)
+  return distributed
+}
+
+async function setAuthCachedValue(key, value) {
+  writeMemoryAuthCache(key, value)
+  await writeRedisAuthCache(key, value)
+}
 
 export async function requireAuth(req, res, next) {
   try {
@@ -30,7 +119,22 @@ export async function requireAuth(req, res, next) {
         return res.status(401).json({ message: 'Unauthorized' })
       }
 
-      const [staff, owner] = await Promise.all([
+      const tokenVersion = Number(decoded?.tokenVersion || 0)
+      const cacheKey = authEntryKey('staff', {
+        userId: ownerId,
+        ownerId,
+        staffId,
+        restaurantId,
+        tokenVersion,
+      })
+      const cached = await getAuthCachedValue(cacheKey)
+      if (cached?.user && cached?.restaurant) {
+        req.user = cached.user
+        req.restaurant = cached.restaurant
+        return next()
+      }
+
+      const [staff, owner, restaurant] = await Promise.all([
         StaffAccount.findOne({
           _id: staffId,
           ownerId,
@@ -42,13 +146,18 @@ export async function requireAuth(req, res, next) {
         User.findById(ownerId)
           .select('_id name email role emailVerified tokenVersion billing')
           .lean(),
+        Restaurant.findOne({
+          _id: restaurantId,
+          ownerId,
+        })
+          .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
+          .lean(),
       ])
 
-      if (!staff || !owner) {
+      if (!staff || !owner || !restaurant) {
         return res.status(401).json({ message: 'Invalid token' })
       }
 
-      const tokenVersion = Number(decoded?.tokenVersion || 0)
       const currentTokenVersion = Number(owner?.tokenVersion || 0)
       if (tokenVersion !== currentTokenVersion) {
         return res.status(401).json({ message: 'Session expired. Please log in again.' })
@@ -68,25 +177,41 @@ export async function requireAuth(req, res, next) {
         billing: owner.billing,
       }
 
-      req.restaurant = await Restaurant.findOne({
-        _id: staff.restaurantId,
-        ownerId,
+      req.restaurant = restaurant
+      await setAuthCachedValue(cacheKey, {
+        user: req.user,
+        restaurant,
       })
-        .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
-        .lean()
 
       return next()
     }
 
-    const user = await User.findById(decoded.userId)
-      .select('_id name email role emailVerified tokenVersion billing')
-      .lean()
+    const tokenVersion = Number(decoded?.tokenVersion || 0)
+    const cacheKey = authEntryKey('owner', {
+      userId: decoded.userId,
+      ownerId: decoded.userId,
+      tokenVersion,
+    })
+    const cached = await getAuthCachedValue(cacheKey)
+    if (cached?.user) {
+      req.user = cached.user
+      req.restaurant = cached.restaurant || null
+      return next()
+    }
+
+    const [user, restaurant] = await Promise.all([
+      User.findById(decoded.userId)
+        .select('_id name email role emailVerified tokenVersion billing')
+        .lean(),
+      Restaurant.findOne({ ownerId: decoded.userId })
+        .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
+        .lean(),
+    ])
 
     if (!user) {
       return res.status(401).json({ message: 'Invalid token' })
     }
 
-    const tokenVersion = Number(decoded?.tokenVersion || 0)
     const currentTokenVersion = Number(user?.tokenVersion || 0)
     if (tokenVersion !== currentTokenVersion) {
       return res.status(401).json({ message: 'Session expired. Please log in again.' })
@@ -101,9 +226,11 @@ export async function requireAuth(req, res, next) {
       billing: user.billing,
     }
 
-    req.restaurant = await Restaurant.findOne({ ownerId: user._id })
-      .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
-      .lean()
+    req.restaurant = restaurant
+    await setAuthCachedValue(cacheKey, {
+      user: req.user,
+      restaurant,
+    })
 
     next()
   } catch {

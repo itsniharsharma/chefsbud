@@ -1,8 +1,11 @@
 import mongoose from 'mongoose'
 import RecipeVersion from '../models/RecipeVersion.js'
+import { withRedis } from '../config/redis.js'
 
 const CACHE_TTL_MS = 15 * 1000
 const CACHE_MAX_ENTRIES = 5000
+const CACHE_TTL_SECONDS = Math.max(1, Math.ceil(CACHE_TTL_MS / 1000))
+const RECIPE_CACHE_NAMESPACE = 'recipe-version-cache:v1'
 
 const recipeVersionCache = new Map()
 const inflightByKey = new Map()
@@ -17,6 +20,10 @@ function normalizeId(value) {
 
 function cacheKey(restaurantId, menuItemId) {
   return `${normalizeId(restaurantId)}:${normalizeId(menuItemId)}`
+}
+
+function redisCacheKey(key) {
+  return `${RECIPE_CACHE_NAMESPACE}:${key}`
 }
 
 function pruneCacheIfNeeded() {
@@ -44,6 +51,35 @@ function setCacheEntry(key, value) {
     value,
     expiresAt: nowMs() + CACHE_TTL_MS,
   })
+}
+
+async function readRedisCacheEntry(key) {
+  const raw = await withRedis('recipe_runtime_cache_read', (redis) => redis.get(redisCacheKey(key)), null)
+  if (!raw) return null
+  let parsed = raw
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null
+  return parsed
+}
+
+async function writeRedisCacheEntry(key, value) {
+  await withRedis(
+    'recipe_runtime_cache_write',
+    (redis) => redis.set(redisCacheKey(key), JSON.stringify(value), { ex: CACHE_TTL_SECONDS }),
+    null,
+  )
+}
+
+async function deleteRedisCacheEntries(keys = []) {
+  const normalizedKeys = [...new Set((Array.isArray(keys) ? keys : []).filter(Boolean).map(redisCacheKey))]
+  if (!normalizedKeys.length) return
+  await withRedis('recipe_runtime_cache_delete', (redis) => redis.del(...normalizedKeys), null)
 }
 
 async function fetchLatestRecipeVersionsFromDb({ restaurantId, menuItemIds = [], session = null }) {
@@ -81,6 +117,13 @@ async function getLatestRecipeVersionForKey({ restaurantId, menuItemId }) {
   const cached = getFreshCacheEntry(key)
   if (cached !== null) return cached
 
+  const redisCached = await readRedisCacheEntry(key)
+  if (redisCached !== null) {
+    setCacheEntry(key, redisCached)
+    pruneCacheIfNeeded()
+    return redisCached
+  }
+
   if (inflightByKey.has(key)) {
     return inflightByKey.get(key)
   }
@@ -93,6 +136,7 @@ async function getLatestRecipeVersionForKey({ restaurantId, menuItemId }) {
     })
     const row = resultMap.get(normalizeId(menuItemId)) || null
     setCacheEntry(key, row)
+    await writeRedisCacheEntry(key, row)
     pruneCacheIfNeeded()
     return row
   })()
@@ -154,14 +198,33 @@ export async function loadLatestRecipeVersionsByMenuItem({ restaurantId, menuIte
       .filter((entry) => !entry.inflight)
       .map((entry) => entry.menuItemId)
 
-    if (fetchIds.length) {
+    const redisRows = await Promise.all(
+      fetchIds.map(async (menuItemId) => {
+        const key = cacheKey(tenantId, menuItemId)
+        const row = await readRedisCacheEntry(key)
+        return [menuItemId, row]
+      }),
+    )
+
+    const redisHitIds = new Set()
+    for (const [menuItemId, row] of redisRows) {
+      if (row === null) continue
+      const key = cacheKey(tenantId, menuItemId)
+      setCacheEntry(key, row)
+      if (row) found.set(menuItemId, row)
+      redisHitIds.add(menuItemId)
+    }
+
+    const fetchIdsFromDb = fetchIds.filter((menuItemId) => !redisHitIds.has(menuItemId))
+
+    if (fetchIdsFromDb.length) {
       const batchPromise = fetchLatestRecipeVersionsFromDb({
         restaurantId: tenantId,
-        menuItemIds: fetchIds,
+        menuItemIds: fetchIdsFromDb,
         session: null,
       })
 
-      for (const menuItemId of fetchIds) {
+      for (const menuItemId of fetchIdsFromDb) {
         inflightByKey.set(cacheKey(tenantId, menuItemId), batchPromise.then((rows) => rows.get(menuItemId) || null))
       }
 
@@ -169,15 +232,16 @@ export async function loadLatestRecipeVersionsByMenuItem({ restaurantId, menuIte
       try {
         batchRows = await batchPromise
       } finally {
-        for (const menuItemId of fetchIds) {
+        for (const menuItemId of fetchIdsFromDb) {
           inflightByKey.delete(cacheKey(tenantId, menuItemId))
         }
       }
 
-      for (const menuItemId of fetchIds) {
+      for (const menuItemId of fetchIdsFromDb) {
         const key = cacheKey(tenantId, menuItemId)
         const row = batchRows.get(menuItemId) || null
         setCacheEntry(key, row)
+        await writeRedisCacheEntry(key, row)
         if (row) found.set(menuItemId, row)
       }
       pruneCacheIfNeeded()
@@ -206,9 +270,13 @@ export function invalidateRecipeVersionRuntimeCache({ restaurantId, menuItemIds 
     return
   }
 
+  const redisKeys = []
   for (const menuItemId of ids) {
     const key = cacheKey(tenantId, menuItemId)
     recipeVersionCache.delete(key)
     inflightByKey.delete(key)
+    redisKeys.push(key)
   }
+
+  void deleteRedisCacheEntries(redisKeys)
 }

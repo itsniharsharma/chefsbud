@@ -646,7 +646,7 @@ export async function trackAddToCart({
   return { tracked: true }
 }
 
-export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
+export async function applyCompletedOrderAnalytics(order, multiplier = 1, preloadedMenuMap = null) {
   if (!order?.restaurantId || !Array.isArray(order?.items) || !order.items.length) {
     return
   }
@@ -661,10 +661,12 @@ export async function applyCompletedOrderAnalytics(order, multiplier = 1) {
   const itemBreakdown = buildPurchaseBreakdown(order)
   const orderInsightIncrements = buildOrderInsightIncrements(order, safeMultiplier)
   const basketPairs = buildPairIncrements(order, safeMultiplier)
-  const menuMap = await loadMenuItemsMap(
-    order.restaurantId,
-    itemBreakdown.map((entry) => entry.menuItemId),
-  )
+  const menuMap = preloadedMenuMap instanceof Map
+    ? preloadedMenuMap
+    : await loadMenuItemsMap(
+        order.restaurantId,
+        itemBreakdown.map((entry) => entry.menuItemId),
+      )
 
   await Promise.all([
     ...itemBreakdown
@@ -788,6 +790,16 @@ export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize 
 
   if (!candidates.length) return 0
 
+  const uniqueMenuIds = [...new Set(
+    candidates
+      .flatMap((order) => (Array.isArray(order?.items) ? order.items : []))
+      .map((item) => String(item?.menuItemId || '').trim())
+      .filter(Boolean),
+  )]
+  const preloadedMenuMap = uniqueMenuIds.length
+    ? await loadMenuItemsMap(restaurantId, uniqueMenuIds)
+    : new Map()
+
   let processedCount = 0
   for (let offset = 0; offset < candidates.length; offset += ANALYTICS_BACKFILL_CONCURRENCY) {
     const batch = candidates.slice(offset, offset + ANALYTICS_BACKFILL_CONCURRENCY)
@@ -800,7 +812,7 @@ export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize 
         }
 
         try {
-          await applyCompletedOrderAnalytics(claimedOrder, 1)
+          await applyCompletedOrderAnalytics(claimedOrder, 1, preloadedMenuMap)
           await markCompletedOrderAnalyticsTracked(claimedOrder._id)
           return 1
         } catch (error) {

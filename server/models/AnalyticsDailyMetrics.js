@@ -19,5 +19,6 @@ const analyticsDailyMetricsSchema = new mongoose.Schema(
 analyticsDailyMetricsSchema.index({ restaurantId: 1, dateKey: 1 }, { unique: true })
 analyticsDailyMetricsSchema.index({ restaurantId: 1, date: 1 })
 analyticsDailyMetricsSchema.index({ date: 1, rolledUp: 1 })
+analyticsDailyMetricsSchema.index({ restaurantId: 1, rolledUp: 1, date: 1 })
 
 export default mongoose.model('AnalyticsDailyMetrics', analyticsDailyMetricsSchema)

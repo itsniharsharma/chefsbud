@@ -20,5 +20,6 @@ const dashboardNotificationSchema = new mongoose.Schema(
 dashboardNotificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 })
 dashboardNotificationSchema.index({ restaurantId: 1, type: 1, itemId: 1 }, { unique: true })
 dashboardNotificationSchema.index({ restaurantId: 1, type: 1, createdAt: -1 })
+dashboardNotificationSchema.index({ restaurantId: 1, type: 1, expiresAt: 1, currentPercent: 1, updatedAt: -1 })
 
 export default mongoose.model('DashboardNotification', dashboardNotificationSchema)
