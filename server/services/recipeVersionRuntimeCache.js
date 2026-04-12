@@ -112,43 +112,6 @@ async function fetchLatestRecipeVersionsFromDb({ restaurantId, menuItemIds = [],
   return new Map(rows.map((row) => [normalizeId(row.menuItemId || row._id), row]))
 }
 
-async function getLatestRecipeVersionForKey({ restaurantId, menuItemId }) {
-  const key = cacheKey(restaurantId, menuItemId)
-  const cached = getFreshCacheEntry(key)
-  if (cached !== null) return cached
-
-  const redisCached = await readRedisCacheEntry(key)
-  if (redisCached !== null) {
-    setCacheEntry(key, redisCached)
-    pruneCacheIfNeeded()
-    return redisCached
-  }
-
-  if (inflightByKey.has(key)) {
-    return inflightByKey.get(key)
-  }
-
-  const promise = (async () => {
-    const resultMap = await fetchLatestRecipeVersionsFromDb({
-      restaurantId,
-      menuItemIds: [menuItemId],
-      session: null,
-    })
-    const row = resultMap.get(normalizeId(menuItemId)) || null
-    setCacheEntry(key, row)
-    await writeRedisCacheEntry(key, row)
-    pruneCacheIfNeeded()
-    return row
-  })()
-
-  inflightByKey.set(key, promise)
-  try {
-    return await promise
-  } finally {
-    inflightByKey.delete(key)
-  }
-}
-
 export async function loadLatestRecipeVersionsByMenuItem({ restaurantId, menuItemIds = [], session = null }) {
   const tenantId = normalizeId(restaurantId)
   const ids = [...new Set(menuItemIds.map(normalizeId).filter(Boolean))]
