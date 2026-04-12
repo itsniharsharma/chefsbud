@@ -2,7 +2,36 @@ import mongoose from 'mongoose'
 
 const recipeIngredientSchema = new mongoose.Schema(
   {
-    inventoryItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', required: true },
+    sourceType: {
+      type: String,
+      enum: ['inventory', 'menu'],
+      default: 'inventory',
+      required: true,
+    },
+    inventoryItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InventoryItem',
+      default: null,
+      validate: {
+        validator(value) {
+          if (String(this.sourceType || 'inventory') === 'menu') return true
+          return Boolean(value)
+        },
+        message: 'inventoryItemId is required when sourceType is inventory',
+      },
+    },
+    menuItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'MenuItem',
+      default: null,
+      validate: {
+        validator(value) {
+          if (String(this.sourceType || 'inventory') === 'inventory') return true
+          return Boolean(value)
+        },
+        message: 'menuItemId is required when sourceType is menu',
+      },
+    },
     quantity: { type: Number, required: true, min: 0.000001 },
     unit: {
       type: String,

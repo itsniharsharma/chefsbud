@@ -153,9 +153,27 @@ router.post(
   [
     body('menuItemId').isMongoId(),
     body('ingredients').isArray({ min: 1, max: 200 }),
-    body('ingredients.*.inventoryItemId').isMongoId(),
+    body('ingredients.*.sourceType').optional({ values: 'falsy' }).isIn(['inventory', 'menu']),
+    body('ingredients.*.inventoryItemId').optional({ values: 'falsy' }).isMongoId(),
+    body('ingredients.*.menuItemId').optional({ values: 'falsy' }).isMongoId(),
     body('ingredients.*.quantity').isFloat({ min: 0.000001, max: 100000000 }),
     body('ingredients.*.unit').isIn(['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet', 'g', 'ml', 'unit']),
+    body('ingredients').custom((rows) => {
+      const normalizedRows = Array.isArray(rows) ? rows : []
+      for (const row of normalizedRows) {
+        const sourceType = String(row?.sourceType || 'inventory').trim().toLowerCase()
+        const inventoryItemId = String(row?.inventoryItemId || '').trim()
+        const menuItemId = String(row?.menuItemId || '').trim()
+        if (sourceType === 'menu') {
+          if (!menuItemId) {
+            throw new Error('menuItemId is required for menu recipe ingredients')
+          }
+        } else if (!inventoryItemId) {
+          throw new Error('inventoryItemId is required for inventory recipe ingredients')
+        }
+      }
+      return true
+    }),
   ],
   validateRequest,
   upsertRecipe,

@@ -2,7 +2,7 @@ import mongoose from 'mongoose'
 import InventoryItem from '../models/InventoryItem.js'
 import InventoryLedger from '../models/InventoryLedger.js'
 import InventoryPurchase from '../models/InventoryPurchase.js'
-import Recipe from '../models/Recipe.js'
+import { loadLatestRecipeVersionsByMenuItem } from './recipeVersionRuntimeCache.js'
 
 const LEDGER_TYPES = new Set([
   'PURCHASE',
@@ -300,15 +300,11 @@ export async function processOrderConsumption(order, { session = null, createdBy
     return { processed: 0, skippedMenuItemIds: [] }
   }
 
-  const recipes = await Recipe.find({
+  const recipeByMenuItemId = await loadLatestRecipeVersionsByMenuItem({
     restaurantId,
-    menuItemId: { $in: uniqueMenuItemIds },
+    menuItemIds: uniqueMenuItemIds,
+    session,
   })
-    .select('menuItemId ingredients')
-    .session(session || null)
-    .lean()
-
-  const recipeByMenuItemId = new Map(recipes.map((recipe) => [toObjectIdString(recipe.menuItemId), recipe]))
   const totalsByInventoryItem = new Map()
   const skippedMenuItemIds = []
 
@@ -347,6 +343,7 @@ export async function processOrderConsumption(order, { session = null, createdBy
       current.quantity = round6(current.quantity + totalQty)
       current.sources.push({
         menuItemId,
+        recipeVersion: Number(recipe.version || 1),
         orderQuantity,
         ingredientQuantity,
       })

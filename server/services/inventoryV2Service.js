@@ -3,8 +3,8 @@ import InventoryBalance from '../models/InventoryBalance.js'
 import InventoryItem from '../models/InventoryItem.js'
 import InventoryLocation from '../models/InventoryLocation.js'
 import InventoryReservation from '../models/InventoryReservation.js'
-import Recipe from '../models/Recipe.js'
 import { addLedgerEntries } from './inventoryService.js'
+import { loadLatestRecipeVersionsByMenuItem } from './recipeVersionRuntimeCache.js'
 
 function toObjectIdString(value) {
   return String(value || '').trim()
@@ -223,15 +223,11 @@ async function getDemandRowsFromOrderItems({ restaurantId, orderItems = [], sess
   const menuItemIds = [...new Set(orderItems.map((item) => toObjectIdString(item?.menuItemId)).filter(Boolean))]
   if (!menuItemIds.length) return []
 
-  const recipes = await Recipe.find({
+  const recipeByMenuItemId = await loadLatestRecipeVersionsByMenuItem({
     restaurantId,
-    menuItemId: { $in: menuItemIds },
+    menuItemIds,
+    session,
   })
-    .select('menuItemId ingredients version')
-    .session(session || null)
-    .lean()
-
-  const recipeByMenuItemId = new Map(recipes.map((row) => [toObjectIdString(row.menuItemId), row]))
 
   const demandByItem = new Map()
   for (const orderItem of orderItems) {

@@ -12,7 +12,9 @@ const units = ['Kg', 'Gram', 'Litre', 'Ml', 'Unit', 'Packet']
 function newIngredientRow() {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    sourceType: 'inventory',
     inventoryItemId: '',
+    menuItemId: '',
     quantity: '1',
     unit: 'Gram',
   }
@@ -41,6 +43,11 @@ export default function RecipeBuilderModule() {
     menuItemId && recipeByMenuItemId.get(String(menuItemId || '')),
   )
 
+  const menuIngredients = useMemo(
+    () => menuItems.filter((item) => String(item?._id || '') !== String(menuItemId || '')),
+    [menuItems, menuItemId],
+  )
+
   function onSelectMenuItem(nextMenuItemId) {
     setMenuItemId(nextMenuItemId)
     setStatus('')
@@ -54,7 +61,11 @@ export default function RecipeBuilderModule() {
 
     const mapped = (Array.isArray(existing.ingredients) ? existing.ingredients : []).map((ingredient) => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sourceType: String(ingredient.sourceType || (ingredient.menuItemId ? 'menu' : 'inventory')).toLowerCase() === 'menu'
+        ? 'menu'
+        : 'inventory',
       inventoryItemId: String(ingredient.inventoryItemId || ''),
+      menuItemId: String(ingredient.menuItemId || ''),
       quantity: String(Number(ingredient.quantity || 0)),
       unit: String(ingredient.unit || 'Gram'),
     }))
@@ -63,7 +74,26 @@ export default function RecipeBuilderModule() {
   }
 
   function onUpdateRow(index, field, value) {
-    setRows((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
+    setRows((prev) => prev.map((row, i) => {
+      if (i !== index) return row
+      if (field === 'sourceType') {
+        const nextSourceType = String(value || '').toLowerCase() === 'menu' ? 'menu' : 'inventory'
+        return {
+          ...row,
+          sourceType: nextSourceType,
+          inventoryItemId: nextSourceType === 'inventory' ? row.inventoryItemId : '',
+          menuItemId: nextSourceType === 'menu' ? row.menuItemId : '',
+          unit: nextSourceType === 'menu' ? 'Unit' : row.unit,
+        }
+      }
+      if (field === 'inventoryItemId') {
+        return { ...row, inventoryItemId: value, menuItemId: '' }
+      }
+      if (field === 'menuItemId') {
+        return { ...row, menuItemId: value, inventoryItemId: '' }
+      }
+      return { ...row, [field]: value }
+    }))
   }
 
   function onAddRow() {
@@ -86,11 +116,17 @@ export default function RecipeBuilderModule() {
 
     const ingredients = rows
       .map((row) => ({
+        sourceType: String(row.sourceType || 'inventory').trim().toLowerCase() === 'menu' ? 'menu' : 'inventory',
         inventoryItemId: String(row.inventoryItemId || '').trim(),
+        menuItemId: String(row.menuItemId || '').trim(),
         quantity: Number(row.quantity),
         unit: String(row.unit || '').trim(),
       }))
-      .filter((row) => row.inventoryItemId && Number.isFinite(row.quantity) && row.quantity > 0 && row.unit)
+      .filter((row) => {
+        if (!(Number.isFinite(row.quantity) && row.quantity > 0 && row.unit)) return false
+        if (row.sourceType === 'menu') return Boolean(row.menuItemId)
+        return Boolean(row.inventoryItemId)
+      })
 
     if (!ingredients.length) {
       setError('Please add at least one valid ingredient row.')
@@ -144,14 +180,27 @@ export default function RecipeBuilderModule() {
           {rows.map((row, index) => (
             <div key={row.id} className="grid grid-cols-1 gap-2 rounded-xl border border-rose-100 p-3 md:grid-cols-12">
               <select
-                value={row.inventoryItemId}
-                onChange={(event) => onUpdateRow(index, 'inventoryItemId', event.target.value)}
-                className="rounded-xl border border-slate-200 px-3 py-2 text-sm md:col-span-6"
+                value={row.sourceType}
+                onChange={(event) => onUpdateRow(index, 'sourceType', event.target.value)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm md:col-span-2"
               >
-                <option value="">Inventory item</option>
-                {inventoryItems.map((item) => (
-                  <option key={item._id} value={item._id}>{item.name}</option>
-                ))}
+                <option value="inventory">Inventory</option>
+                <option value="menu">Menu</option>
+              </select>
+
+              <select
+                value={row.sourceType === 'menu' ? row.menuItemId : row.inventoryItemId}
+                onChange={(event) => onUpdateRow(index, row.sourceType === 'menu' ? 'menuItemId' : 'inventoryItemId', event.target.value)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm md:col-span-4"
+              >
+                <option value="">{row.sourceType === 'menu' ? 'Menu item' : 'Inventory item'}</option>
+                {row.sourceType === 'menu'
+                  ? menuIngredients.map((item) => (
+                      <option key={item._id} value={item._id}>{item.name}</option>
+                    ))
+                  : inventoryItems.map((item) => (
+                      <option key={item._id} value={item._id}>{item.name}</option>
+                    ))}
               </select>
 
               <input
@@ -168,6 +217,7 @@ export default function RecipeBuilderModule() {
                 value={row.unit}
                 onChange={(event) => onUpdateRow(index, 'unit', event.target.value)}
                 className="rounded-xl border border-slate-200 px-3 py-2 text-sm md:col-span-2"
+                disabled={row.sourceType === 'menu'}
               >
                 {units.map((unit) => (
                   <option key={unit} value={unit}>{unit}</option>

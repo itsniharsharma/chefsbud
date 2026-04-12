@@ -12,6 +12,7 @@ import {
   reconcileStockFromSavedPurchases,
 } from '../services/inventoryService.js'
 import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
+import { invalidateRecipeVersionRuntimeCache } from '../services/recipeVersionRuntimeCache.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { emitInventoryChanged } from '../realtime/inventoryEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
@@ -21,6 +22,8 @@ const supplierProjection = '_id name gstNo phone email address isActive createdA
 const itemProjection = '_id name defaultUnit currentStock currentStockUnit isActive createdAt updatedAt'
 const purchaseProjection =
   '_id sourceType supplierId supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue totalDiscountAmount paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount createdAt updatedAt'
+
+const activeRecipeRefreshJobs = new Set()
 
 function inventoryCacheTags(restaurantId, options = {}) {
   const id = String(restaurantId)
@@ -316,12 +319,386 @@ function buildPurchaseAdjustmentEntries({
 
 function normalizeRecipeIngredientRows(rows = []) {
   return rows
-    .map((row) => ({
-      inventoryItemId: String(row?.inventoryItemId || '').trim(),
-      quantity: round6(Math.max(0, safeNumber(row?.quantity))),
-      unit: String(row?.unit || '').trim(),
-    }))
-    .filter((row) => row.inventoryItemId && row.quantity > 0 && row.unit)
+    .map((row) => {
+      const sourceType = String(row?.sourceType || 'inventory').trim().toLowerCase() === 'menu' ? 'menu' : 'inventory'
+      const inventoryItemIdRaw = String(row?.inventoryItemId || '').trim()
+      const menuItemIdRaw = String(row?.menuItemId || '').trim()
+
+      return {
+        sourceType,
+        inventoryItemId: sourceType === 'menu' ? null : (inventoryItemIdRaw || null),
+        menuItemId: sourceType === 'menu' ? (menuItemIdRaw || null) : null,
+        quantity: round6(Math.max(0, safeNumber(row?.quantity))),
+        unit: String(row?.unit || '').trim(),
+      }
+    })
+    .filter((row) => {
+      if (!(row.quantity > 0) || !row.unit) return false
+      if (row.sourceType === 'menu') return Boolean(row.menuItemId)
+      return Boolean(row.inventoryItemId)
+    })
+}
+
+function aggregateVersionedIngredients(rows = []) {
+  const totalsByKey = new Map()
+
+  for (const row of rows) {
+    const inventoryItemId = String(row?.inventoryItemId || '').trim()
+    const unit = String(row?.unit || '').trim()
+    const quantity = round6(Math.max(0, Number(row?.quantity || 0)))
+    if (!inventoryItemId || !unit || quantity <= 0) continue
+
+    const key = `${inventoryItemId}:${unit}`
+    const current = totalsByKey.get(key) || {
+      inventoryItemId,
+      unit,
+      quantity: 0,
+    }
+    current.quantity = round6(current.quantity + quantity)
+    totalsByKey.set(key, current)
+  }
+
+  return [...totalsByKey.values()].filter((row) => row.quantity > 0)
+}
+
+function extractMenuDependencyIds(ingredients = []) {
+  return [
+    ...new Set(
+      (Array.isArray(ingredients) ? ingredients : [])
+        .filter((row) => String(row?.sourceType || '').trim().toLowerCase() === 'menu')
+        .map((row) => String(row?.menuItemId || '').trim())
+        .filter(Boolean),
+    ),
+  ]
+}
+
+function buildDependencyMaps(recipes = []) {
+  const depsByMenuId = new Map()
+  const parentsByMenuId = new Map()
+
+  for (const recipe of recipes) {
+    const menuId = String(recipe?.menuItemId || '').trim()
+    if (!menuId) continue
+    const deps = extractMenuDependencyIds(recipe?.ingredients)
+    depsByMenuId.set(menuId, deps)
+
+    for (const depId of deps) {
+      if (!parentsByMenuId.has(depId)) {
+        parentsByMenuId.set(depId, new Set())
+      }
+      parentsByMenuId.get(depId).add(menuId)
+    }
+  }
+
+  return { depsByMenuId, parentsByMenuId }
+}
+
+function findCyclePathToTarget({ depsByMenuId, startMenuItemId, targetMenuItemId }) {
+  const start = String(startMenuItemId || '').trim()
+  const target = String(targetMenuItemId || '').trim()
+  if (!start || !target) return null
+  if (start === target) return [target]
+
+  const queue = [{ node: start, path: [start] }]
+  const visited = new Set([start])
+
+  while (queue.length) {
+    const current = queue.shift()
+    const dependencies = depsByMenuId.get(current.node) || []
+    for (const dep of dependencies) {
+      if (dep === target) {
+        return [...current.path, dep]
+      }
+      if (visited.has(dep)) continue
+      visited.add(dep)
+      queue.push({ node: dep, path: [...current.path, dep] })
+    }
+  }
+
+  return null
+}
+
+async function assertNoRecipeDependencyCycle({
+  restaurantId,
+  targetMenuItemId,
+  nextMenuDependencyIds = [],
+}) {
+  if (!nextMenuDependencyIds.length) return
+
+  const targetId = String(targetMenuItemId || '').trim()
+  const uniqueDependencies = [...new Set(nextMenuDependencyIds.map((id) => String(id || '').trim()).filter(Boolean))]
+  if (!targetId || !uniqueDependencies.length) return
+
+  const existingRecipes = await Recipe.find({ restaurantId })
+    .select('menuItemId ingredients.sourceType ingredients.menuItemId')
+    .lean()
+
+  const { depsByMenuId } = buildDependencyMaps(existingRecipes)
+  depsByMenuId.set(targetId, uniqueDependencies)
+
+  for (const depId of uniqueDependencies) {
+    const cyclePath = findCyclePathToTarget({
+      depsByMenuId,
+      startMenuItemId: depId,
+      targetMenuItemId: targetId,
+    })
+    if (cyclePath) {
+      throw new Error(
+        `Recipe dependency cycle detected: ${[targetId, ...cyclePath].join(' -> ')}`,
+      )
+    }
+  }
+}
+
+async function computeFlattenedVersionedIngredients({
+  restaurantId,
+  menuItemId,
+  ingredients = [],
+}) {
+  const normalized = normalizeRecipeIngredientRows(ingredients)
+  const inventoryRows = normalized.filter((row) => row.sourceType !== 'menu')
+  const menuRows = normalized.filter((row) => row.sourceType === 'menu')
+
+  const versionedFromInventory = inventoryRows
+    .map((row) => {
+      const converted = convertRecipeUnitToBase(row.quantity, row.unit)
+      return {
+        inventoryItemId: row.inventoryItemId,
+        quantity: converted.quantity,
+        unit: converted.unit,
+      }
+    })
+    .filter((row) => row.quantity > 0)
+
+  const versionedFromMenu = await resolveMenuBackedVersionedIngredients({
+    restaurantId,
+    targetMenuItemId: menuItemId,
+    menuIngredientRows: menuRows,
+  })
+
+  return aggregateVersionedIngredients([...versionedFromInventory, ...versionedFromMenu])
+}
+
+async function rebuildRecipeVersionSnapshot({
+  restaurantId,
+  menuItemId,
+  createdBy = null,
+}) {
+  const recipe = await Recipe.findOne({ restaurantId, menuItemId })
+    .select('_id restaurantId menuItemId ingredients version')
+
+  if (!recipe) return false
+
+  const flattenedIngredients = await computeFlattenedVersionedIngredients({
+    restaurantId,
+    menuItemId,
+    ingredients: recipe.ingredients,
+  })
+
+  if (!flattenedIngredients.length) {
+    logger.warn('recipe_snapshot_rebuild_skipped_empty', {
+      restaurantId: String(restaurantId),
+      menuItemId: String(menuItemId),
+    })
+    return false
+  }
+
+  const advancedRecipe = await Recipe.findOneAndUpdate(
+    {
+      _id: recipe._id,
+      version: Number(recipe.version || 1),
+    },
+    {
+      $inc: { version: 1 },
+    },
+    {
+      new: true,
+    },
+  )
+
+  if (!advancedRecipe) {
+    return false
+  }
+
+  const nextVersion = Number(advancedRecipe.version || 1)
+  await RecipeVersion.findOneAndUpdate(
+    {
+      restaurantId,
+      menuItemId,
+      version: nextVersion,
+    },
+    {
+      $setOnInsert: {
+        restaurantId,
+        menuItemId,
+        version: nextVersion,
+        ingredients: flattenedIngredients,
+        createdBy,
+      },
+    },
+    {
+      upsert: true,
+      new: true,
+    },
+  )
+
+  invalidateRecipeVersionRuntimeCache({
+    restaurantId,
+    menuItemIds: [String(menuItemId)],
+  })
+
+  return true
+}
+
+function scheduleAncestorRecipeRefresh({
+  restaurantId,
+  changedMenuItemId,
+  createdBy = null,
+}) {
+  const tenantId = String(restaurantId || '').trim()
+  const changedId = String(changedMenuItemId || '').trim()
+  if (!tenantId || !changedId) return
+
+  const jobKey = `${tenantId}:${changedId}`
+  if (activeRecipeRefreshJobs.has(jobKey)) return
+  activeRecipeRefreshJobs.add(jobKey)
+
+  setTimeout(async () => {
+    try {
+      const recipes = await Recipe.find({ restaurantId: tenantId })
+        .select('menuItemId ingredients.sourceType ingredients.menuItemId')
+        .lean()
+      const { parentsByMenuId } = buildDependencyMaps(recipes)
+
+      const levels = new Map()
+      const queue = [{ id: changedId, depth: 0 }]
+
+      while (queue.length) {
+        const current = queue.shift()
+        const parents = [...(parentsByMenuId.get(current.id) || [])]
+        for (const parentId of parents) {
+          const nextDepth = current.depth + 1
+          const existingDepth = levels.get(parentId)
+          if (existingDepth != null && existingDepth <= nextDepth) continue
+          levels.set(parentId, nextDepth)
+          queue.push({ id: parentId, depth: nextDepth })
+        }
+      }
+
+      const orderedAncestors = [...levels.entries()]
+        .sort((a, b) => a[1] - b[1])
+        .map(([menuItemId]) => menuItemId)
+
+      for (const ancestorMenuId of orderedAncestors) {
+        try {
+          await rebuildRecipeVersionSnapshot({
+            restaurantId: tenantId,
+            menuItemId: ancestorMenuId,
+            createdBy,
+          })
+        } catch (error) {
+          logger.warn('recipe_ancestor_refresh_failed', {
+            restaurantId: tenantId,
+            changedMenuItemId: changedId,
+            ancestorMenuItemId: ancestorMenuId,
+            message: error?.message,
+          })
+        }
+      }
+    } catch (error) {
+      logger.warn('recipe_ancestor_refresh_job_failed', {
+        restaurantId: tenantId,
+        changedMenuItemId: changedId,
+        message: error?.message,
+      })
+    } finally {
+      activeRecipeRefreshJobs.delete(jobKey)
+    }
+  }, 0)
+}
+
+async function resolveMenuBackedVersionedIngredients({
+  restaurantId,
+  targetMenuItemId,
+  menuIngredientRows = [],
+}) {
+  if (!menuIngredientRows.length) return []
+
+  const referencedMenuIds = [
+    ...new Set(
+      menuIngredientRows.map((row) => String(row?.menuItemId || '').trim()).filter(Boolean),
+    ),
+  ]
+
+  if (referencedMenuIds.includes(String(targetMenuItemId || '').trim())) {
+    throw new Error('A recipe cannot directly reference itself as a menu ingredient')
+  }
+
+  const referencedMenus = await MenuItem.find({
+    restaurantId,
+    _id: { $in: referencedMenuIds },
+  })
+    .select('_id name')
+    .lean()
+
+  if (referencedMenus.length !== referencedMenuIds.length) {
+    throw new Error('One or more menu ingredients are invalid for this restaurant')
+  }
+
+  const referencedObjectIds = referencedMenuIds.map((id) => new mongoose.Types.ObjectId(id))
+  const latestRecipeVersions = await RecipeVersion.aggregate([
+    {
+      $match: {
+        restaurantId: new mongoose.Types.ObjectId(String(restaurantId)),
+        menuItemId: { $in: referencedObjectIds },
+      },
+    },
+    { $sort: { version: -1 } },
+    {
+      $group: {
+        _id: '$menuItemId',
+        version: { $first: '$version' },
+        ingredients: { $first: '$ingredients' },
+      },
+    },
+  ])
+
+  const versionByMenuItemId = new Map(
+    latestRecipeVersions.map((row) => [String(row?._id || ''), row]),
+  )
+
+  const unresolvedNames = []
+  const referencedMenuById = new Map(referencedMenus.map((row) => [String(row._id), row]))
+  for (const menuItemId of referencedMenuIds) {
+    const versionDoc = versionByMenuItemId.get(menuItemId)
+    if (!versionDoc || !Array.isArray(versionDoc.ingredients) || !versionDoc.ingredients.length) {
+      unresolvedNames.push(referencedMenuById.get(menuItemId)?.name || menuItemId)
+    }
+  }
+
+  if (unresolvedNames.length) {
+    throw new Error(`Referenced menu items are missing saved recipes: ${unresolvedNames.join(', ')}`)
+  }
+
+  const rows = []
+  for (const menuIngredient of menuIngredientRows) {
+    const menuItemId = String(menuIngredient?.menuItemId || '').trim()
+    const multiplier = round6(Math.max(0, Number(menuIngredient?.quantity || 0)))
+    if (!menuItemId || multiplier <= 0) continue
+
+    const versionDoc = versionByMenuItemId.get(menuItemId)
+    const ingredients = Array.isArray(versionDoc?.ingredients) ? versionDoc.ingredients : []
+    for (const row of ingredients) {
+      const inventoryItemId = String(row?.inventoryItemId || '').trim()
+      const unit = String(row?.unit || '').trim()
+      const quantity = round6(Math.max(0, Number(row?.quantity || 0)) * multiplier)
+      if (!inventoryItemId || !unit || quantity <= 0) continue
+
+      rows.push({ inventoryItemId, quantity, unit })
+    }
+  }
+
+  return aggregateVersionedIngredients(rows)
 }
 
 export async function listInventorySuppliers(req, res, next) {
@@ -1065,17 +1442,78 @@ export async function upsertRecipe(req, res, next) {
       return res.status(400).json({ message: 'At least one ingredient is required' })
     }
 
-    const inventoryIds = [...new Set(ingredients.map((row) => row.inventoryItemId))]
-    const validInventoryItems = await InventoryItem.find({
-      _id: { $in: inventoryIds },
-      restaurantId: restaurant._id,
-      isActive: true,
-    })
-      .select('_id')
-      .lean()
+    const inventoryIngredientRows = ingredients.filter((row) => row.sourceType !== 'menu')
+    const menuIngredientRows = ingredients.filter((row) => row.sourceType === 'menu')
 
-    if (validInventoryItems.length !== inventoryIds.length) {
-      return res.status(400).json({ message: 'One or more ingredients are invalid for this restaurant' })
+    const invalidMenuUnit = menuIngredientRows.find(
+      (row) => !['Unit', 'unit'].includes(String(row?.unit || '').trim()),
+    )
+    if (invalidMenuUnit) {
+      return res.status(400).json({ message: 'Menu ingredients must use Unit as unit' })
+    }
+
+    const inventoryIds = [
+      ...new Set(inventoryIngredientRows.map((row) => String(row.inventoryItemId || '').trim()).filter(Boolean)),
+    ]
+    if (inventoryIds.length) {
+      const validInventoryItems = await InventoryItem.find({
+        _id: { $in: inventoryIds },
+        restaurantId: restaurant._id,
+        isActive: true,
+      })
+        .select('_id')
+        .lean()
+
+      if (validInventoryItems.length !== inventoryIds.length) {
+        return res.status(400).json({ message: 'One or more inventory ingredients are invalid for this restaurant' })
+      }
+    }
+
+    const menuIngredientIds = [
+      ...new Set(menuIngredientRows.map((row) => String(row.menuItemId || '').trim()).filter(Boolean)),
+    ]
+    if (menuIngredientIds.includes(menuItemId)) {
+      return res.status(400).json({ message: 'A recipe cannot reference itself as menu ingredient' })
+    }
+    if (menuIngredientIds.length) {
+      const validMenuIngredients = await MenuItem.find({
+        _id: { $in: menuIngredientIds },
+        restaurantId: restaurant._id,
+      })
+        .select('_id')
+        .lean()
+      if (validMenuIngredients.length !== menuIngredientIds.length) {
+        return res.status(400).json({ message: 'One or more menu ingredients are invalid for this restaurant' })
+      }
+    }
+
+    try {
+      await assertNoRecipeDependencyCycle({
+        restaurantId: restaurant._id,
+        targetMenuItemId: menuItemId,
+        nextMenuDependencyIds: menuIngredientIds,
+      })
+    } catch (cycleError) {
+      return res.status(400).json({
+        message: cycleError?.message || 'Recipe dependency cycle detected',
+      })
+    }
+
+    let versionedIngredients = []
+    try {
+      versionedIngredients = await computeFlattenedVersionedIngredients({
+        restaurantId: restaurant._id,
+        menuItemId,
+        ingredients,
+      })
+    } catch (resolutionError) {
+      return res.status(400).json({
+        message: resolutionError?.message || 'Failed to resolve menu ingredient recipes',
+      })
+    }
+
+    if (!versionedIngredients.length) {
+      return res.status(400).json({ message: 'At least one resolved inventory ingredient is required' })
     }
 
     const existingRecipe = await Recipe.findOne({
@@ -1092,16 +1530,6 @@ export async function upsertRecipe(req, res, next) {
         ingredients,
         version: 1,
       })
-      const versionedIngredients = ingredients
-        .map((row) => {
-          const converted = convertRecipeUnitToBase(row.quantity, row.unit)
-          return {
-            inventoryItemId: row.inventoryItemId,
-            quantity: converted.quantity,
-            unit: converted.unit,
-          }
-        })
-        .filter((row) => row.quantity > 0)
 
       recipeVersion = await RecipeVersion.findOneAndUpdate(
         {
@@ -1124,17 +1552,6 @@ export async function upsertRecipe(req, res, next) {
       existingRecipe.ingredients = ingredients
       existingRecipe.version = Math.max(1, Number(existingRecipe.version || 1) + 1)
       recipe = await existingRecipe.save()
-
-      const versionedIngredients = ingredients
-        .map((row) => {
-          const converted = convertRecipeUnitToBase(row.quantity, row.unit)
-          return {
-            inventoryItemId: row.inventoryItemId,
-            quantity: converted.quantity,
-            unit: converted.unit,
-          }
-        })
-        .filter((row) => row.quantity > 0)
 
       recipeVersion = await RecipeVersion.findOneAndUpdate(
         {
@@ -1160,6 +1577,16 @@ export async function upsertRecipe(req, res, next) {
       analytics: true,
     })
 
+    invalidateRecipeVersionRuntimeCache({
+      restaurantId: restaurant._id,
+      menuItemIds: [menuItemId],
+    })
+    scheduleAncestorRecipeRefresh({
+      restaurantId: restaurant._id,
+      changedMenuItemId: menuItemId,
+      createdBy: req.user?._id || null,
+    })
+
     const recipePayload = recipe?.toObject ? recipe.toObject() : recipe
     if (recipeVersion?._id) {
       recipePayload.latestRecipeVersionId = recipeVersion._id
@@ -1168,6 +1595,11 @@ export async function upsertRecipe(req, res, next) {
 
     return res.status(201).json(recipePayload)
   } catch (error) {
+    if (error?.name === 'ValidationError' || error?.name === 'CastError') {
+      return res.status(400).json({
+        message: error?.message || 'Recipe validation failed',
+      })
+    }
     next(error)
   }
 }
