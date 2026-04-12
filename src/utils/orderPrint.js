@@ -1,4 +1,5 @@
 import { formatCurrencyINR } from './currency'
+import { getOrderDisplayNumber } from './orderDisplay'
 
 function escapeHtml(value) {
   return String(value || '')
@@ -65,17 +66,18 @@ export function buildBillHtml({ order, restaurantName }) {
   const adjustmentSubtotal = Number(order.billAdjustmentSubtotal || 0)
   const finalTotal = Number(order.billFinalTotalAmount ?? order.totalAmount ?? 0)
   const hasAdjustments = Array.isArray(order.billAdjustments) && order.billAdjustments.length > 0
+  const orderDisplayNumber = getOrderDisplayNumber(order)
 
   return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Bill ${escapeHtml(order._id || order.id)}</title>
+    <title>Bill ${escapeHtml(orderDisplayNumber)}</title>
   </head>
   <body style="font-family:Arial,sans-serif;padding:16px;color:#0f172a;">
     <h2 style="margin:0 0 8px 0;">${escapeHtml(restaurantName || "Chef's Bud")}</h2>
     <div style="font-size:12px;line-height:1.6;">
-      <div><strong>Order:</strong> ${escapeHtml(order._id || order.id)}</div>
+      <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
       <div><strong>Table:</strong> ${escapeHtml(order.tableNumber)} | <strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</div>
       <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
       <div><strong>Status:</strong> ${escapeHtml(order.orderStatus || '-')}</div>
@@ -119,7 +121,7 @@ export function buildBillHtml({ order, restaurantName }) {
 }
 
 export function buildKotHtml({ order }) {
-  const orderId = String(order?._id || order?.id || '')
+  const orderDisplayNumber = getOrderDisplayNumber(order)
   const createdAt = order.createdAt ? new Date(order.createdAt).toLocaleString() : '-'
   const note = order.customerNote ? escapeHtml(String(order.customerNote)) : ''
 
@@ -127,12 +129,12 @@ export function buildKotHtml({ order }) {
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>KOT - ${orderId}</title>
+    <title>KOT - ${escapeHtml(orderDisplayNumber)}</title>
   </head>
   <body style="font-family:Arial,sans-serif;padding:14px;color:#0f172a;">
     <h2 style="margin:0 0 8px 0;">KITCHEN ORDER TICKET</h2>
     <div style="font-size:12px;line-height:1.6;">
-      <div><strong>Order:</strong> ${orderId}</div>
+      <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
       <div><strong>Table:</strong> ${order.tableNumber} | <strong>Floor:</strong> ${order.floorNumber || 1}</div>
       <div><strong>Time:</strong> ${createdAt}</div>
       <div><strong>Status:</strong> ${order.orderStatus}</div>

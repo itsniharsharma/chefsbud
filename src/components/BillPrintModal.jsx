@@ -3,6 +3,7 @@ import Modal from './Modal'
 import Button from './Button'
 import { menuService } from '../services/menuService'
 import { formatCurrencyINR } from '../utils/currency'
+import { getOrderDisplayNumber } from '../utils/orderDisplay'
 
 const MAX_ITEM_NAME_LENGTH = 160
 const MIN_QTY = 1
@@ -227,7 +228,7 @@ export default function BillPrintModal({
       {step === 'choice' ? (
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Order <span className="font-semibold text-slate-900">{order?._id || order?.id || '-'}</span> is ready for billing.
+            Order <span className="font-semibold text-slate-900">{getOrderDisplayNumber(order)}</span> is ready for billing.
             Print the bill directly or add bill-only extra items first.
           </p>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
