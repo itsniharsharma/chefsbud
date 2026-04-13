@@ -69,15 +69,16 @@ function publishOrderChange({ restaurantId, type, orderId, extra = {} }) {
 }
 
 function buildOptimisticOrderStatusPayload(order, update, orderStatus) {
+  const baseOrder = order?.toObject ? order.toObject() : order
   const completedAt = update.completedAt ?? order.completedAt ?? null
   const deletedByOwnerAt = update.deletedByOwnerAt ?? order.deletedByOwnerAt ?? null
 
   return {
-    ...order,
+    ...(baseOrder && typeof baseOrder === 'object' ? baseOrder : {}),
     orderStatus,
     completedAt,
     hiddenFromActive: Boolean(update.hiddenFromActive),
-    hiddenFromRecent: typeof update.hiddenFromRecent === 'boolean' ? update.hiddenFromRecent : Boolean(order.hiddenFromRecent),
+    hiddenFromRecent: typeof update.hiddenFromRecent === 'boolean' ? update.hiddenFromRecent : Boolean(baseOrder?.hiddenFromRecent),
     deletedByOwnerAt,
     updatedAt: update.updatedAt || new Date(),
   }
@@ -295,44 +296,41 @@ export async function getOrders(req, res, next) {
       query.floorNumber = floorNumber
     }
 
-    /**
-     * OPTIMIZATION: Check query result cache before hitting database
-     * Typical cache hit rate: 70-80% for active orders
-     * Saves ~200ms per request on cache hits
-     */
-    const queryType = view === 'completed' ? 'completed_today' : 'active_orders'
-    const cachedResult = await getCachedQueryResult(queryType, {
-      restaurantId: req.params.restaurantId,
-      page: pagination.page,
-      limit: pagination.limit,
-      filters: {
-        scope,
-        floor: floorNumber || 'all',
-        status: view === 'active' ? String(req.query.status || 'All') : 'Completed',
-      },
-    })
+    const shouldUseQueryCache = view === 'completed'
 
-    if (cachedResult?.data) {
-      res.set('X-Cache-Hit', cachedResult.source)
-      return res.json(cachedResult.data)
+    if (shouldUseQueryCache) {
+      const cachedResult = await getCachedQueryResult('completed_today', {
+        restaurantId: req.params.restaurantId,
+        page: pagination.page,
+        limit: pagination.limit,
+        filters: {
+          scope,
+          floor: floorNumber || 'all',
+          status: 'Completed',
+        },
+      })
+
+      if (cachedResult?.data) {
+        res.set('X-Cache-Hit', cachedResult.source)
+        return res.json(cachedResult.data)
+      }
     }
 
     const rawOrders = await listOrdersByQuery(query, pagination)
     const orders = await enrichOrdersWithFloorNumbers(restaurant._id, rawOrders)
 
-    /**
-     * CACHE RESULT for future identical requests
-     */
-    void setCachedQueryResult(queryType, {
-      restaurantId: req.params.restaurantId,
-      page: pagination.page,
-      limit: pagination.limit,
-      filters: {
-        scope,
-        floor: floorNumber || 'all',
-        status: view === 'active' ? String(req.query.status || 'All') : 'Completed',
-      },
-    }, orders)
+    if (shouldUseQueryCache) {
+      void setCachedQueryResult('completed_today', {
+        restaurantId: req.params.restaurantId,
+        page: pagination.page,
+        limit: pagination.limit,
+        filters: {
+          scope,
+          floor: floorNumber || 'all',
+          status: 'Completed',
+        },
+      }, orders)
+    }
 
     return res.json(orders)
   } catch (error) {
@@ -364,6 +362,16 @@ export async function updateOrderStatus(req, res, next) {
       return res.status(404).json({ message: 'Order not found' })
     }
 
+    if (String(existingOrder.orderStatus || '') === String(orderStatus || '')) {
+      const noOpPayload = buildOptimisticOrderStatusPayload(existingOrder, {
+        completedAt: existingOrder.completedAt,
+        hiddenFromActive: Boolean(existingOrder.orderStatus === 'Completed'),
+        hiddenFromRecent: false,
+        deletedByOwnerAt: existingOrder.deletedByOwnerAt,
+      }, orderStatus)
+      return res.json(noOpPayload)
+    }
+
     const wasCompleted = existingOrder.orderStatus === 'Completed'
     const isCompleted = orderStatus === 'Completed'
 
@@ -390,13 +398,13 @@ export async function updateOrderStatus(req, res, next) {
             session,
             projection: '_id restaurantId tableNumber floorNumber orderStatus items subtotalAmount discountTotal totalAmount inventoryConsumptionCycle inventoryProcessedAt completedAt analyticsTrackedAt hiddenFromActive hiddenFromRecent deletedByOwnerAt createdAt updatedAt',
           },
-        )
+        ).lean()
 
         if (!previousOrder) {
           throw new Error('Order not found')
         }
 
-        const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus || isCompleted || previousOrder.orderStatus === 'Completed'
+        const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus
         if (shouldQueueStatusWork) {
           await createOrderStatusChangedOutboxEvent({
             orderId: previousOrder._id,
@@ -418,23 +426,33 @@ export async function updateOrderStatus(req, res, next) {
     const responseOrder = buildOptimisticOrderStatusPayload(previousOrder, update, orderStatus)
 
     if (eventQueued) {
-      // Keep board/status views coherent immediately after status changes.
-      invalidateCacheByTags(
-        buildOrderCacheTags({
-          restaurant,
-          tableNumber: responseOrder.tableNumber,
-          orderId: responseOrder._id,
-          includeAnalytics: wasCompleted !== isCompleted,
-        }),
-      )
+      try {
+        // Keep board/status views coherent immediately after status changes.
+        invalidateCacheByTags(
+          buildOrderCacheTags({
+            restaurant,
+            tableNumber: responseOrder.tableNumber,
+            orderId: responseOrder._id,
+            includeAnalytics: wasCompleted !== isCompleted,
+          }),
+        )
 
-      await invalidateOrderQueries(restaurant._id)
-      publishOrderChange({
-        restaurantId: restaurant._id,
-        type: 'status-updated',
-        orderId: responseOrder._id,
-        extra: { orderStatus: responseOrder.orderStatus },
-      })
+        runNonCriticalTask('order_status_cache_and_realtime', async () => {
+          await invalidateOrderQueries(restaurant._id)
+          publishOrderChange({
+            restaurantId: restaurant._id,
+            type: 'status-updated',
+            orderId: responseOrder._id,
+            extra: { orderStatus: responseOrder.orderStatus },
+          })
+        })
+      } catch (sideEffectError) {
+        logger.warn('order_status_post_update_side_effects_failed', {
+          orderId: String(responseOrder?._id || ''),
+          restaurantId: String(restaurant?._id || ''),
+          message: sideEffectError?.message || 'order_status_side_effects_failed',
+        })
+      }
     }
 
     res.set('X-Background-Jobs-Queued', eventQueued ? '1' : '0')
@@ -638,11 +656,13 @@ export async function deleteOrder(req, res, next) {
         includeAnalytics: Boolean(order.analyticsTrackedAt),
       }),
     )
-    invalidateOrderQueries(restaurant._id) // Invalidate query cache on delete
-    publishOrderChange({
-      restaurantId: restaurant._id,
-      type: 'deleted',
-      orderId: req.params.orderId,
+    runNonCriticalTask('order_delete_cache_and_realtime', async () => {
+      await invalidateOrderQueries(restaurant._id)
+      publishOrderChange({
+        restaurantId: restaurant._id,
+        type: 'deleted',
+        orderId: req.params.orderId,
+      })
     })
     return res.json({ success: true, deleted: true })
   } catch (error) {
@@ -842,12 +862,14 @@ export async function createOrder(req, res, next) {
         includeAnalytics: true,
       }),
     )
-    invalidateOrderQueries(draft.restaurant._id) // Invalidate query cache for new order
-    publishOrderChange({
-      restaurantId: draft.restaurant._id,
-      type: 'created',
-      orderId: responsePayload._id,
-      extra: { orderStatus: responsePayload.orderStatus },
+    runNonCriticalTask('order_create_cache_and_realtime', async () => {
+      await invalidateOrderQueries(draft.restaurant._id)
+      publishOrderChange({
+        restaurantId: draft.restaurant._id,
+        type: 'created',
+        orderId: responsePayload._id,
+        extra: { orderStatus: responsePayload.orderStatus },
+      })
     })
 
     const responseStartedAt = Date.now()
@@ -1112,7 +1134,7 @@ export async function markOrderKotPrinted(req, res, next) {
       { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
       { returnDocument: 'after', runValidators: true },
-    )
+    ).lean()
 
     if (isReprint) {
       sendKotReprintAuditEmail({
@@ -1200,7 +1222,7 @@ export async function markOrderBillPrinted(req, res, next) {
       { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
       { $set: update },
       { returnDocument: 'after', runValidators: true },
-    )
+    ).lean()
 
     invalidateCacheByTags(
       buildOrderCacheTags({

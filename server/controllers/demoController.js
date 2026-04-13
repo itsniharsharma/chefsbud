@@ -1,4 +1,4 @@
-import { sendDemoBookingEmail } from '../services/emailService.js'
+import { enqueueDemoBookingEmailJob } from '../services/orderOutboxService.js'
 
 export async function bookDemo(req, res, next) {
   try {
@@ -12,7 +12,7 @@ export async function bookDemo(req, res, next) {
       note = '',
     } = req.body
 
-    await sendDemoBookingEmail({
+    await enqueueDemoBookingEmailJob({
       fullName,
       phoneNumber,
       restaurantName,
@@ -20,6 +20,7 @@ export async function bookDemo(req, res, next) {
       city,
       email,
       note,
+      eventKey: `EMAIL_DEMO_BOOKING:${String(email || '').trim().toLowerCase()}:${Date.now()}`,
     })
 
     return res.status(201).json({

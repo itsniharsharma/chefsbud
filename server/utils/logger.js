@@ -12,12 +12,44 @@ function shouldLog(level) {
   return (LOG_LEVELS[level] || LOG_LEVELS.info) >= minLevel
 }
 
+function normalizeValue(value, seen = new WeakSet()) {
+  if (value === null || value === undefined) return value
+
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    }
+  }
+
+  if (typeof value !== 'object') {
+    return value
+  }
+
+  if (seen.has(value)) {
+    return '[Circular]'
+  }
+
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeValue(item, seen))
+  }
+
+  const normalized = {}
+  for (const [key, entryValue] of Object.entries(value)) {
+    normalized[key] = normalizeValue(entryValue, seen)
+  }
+  return normalized
+}
+
 function write(level, message, meta = {}) {
   if (!shouldLog(level)) {
     return
   }
 
-  const normalizedMeta = { ...(meta || {}) }
+  const normalizedMeta = normalizeValue(meta || {})
   if (Object.prototype.hasOwnProperty.call(normalizedMeta, 'message')) {
     normalizedMeta.metaMessage = normalizedMeta.message
     delete normalizedMeta.message
@@ -30,7 +62,17 @@ function write(level, message, meta = {}) {
     ...normalizedMeta,
   }
 
-  const line = JSON.stringify(payload)
+  let line
+  try {
+    line = JSON.stringify(payload)
+  } catch {
+    line = JSON.stringify({
+      level,
+      time: new Date().toISOString(),
+      message,
+      metaSerializationError: true,
+    })
+  }
   if (level === 'error') {
     console.error(line)
     return

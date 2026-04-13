@@ -9,6 +9,7 @@ import { logger } from '../utils/logger.js'
  */
 
 const queryResultCache = new Map()
+const localRestaurantIndex = new Map()
 
 const CACHE_CONFIGS = {
   active_orders: { ttlSeconds: 15, maxEntries: 1000 },
@@ -25,29 +26,65 @@ function getCacheKey(queryType, { restaurantId, page = 1, limit = 50, filters = 
   return `query:${queryType}:${restaurantId}:p${page}:l${limit}:${filterKey || 'none'}`
 }
 
+function normalizeRestaurantId(value) {
+  return String(value || '').trim()
+}
+
+function redisRestaurantIndexKey(restaurantId) {
+  return `query:index:restaurant:${normalizeRestaurantId(restaurantId)}`
+}
+
+function deleteLocalCacheKey(key) {
+  const existing = queryResultCache.get(key)
+  if (!existing) return
+
+  const restaurantId = normalizeRestaurantId(existing.restaurantId)
+  if (restaurantId) {
+    const keySet = localRestaurantIndex.get(restaurantId)
+    if (keySet) {
+      keySet.delete(key)
+      if (keySet.size === 0) {
+        localRestaurantIndex.delete(restaurantId)
+      }
+    }
+  }
+
+  queryResultCache.delete(key)
+}
+
 function getLocalCached(key) {
   const entry = queryResultCache.get(key)
   if (!entry) return null
   if (entry.expiresAt <= Date.now()) {
-    queryResultCache.delete(key)
+    deleteLocalCacheKey(key)
     return null
   }
   return entry.data
 }
 
-function setLocalCached(key, data, ttlSeconds) {
+function setLocalCached(key, data, ttlSeconds, restaurantId) {
+  const normalizedRestaurantId = normalizeRestaurantId(restaurantId)
+
   if (queryResultCache.size > 5000) {
     // Evict oldest 1000 entries
     const keys = [...queryResultCache.keys()]
     for (let i = 0; i < 1000; i++) {
-      queryResultCache.delete(keys[i])
+      deleteLocalCacheKey(keys[i])
     }
   }
 
   queryResultCache.set(key, {
     data,
+    restaurantId: normalizedRestaurantId,
     expiresAt: Date.now() + ttlSeconds * 1000,
   })
+
+  if (normalizedRestaurantId) {
+    if (!localRestaurantIndex.has(normalizedRestaurantId)) {
+      localRestaurantIndex.set(normalizedRestaurantId, new Set())
+    }
+    localRestaurantIndex.get(normalizedRestaurantId).add(key)
+  }
 }
 
 async function getRedisCached(key) {
@@ -70,9 +107,20 @@ async function getRedisCached(key) {
   }
 }
 
-async function setRedisCached(key, data, ttlSeconds) {
+async function setRedisCached(key, data, ttlSeconds, restaurantId) {
   try {
-    await withRedis('query_cache_write', (redis) => redis.set(key, JSON.stringify(data), { ex: ttlSeconds }), null)
+    await withRedis('query_cache_write', async (redis) => {
+      await redis.set(key, JSON.stringify(data), { ex: ttlSeconds })
+
+      const normalizedRestaurantId = normalizeRestaurantId(restaurantId)
+      if (!normalizedRestaurantId) return
+
+      const indexKey = redisRestaurantIndexKey(normalizedRestaurantId)
+      await Promise.all([
+        redis.sadd(indexKey, key),
+        redis.expire(indexKey, Math.max(300, ttlSeconds * 10)),
+      ])
+    }, null)
     // eslint-disable-next-line no-unused-vars
   } catch (e) {
     // Silently fail
@@ -98,7 +146,7 @@ export async function getCachedQueryResult(queryType, params) {
   // Tier 2: Redis
   const redisResult = await getRedisCached(key)
   if (redisResult) {
-    setLocalCached(key, redisResult, cacheConfig.ttlSeconds)
+    setLocalCached(key, redisResult, cacheConfig.ttlSeconds, params?.restaurantId)
     return { data: redisResult, source: 'redis' }
   }
 
@@ -115,8 +163,8 @@ export async function setCachedQueryResult(queryType, params, data) {
 
   const key = getCacheKey(queryType, params)
 
-  setLocalCached(key, data, cacheConfig.ttlSeconds)
-  void setRedisCached(key, data, cacheConfig.ttlSeconds)
+  setLocalCached(key, data, cacheConfig.ttlSeconds, params?.restaurantId)
+  void setRedisCached(key, data, cacheConfig.ttlSeconds, params?.restaurantId)
 }
 
 /**
@@ -124,28 +172,31 @@ export async function setCachedQueryResult(queryType, params, data) {
  * Called when orders change (create, update status, etc)
  */
 export async function invalidateOrderQueries(restaurantId) {
-  if (!restaurantId) return
+  const normalizedRestaurantId = normalizeRestaurantId(restaurantId)
+  if (!normalizedRestaurantId) return
 
   // Invalidate local cache entries for this restaurant
-  const keys = [...queryResultCache.keys()]
-  for (const key of keys) {
-    if (key.includes(`${restaurantId}`)) {
-      queryResultCache.delete(key)
-    }
+  const localKeys = [...(localRestaurantIndex.get(normalizedRestaurantId) || [])]
+  for (const key of localKeys) {
+    deleteLocalCacheKey(key)
   }
 
   // Invalidate Redis cache
   try {
     await withRedis('query_cache_invalidate', async (redis) => {
-      const pattern = `query:*:${restaurantId}:*`
-      const keys = await redis.keys(pattern)
-      if (keys.length) {
-        await redis.del(...keys)
+      const indexKey = redisRestaurantIndexKey(normalizedRestaurantId)
+      const keys = await redis.smembers(indexKey)
+      const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : []
+
+      if (normalizedKeys.length) {
+        await redis.del(...normalizedKeys)
       }
+
+      await redis.del(indexKey)
     }, null)
   } catch (e) {
     logger.warn('query_cache_invalidation_failed', {
-      restaurantId: String(restaurantId || ''),
+      restaurantId: normalizedRestaurantId,
       message: e?.message || 'unknown_error',
     })
   }

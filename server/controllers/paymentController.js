@@ -9,7 +9,7 @@ import {
   verifySignature,
   verifyWebhookSignature,
 } from '../services/razorpayService.js'
-import { sendBillingStatusEmail } from '../services/emailService.js'
+import { enqueueBillingStatusEmailJob } from '../services/orderOutboxService.js'
 import {
   acquireWebhookLock,
   isWebhookProcessed,
@@ -400,17 +400,18 @@ export async function verifyHybridSubscription(req, res, next) {
 
     await user.save()
 
-    void sendBillingStatusEmail({
+    void enqueueBillingStatusEmailJob({
       to: user.email,
       name: user.name,
       status: user.billing.status,
       planType: user.billing.planType,
       graceEndsAt: user.billing.graceEndsAt,
       currentPeriodEnd: user.billing.currentPeriodEnd,
+      eventKey: `EMAIL_BILLING_STATUS:${String(user.email || '').trim().toLowerCase()}:${String(user.billing?.status || '')}:${Date.now()}`,
     }).catch((mailError) => {
-      logger.warn('subscription_activation_email_failed', {
+      logger.warn('subscription_activation_email_enqueue_failed', {
         userId: String(user._id),
-        message: mailError?.message || 'Subscription activation email failed',
+        message: mailError?.message || 'Subscription activation email enqueue failed',
       })
     })
 
@@ -523,18 +524,19 @@ export async function handleRazorpayWebhook(req, res, next) {
     )
 
     if (shouldNotifyStatus(user?.billing?.status)) {
-      void sendBillingStatusEmail({
+      void enqueueBillingStatusEmailJob({
         to: user.email,
         name: user.name,
         status: user.billing.status,
         planType: user.billing.planType,
         graceEndsAt: user.billing.graceEndsAt,
         currentPeriodEnd: user.billing.currentPeriodEnd,
+        eventKey: `EMAIL_BILLING_STATUS:${String(providerEventId || '')}`,
       }).catch((mailError) => {
-        logger.warn('billing_status_email_failed', {
+        logger.warn('billing_status_email_enqueue_failed', {
           userId: String(user._id),
           eventType,
-          message: mailError?.message || 'Billing status email failed',
+          message: mailError?.message || 'Billing status email enqueue failed',
         })
       })
     }

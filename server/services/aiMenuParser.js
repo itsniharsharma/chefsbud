@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 const MENU_SCHEMA_HINT = {
   categories: [
     {
@@ -202,6 +204,68 @@ function normalizeParsedMenu(parsed) {
   return { categories: normalized }
 }
 
+const AI_MENU_ANALYSIS_CACHE_TTL_MS = Math.max(10_000, Number(process.env.AI_MENU_ANALYSIS_CACHE_TTL_MS || 10 * 60 * 1000))
+const AI_MENU_ANALYSIS_CACHE_MAX_ENTRIES = Math.max(50, Number(process.env.AI_MENU_ANALYSIS_CACHE_MAX_ENTRIES || 500))
+const aiMenuAnalysisCache = new Map()
+const aiMenuAnalysisInflight = new Map()
+
+function cloneResult(value) {
+  if (!value || typeof value !== 'object') return value
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value)
+  }
+  return JSON.parse(JSON.stringify(value))
+}
+
+function cleanupAiMenuAnalysisCache(now = Date.now()) {
+  for (const [key, entry] of aiMenuAnalysisCache.entries()) {
+    if (Number(entry?.expiresAt || 0) <= now) {
+      aiMenuAnalysisCache.delete(key)
+    }
+  }
+}
+
+function buildMenuAnalysisFingerprint({ menuText, menuImages }) {
+  const hash = createHash('sha256')
+  hash.update(String(menuText || ''))
+
+  for (const image of menuImages) {
+    hash.update('|')
+    hash.update(String(image?.mimeType || ''))
+    hash.update(':')
+    hash.update(String(image?.dataBase64 || ''))
+  }
+
+  return hash.digest('hex')
+}
+
+function readAiMenuAnalysisCache(cacheKey) {
+  const cached = aiMenuAnalysisCache.get(cacheKey)
+  if (!cached) return null
+
+  if (Number(cached.expiresAt || 0) <= Date.now()) {
+    aiMenuAnalysisCache.delete(cacheKey)
+    return null
+  }
+
+  return cloneResult(cached.value)
+}
+
+function writeAiMenuAnalysisCache(cacheKey, value) {
+  cleanupAiMenuAnalysisCache()
+
+  while (aiMenuAnalysisCache.size >= AI_MENU_ANALYSIS_CACHE_MAX_ENTRIES) {
+    const oldestKey = aiMenuAnalysisCache.keys().next().value
+    if (!oldestKey) break
+    aiMenuAnalysisCache.delete(oldestKey)
+  }
+
+  aiMenuAnalysisCache.set(cacheKey, {
+    value: cloneResult(value),
+    expiresAt: Date.now() + AI_MENU_ANALYSIS_CACHE_TTL_MS,
+  })
+}
+
 function buildExtractionInstruction() {
   return [
     'Extract restaurant menu data into strict JSON only.',
@@ -396,6 +460,21 @@ export async function parseMenuWithAI({ menuText, menuImages = [] }) {
         .filter((image) => image.mimeType && image.dataBase64)
     : []
 
+  const requestFingerprint = buildMenuAnalysisFingerprint({
+    menuText: normalizedText,
+    menuImages: normalizedImages,
+  })
+
+  const cachedAnalysis = readAiMenuAnalysisCache(requestFingerprint)
+  if (cachedAnalysis) {
+    return cachedAnalysis
+  }
+
+  const inflightAnalysis = aiMenuAnalysisInflight.get(requestFingerprint)
+  if (inflightAnalysis) {
+    return cloneResult(await inflightAnalysis)
+  }
+
   if (!normalizedText && normalizedImages.length === 0) {
     const error = new Error('Provide menu text or menu images to analyze')
     error.status = 400
@@ -412,69 +491,82 @@ export async function parseMenuWithAI({ menuText, menuImages = [] }) {
     throw error
   }
 
-  let normalized = { categories: [] }
+  const executeAnalysis = async () => {
+    let normalized = { categories: [] }
 
-  try {
-    if (geminiApiKey) {
-      const configuredGeminiModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash'
-      let geminiModel = await resolveGeminiModel({
-        apiKey: geminiApiKey,
-        preferredModel: configuredGeminiModel,
-      })
-
-      try {
-        normalized = await parseWithGemini({
+    try {
+      if (geminiApiKey) {
+        const configuredGeminiModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash'
+        let geminiModel = await resolveGeminiModel({
           apiKey: geminiApiKey,
-          model: geminiModel,
-          menuText: normalizedText,
-          menuImages: normalizedImages,
+          preferredModel: configuredGeminiModel,
         })
-      } catch (geminiError) {
-        if (String(geminiError?.message || '').includes('NOT_FOUND')) {
-          cachedGeminiModel = ''
-          geminiModel = await resolveGeminiModel({
-            apiKey: geminiApiKey,
-            preferredModel: '',
-          })
 
+        try {
           normalized = await parseWithGemini({
             apiKey: geminiApiKey,
             model: geminiModel,
             menuText: normalizedText,
             menuImages: normalizedImages,
           })
-        } else {
-          throw geminiError
+        } catch (geminiError) {
+          if (String(geminiError?.message || '').includes('NOT_FOUND')) {
+            cachedGeminiModel = ''
+            geminiModel = await resolveGeminiModel({
+              apiKey: geminiApiKey,
+              preferredModel: '',
+            })
+
+            normalized = await parseWithGemini({
+              apiKey: geminiApiKey,
+              model: geminiModel,
+              menuText: normalizedText,
+              menuImages: normalizedImages,
+            })
+          } else {
+            throw geminiError
+          }
         }
+      } else if (openaiApiKey) {
+        const openaiModel = process.env.OPENAI_MODEL || 'gpt-4o-mini'
+        normalized = await parseWithOpenAI({
+          apiKey: openaiApiKey,
+          model: openaiModel,
+          menuText: normalizedText,
+          menuImages: normalizedImages,
+        })
       }
-    } else if (openaiApiKey) {
-      const openaiModel = process.env.OPENAI_MODEL || 'gpt-4o-mini'
-      normalized = await parseWithOpenAI({
-        apiKey: openaiApiKey,
-        model: openaiModel,
-        menuText: normalizedText,
-        menuImages: normalizedImages,
-      })
-    }
-  } catch (providerError) {
-    if (normalizedText) {
-      return parseMenuWithHeuristics(normalizedText)
+    } catch (providerError) {
+      if (normalizedText) {
+        return parseMenuWithHeuristics(normalizedText)
+      }
+
+      throw providerError
     }
 
-    throw providerError
+    if (!normalized.categories.length) {
+      if (normalizedText) {
+        return parseMenuWithHeuristics(normalizedText)
+      }
+
+      const error = new Error('AI could not extract valid menu categories/items from the uploaded content')
+      error.status = 422
+      throw error
+    }
+
+    return normalized
   }
 
-  if (!normalized.categories.length) {
-    if (normalizedText) {
-      return parseMenuWithHeuristics(normalizedText)
-    }
+  const analysisPromise = executeAnalysis()
+  aiMenuAnalysisInflight.set(requestFingerprint, analysisPromise)
 
-    const error = new Error('AI could not extract valid menu categories/items from the uploaded content')
-    error.status = 422
-    throw error
+  try {
+    const analyzed = await analysisPromise
+    writeAiMenuAnalysisCache(requestFingerprint, analyzed)
+    return cloneResult(analyzed)
+  } finally {
+    aiMenuAnalysisInflight.delete(requestFingerprint)
   }
-
-  return normalized
 }
 
 let cachedGeminiModel = ''

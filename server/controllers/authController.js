@@ -6,7 +6,7 @@ import User from '../models/User.js'
 import Restaurant from '../models/Restaurant.js'
 import PendingRegistration from '../models/PendingRegistration.js'
 import StaffAccount from '../models/StaffAccount.js'
-import { sendRegistrationOtpEmail } from '../services/emailService.js'
+import { enqueueRegistrationOtpEmailJob } from '../services/orderOutboxService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
 const sessionRestaurantProjection = '_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig'
@@ -185,10 +185,11 @@ export async function initiateRegistration(req, res, next) {
       { upsert: true, returnDocument: 'after', runValidators: true },
     )
 
-    await sendRegistrationOtpEmail({
+    await enqueueRegistrationOtpEmailJob({
       to: normalizedEmail,
       code: otpCode,
       expiryMinutes: OTP_EXPIRY_MINUTES,
+      eventKey: `EMAIL_REGISTRATION_OTP:${normalizedEmail}:${Date.now()}`,
     })
 
     return res.status(200).json({
@@ -251,10 +252,11 @@ export async function resendRegistrationCode(req, res, next) {
     pending.expiresAt = buildPendingExpiryDate()
     await pending.save()
 
-    await sendRegistrationOtpEmail({
+    await enqueueRegistrationOtpEmailJob({
       to: normalizedEmail,
       code: otpCode,
       expiryMinutes: OTP_EXPIRY_MINUTES,
+      eventKey: `EMAIL_REGISTRATION_OTP:${normalizedEmail}:${Date.now()}`,
     })
 
     return res.json({

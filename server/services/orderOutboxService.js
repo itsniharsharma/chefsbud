@@ -1,6 +1,7 @@
 import OutboxEvent from '../models/OutboxEvent.js'
 import { enqueueOrderInventoryReservationJob } from './orderInventoryQueueService.js'
 import { processOrderStatusTransition } from './orderStatusProcessingService.js'
+import { sendBillingStatusEmail, sendDemoBookingEmail, sendRegistrationOtpEmail } from './emailService.js'
 import { logger } from '../utils/logger.js'
 
 const OUTBOX_WORKER_ENABLED = String(process.env.ORDER_OUTBOX_WORKER_ENABLED || 'true') === 'true'
@@ -9,6 +10,10 @@ const OUTBOX_WORKER_BATCH_SIZE = Math.max(1, Math.min(50, Number(process.env.ORD
 const OUTBOX_RETRY_BASE_MS = Math.max(1000, Number(process.env.ORDER_OUTBOX_RETRY_BASE_MS || 3000))
 const OUTBOX_RETRY_MAX_MS = Math.max(5000, Number(process.env.ORDER_OUTBOX_RETRY_MAX_MS || 120000))
 const OUTBOX_LOCK_TIMEOUT_MS = Math.max(10_000, Number(process.env.ORDER_OUTBOX_LOCK_TIMEOUT_MS || 120_000))
+const ASYNC_EMAIL_MAX_RETRIES = Math.max(3, Math.min(Number(process.env.ASYNC_EMAIL_MAX_RETRIES || 10), 50))
+
+const ORDER_OUTBOX_TYPES = ['ORDER_CREATED', 'ORDER_STATUS_CHANGED']
+const EMAIL_OUTBOX_TYPES = ['EMAIL_REGISTRATION_OTP', 'EMAIL_DEMO_BOOKING', 'EMAIL_BILLING_STATUS']
 
 let outboxTimer = null
 let outboxSummaryTimer = null
@@ -36,11 +41,14 @@ export async function createOrderCreatedOutboxEvent({
     throw new Error('order_outbox_invalid_payload')
   }
 
-  await OutboxEvent.create(
-    [
-      {
+  const eventKey = `ORDER_CREATED:${normalizedOrderId}`
+
+  await OutboxEvent.findOneAndUpdate(
+    { type: 'ORDER_CREATED', eventKey },
+    {
+      $setOnInsert: {
         type: 'ORDER_CREATED',
-        eventKey: `ORDER_CREATED:${normalizedOrderId}`,
+        eventKey,
         payload: {
           orderId: normalizedOrderId,
           restaurantId: normalizedRestaurantId,
@@ -49,8 +57,13 @@ export async function createOrderCreatedOutboxEvent({
         },
         status: 'pending',
       },
-    ],
-    { session },
+    },
+    {
+      upsert: true,
+      returnDocument: 'after',
+      session,
+      setDefaultsOnInsert: true,
+    },
   )
 }
 
@@ -73,11 +86,14 @@ export async function createOrderStatusChangedOutboxEvent({
     throw new Error('order_status_outbox_invalid_payload')
   }
 
-  await OutboxEvent.create(
-    [
-      {
+  const eventKey = `ORDER_STATUS_CHANGED:${normalizedOrderId}:${normalizedFromStatus}:${normalizedToStatus}:${String(transitionToken || '0')}`
+
+  await OutboxEvent.findOneAndUpdate(
+    { type: 'ORDER_STATUS_CHANGED', eventKey },
+    {
+      $setOnInsert: {
         type: 'ORDER_STATUS_CHANGED',
-        eventKey: `ORDER_STATUS_CHANGED:${normalizedOrderId}:${normalizedFromStatus}:${normalizedToStatus}:${String(transitionToken || '0')}`,
+        eventKey,
         payload: {
           orderId: normalizedOrderId,
           restaurantId: normalizedRestaurantId,
@@ -89,9 +105,120 @@ export async function createOrderStatusChangedOutboxEvent({
         },
         status: 'pending',
       },
-    ],
-    { session },
+    },
+    {
+      upsert: true,
+      returnDocument: 'after',
+      session,
+      setDefaultsOnInsert: true,
+    },
   )
+}
+
+async function upsertOutboxEvent({ type, eventKey, payload, session = null, maxRetries = 8 }) {
+  await OutboxEvent.findOneAndUpdate(
+    { type, eventKey },
+    {
+      $setOnInsert: {
+        type,
+        eventKey,
+        payload,
+        status: 'pending',
+        maxRetries,
+      },
+    },
+    {
+      upsert: true,
+      returnDocument: 'after',
+      session,
+      setDefaultsOnInsert: true,
+    },
+  )
+}
+
+export async function enqueueRegistrationOtpEmailJob({ to, code, expiryMinutes, eventKey, session = null }) {
+  const normalizedTo = String(to || '').trim().toLowerCase()
+  const normalizedCode = String(code || '').trim()
+  const normalizedExpiry = Math.max(1, Number(expiryMinutes || 10))
+  const normalizedEventKey = String(eventKey || `EMAIL_REGISTRATION_OTP:${normalizedTo}:${Date.now()}`).trim()
+
+  if (!normalizedTo || !normalizedCode) {
+    throw new Error('email_registration_otp_invalid_payload')
+  }
+
+  await upsertOutboxEvent({
+    type: 'EMAIL_REGISTRATION_OTP',
+    eventKey: normalizedEventKey,
+    payload: {
+      to: normalizedTo,
+      code: normalizedCode,
+      expiryMinutes: normalizedExpiry,
+    },
+    session,
+    maxRetries: ASYNC_EMAIL_MAX_RETRIES,
+  })
+}
+
+export async function enqueueDemoBookingEmailJob({
+  fullName,
+  phoneNumber,
+  restaurantName,
+  state,
+  city,
+  email,
+  note,
+  eventKey,
+  session = null,
+}) {
+  const normalizedEventKey = String(eventKey || `EMAIL_DEMO_BOOKING:${String(email || '').trim().toLowerCase()}:${Date.now()}`).trim()
+
+  await upsertOutboxEvent({
+    type: 'EMAIL_DEMO_BOOKING',
+    eventKey: normalizedEventKey,
+    payload: {
+      fullName: String(fullName || '').trim(),
+      phoneNumber: String(phoneNumber || '').trim(),
+      restaurantName: String(restaurantName || '').trim(),
+      state: String(state || '').trim(),
+      city: String(city || '').trim(),
+      email: String(email || '').trim().toLowerCase(),
+      note: String(note || '').trim(),
+    },
+    session,
+    maxRetries: ASYNC_EMAIL_MAX_RETRIES,
+  })
+}
+
+export async function enqueueBillingStatusEmailJob({
+  to,
+  name,
+  status,
+  planType,
+  graceEndsAt,
+  currentPeriodEnd,
+  eventKey,
+  session = null,
+}) {
+  const normalizedTo = String(to || '').trim().toLowerCase()
+  const normalizedEventKey = String(eventKey || `EMAIL_BILLING_STATUS:${normalizedTo}:${String(status || '')}:${Date.now()}`).trim()
+  if (!normalizedTo) {
+    throw new Error('email_billing_status_invalid_payload')
+  }
+
+  await upsertOutboxEvent({
+    type: 'EMAIL_BILLING_STATUS',
+    eventKey: normalizedEventKey,
+    payload: {
+      to: normalizedTo,
+      name: String(name || '').trim(),
+      status: String(status || '').trim(),
+      planType: String(planType || '').trim(),
+      graceEndsAt: graceEndsAt || null,
+      currentPeriodEnd: currentPeriodEnd || null,
+    },
+    session,
+    maxRetries: ASYNC_EMAIL_MAX_RETRIES,
+  })
 }
 
 async function claimNextEvent(workerId) {
@@ -100,7 +227,7 @@ async function claimNextEvent(workerId) {
 
   return OutboxEvent.findOneAndUpdate(
     {
-      type: { $in: ['ORDER_CREATED', 'ORDER_STATUS_CHANGED'] },
+      type: { $in: [...ORDER_OUTBOX_TYPES, ...EMAIL_OUTBOX_TYPES] },
       $or: [
         {
           status: { $in: ['pending', 'retry'] },
@@ -145,6 +272,31 @@ async function processEvent(event, workerId) {
       toStatus: payload.toStatus,
       inventoryCycle: payload.inventoryCycle,
       completedAt: payload.completedAt,
+    })
+  } else if (event?.type === 'EMAIL_REGISTRATION_OTP') {
+    await sendRegistrationOtpEmail({
+      to: payload.to,
+      code: payload.code,
+      expiryMinutes: payload.expiryMinutes,
+    })
+  } else if (event?.type === 'EMAIL_DEMO_BOOKING') {
+    await sendDemoBookingEmail({
+      fullName: payload.fullName,
+      phoneNumber: payload.phoneNumber,
+      restaurantName: payload.restaurantName,
+      state: payload.state,
+      city: payload.city,
+      email: payload.email,
+      note: payload.note,
+    })
+  } else if (event?.type === 'EMAIL_BILLING_STATUS') {
+    await sendBillingStatusEmail({
+      to: payload.to,
+      name: payload.name,
+      status: payload.status,
+      planType: payload.planType,
+      graceEndsAt: payload.graceEndsAt,
+      currentPeriodEnd: payload.currentPeriodEnd,
     })
   }
 
@@ -255,7 +407,7 @@ export function startOrderOutboxWorker() {
   outboxSummaryTimer = setInterval(async () => {
     try {
       const failedCount = await OutboxEvent.countDocuments({
-        type: { $in: ['ORDER_CREATED', 'ORDER_STATUS_CHANGED'] },
+        type: { $in: [...ORDER_OUTBOX_TYPES, ...EMAIL_OUTBOX_TYPES] },
         status: 'failed',
       })
       logger.info('order_outbox_failed_summary', { failedCount })
