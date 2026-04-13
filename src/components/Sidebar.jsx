@@ -1,8 +1,9 @@
 import { AnimatePresence } from 'framer-motion'
 import { ArrowRight, ChartColumnBig, ChevronDown, Clock3, Layers3, LayoutDashboard, Settings2, ShoppingCart, Sparkles, Table2, UtensilsCrossed, Warehouse } from 'lucide-react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useMemo, useState } from 'react'
 import { useAuth } from '../hooks/useAuth'
+import { useMenuQuery } from '../hooks/useDashboardQueries'
 import { preloadRouteByPath } from '../utils/routePreload'
 
 const logisticsCards = [
@@ -73,11 +74,57 @@ const logisticsCards = [
 ]
 
 export default function Sidebar({ isOpen, onClose }) {
-  const { logout, user } = useAuth()
+  const { logout, user, restaurant } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [logisticsOpen, setLogisticsOpen] = useState(false)
   const role = user?.role || 'owner'
+  const activeCategoryId = useMemo(() => {
+    const search = new URLSearchParams(location.search || '')
+    return String(search.get('category') || '').trim()
+  }, [location.search])
+  const { data: menuData } = useMenuQuery({
+    restaurantId: restaurant?._id,
+  })
+  const menuCategories = useMemo(() => {
+    const categories = Array.isArray(menuData?.categories) ? menuData.categories : []
+    const categoryCountMap = new Map()
+
+    const rawCategoryCounts = menuData?.indexes?.categoryCounts
+    if (rawCategoryCounts && typeof rawCategoryCounts === 'object') {
+      for (const [categoryId, count] of Object.entries(rawCategoryCounts)) {
+        categoryCountMap.set(String(categoryId || ''), Number(count || 0))
+      }
+    }
+
+    const rawCategoryItems = menuData?.indexes?.categoryItems
+    if (rawCategoryItems && typeof rawCategoryItems === 'object') {
+      for (const [categoryId, items] of Object.entries(rawCategoryItems)) {
+        if (!categoryCountMap.has(String(categoryId || ''))) {
+          categoryCountMap.set(String(categoryId || ''), Array.isArray(items) ? items.length : 0)
+        }
+      }
+    }
+
+    return categories
+      .filter((category) => Boolean(category?.name && category?._id))
+      .map((category) => ({
+        ...category,
+        itemCount: Number(categoryCountMap.get(String(category._id || '')) || 0),
+      }))
+  }, [menuData])
   const visibleLinks = useMemo(() => logisticsCards.filter((link) => link.roles.includes(role)), [role])
+
+  const onSelectMenuCategory = (categoryId) => {
+    const normalizedCategoryId = String(categoryId || '').trim()
+    if (!normalizedCategoryId) return
+
+    const nextParams = new URLSearchParams(location.search || '')
+    nextParams.set('category', normalizedCategoryId)
+
+    navigate(`/dashboard/orders?${nextParams.toString()}`)
+    onClose?.()
+  }
 
   const onLogout = () => {
     logout()
@@ -175,8 +222,33 @@ export default function Sidebar({ isOpen, onClose }) {
               </div>
             </div>
           ) : (
-            <div className="mb-4 rounded-2xl border border-dashed border-red-100 bg-white/70 px-4 py-3 text-xs text-slate-500">
-              Logistics is collapsed. Open it to access the workspace cards.
+            <div className="mb-4 rounded-2xl border border-red-100 bg-white/90 p-3 shadow-[0_8px_20px_rgba(15,23,42,0.06)]">
+              <p className="mb-2 text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">Menu Categories</p>
+              <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+                {menuCategories.length ? (
+                  menuCategories.map((category) => (
+                    <button
+                      key={category._id}
+                      type="button"
+                      onClick={() => onSelectMenuCategory(category._id)}
+                      className={`w-full rounded-xl px-3 py-2 text-left text-xs font-semibold transition ${
+                        activeCategoryId === String(category._id)
+                          ? 'bg-gradient-to-r from-[var(--primary)] to-[var(--primary-dark)] text-white shadow-[0_10px_20px_rgba(229,9,20,0.22)]'
+                          : 'border border-slate-200 bg-white text-slate-700 hover:border-red-200 hover:bg-red-50'
+                      }`}
+                      >
+                        <span className="flex items-center justify-between gap-3">
+                          <span className="truncate">{category.name}</span>
+                          <span className="rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                            {Number(category.itemCount || 0)}
+                          </span>
+                        </span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">No menu categories found for this restaurant.</p>
+                )}
+              </div>
             </div>
           )}
         </AnimatePresence>

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import BillPrintModal from '../components/BillPrintModal'
 import OrderCard from '../components/OrderCard'
 import Button from '../components/Button'
@@ -16,6 +17,7 @@ const statusFilters = ['All', 'Preparing', 'Served']
 
 export default function OrdersPage() {
   const { restaurant } = useAuth()
+  const [searchParams] = useSearchParams()
   const [statusFilter, setStatusFilter] = useState('All')
   const [scope, setScope] = useState('All')
   const [floorSearch, setFloorSearch] = useState('')
@@ -44,6 +46,7 @@ export default function OrdersPage() {
   const { data: tables = [] } = useTablesQuery({ restaurantId: restaurant?._id })
   const { data: menu } = useMenuQuery({ restaurantId: restaurant?._id })
   const boardQueryKey = ['dashboard', 'orders-board', restaurant?._id]
+  const sidebarCategoryId = String(searchParams.get('category') || '').trim()
 
   const restorePreviousBoards = (previousBoards = []) => {
     for (const [key, value] of previousBoards) {
@@ -474,41 +477,39 @@ export default function OrdersPage() {
         </Button>
       </form>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {/* Left Column: Orders Board */}
-        <section className="flex h-[calc(100vh-150px)] min-h-[780px] flex-col space-y-3 rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-          <h2 className="text-base font-semibold text-slate-800">
-            {appliedFloor ? `Active Orders - Floor ${appliedFloor}` : 'Active Orders'}
-          </h2>
-          <div className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto pr-1">
-            {activeOrders.map((order) => (
-              <OrderCard
-                key={order._id || order.id}
-                order={order}
-                onStatusChange={onStatusChange}
-                onShiftTable={onOpenShiftTable}
-                shiftingTableKey={shiftingTableKey}
-                onPrintBill={printBillForOrder}
-                onPrintKot={printKotForOrder}
-                printingBillOrderId={printingBillOrderId}
-                printingKotOrderId={printingKotOrderId}
-                statusActionDisabled={statusActionBusy || updateStatusMutation.isPending}
-              />
-            ))}
-            {!activeOrders.length && <p className="text-sm text-slate-500">No active orders in this view.</p>}
-          </div>
-        </section>
-
-        {/* Right Column: Manual Order Creation */}
-        <div className="h-[calc(100vh-150px)] min-h-[780px]">
-          <ManualOrderPanel
-            restaurantId={restaurant?._id}
-            restaurantSlug={restaurant?.slug}
-            menu={menu}
-            tables={tables}
-            onOrderCreated={onManualOrderCreated}
-          />
-        </div>
+      <div className="h-[calc(100vh-150px)] min-h-[780px]">
+        <ManualOrderPanel
+          restaurantId={restaurant?._id}
+          restaurantSlug={restaurant?.slug}
+          menu={menu}
+          tables={tables}
+          onOrderCreated={onManualOrderCreated}
+          externalActiveCategory={sidebarCategoryId}
+          qrOrdersPanel={
+            activeOrders.length ? (
+              <div className="grid grid-cols-1 gap-3">
+                {activeOrders.map((order) => (
+                  <OrderCard
+                    key={order._id || order.id}
+                    order={order}
+                    onStatusChange={onStatusChange}
+                    onShiftTable={onOpenShiftTable}
+                    shiftingTableKey={shiftingTableKey}
+                    onPrintBill={printBillForOrder}
+                    onPrintKot={printKotForOrder}
+                    printingBillOrderId={printingBillOrderId}
+                    printingKotOrderId={printingKotOrderId}
+                    statusActionDisabled={statusActionBusy || updateStatusMutation.isPending}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {appliedFloor ? `No active QR orders for floor ${appliedFloor}.` : 'No active QR orders in this view.'}
+              </p>
+            )
+          }
+        />
       </div>
     </div>
   )

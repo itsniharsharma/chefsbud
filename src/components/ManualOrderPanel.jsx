@@ -73,7 +73,15 @@ const generateIdempotencyKey = () => {
   return `manual-order-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`
 }
 
-const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaurantSlug = '', menu = {}, tables = [], onOrderCreated }) {
+const ManualOrderPanel = memo(function ManualOrderPanel({
+  restaurantId,
+  restaurantSlug = '',
+  menu = {},
+  tables = [],
+  onOrderCreated,
+  externalActiveCategory = '',
+  qrOrdersPanel = null,
+}) {
   const [selectedFloor, setSelectedFloor] = useState('1')
   const [selectedTable, setSelectedTable] = useState('')
   const [cart, setCart] = useState({}) // { itemId: { id, name, price, quantity, portionSize } }
@@ -138,6 +146,16 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
     if (activeCategory || !menuCategories.length) return
     setActiveCategory(menuCategories[0]?._id || '')
   }, [menuCategories.length, activeCategory, menuCategories])
+
+  useEffect(() => {
+    const nextCategory = String(externalActiveCategory || '').trim()
+    if (!nextCategory) return
+
+    const existsInMenu = menuCategories.some((category) => String(category?._id || '') === nextCategory)
+    if (!existsInMenu) return
+
+    setActiveCategory(nextCategory)
+  }, [externalActiveCategory, menuCategories])
 
   // Get items for active category
   const categoryItems = useMemo(() => {
@@ -337,215 +355,212 @@ const ManualOrderPanel = memo(function ManualOrderPanel({ restaurantId, restaura
   }, [tables])
 
   return (
-    <div className="flex h-full flex-col overflow-y-scroll rounded-2xl border border-red-200 bg-gradient-to-b from-red-50 to-white p-4 shadow-sm">
-      {/* Header */}
-      <div className="mb-3 border-b border-red-200 pb-2">
-        <h3 className="text-base font-semibold text-slate-900">Manual Order Creation</h3>
-        <p className="mt-1 text-xs text-slate-600">Select items, choose table, and create</p>
-      </div>
+    <div className="grid h-full min-h-0 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[1.08fr_0.92fr]">
+      <section className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-red-200 bg-gradient-to-b from-red-50 to-white p-4 shadow-sm">
+        <div className="mb-3 border-b border-red-200 pb-2">
+          <h3 className="text-base font-semibold text-slate-900">Manual Order Creation</h3>
+          <p className="mt-1 text-xs text-slate-600">Choose a category and add sub-items to the live bill.</p>
+        </div>
 
-      {/* Error */}
-      {menuError && (
-        <div className="mb-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{menuError}</div>
-      )}
+        {menuError ? <div className="mb-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{menuError}</div> : null}
 
-      {/* Floor & Table Selection */}
-      <div className="mb-3 space-y-2 border-b border-red-200 pb-2">
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1 text-xs text-slate-700">
-            <span className="font-medium">Floor</span>
-            <select
-              className="input h-10 text-sm leading-5"
-              value={selectedFloor}
-              onChange={(e) => {
-                setSelectedFloor(e.target.value)
-                setSelectedTable('')
-              }}
-            >
-              {uniqueFloors.map((floor) => (
-                <option key={floor} value={floor}>
-                  Floor {floor}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="mb-3 space-y-2 border-b border-red-200 pb-2">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex flex-col gap-1 text-xs text-slate-700">
+              <span className="font-medium">Floor</span>
+              <select
+                className="input h-10 text-sm leading-5"
+                value={selectedFloor}
+                onChange={(e) => {
+                  setSelectedFloor(e.target.value)
+                  setSelectedTable('')
+                }}
+              >
+                {uniqueFloors.map((floor) => (
+                  <option key={floor} value={floor}>
+                    Floor {floor}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <label className="flex flex-col gap-1 text-xs text-slate-700">
-            <span className="font-medium">Table</span>
-            <select
-              className="input h-10 text-sm leading-5"
-              value={selectedTable}
-              onChange={(e) => setSelectedTable(e.target.value)}
-            >
-              <option value="">Select table</option>
-              {availableTables.map((table) => (
-                <option key={table._id} value={table.tableNumber}>
-                  Table {table.tableNumber}
-                </option>
-              ))}
-            </select>
+            <label className="flex flex-col gap-1 text-xs text-slate-700">
+              <span className="font-medium">Table</span>
+              <select
+                className="input h-10 text-sm leading-5"
+                value={selectedTable}
+                onChange={(e) => setSelectedTable(e.target.value)}
+              >
+                <option value="">Select table</option>
+                {availableTables.map((table) => (
+                  <option key={table._id} value={table.tableNumber}>
+                    Table {table.tableNumber}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-700">Search item</span>
+            <input
+              className="input h-10 text-sm"
+              type="text"
+              value={itemSearchTerm}
+              onChange={(event) => setItemSearchTerm(event.target.value)}
+              placeholder="Type item name..."
+            />
           </label>
         </div>
 
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-slate-700">Search item</span>
-          <input
-            className="input h-10 text-sm"
-            type="text"
-            value={itemSearchTerm}
-            onChange={(event) => setItemSearchTerm(event.target.value)}
-            placeholder="Type item name..."
-          />
-        </label>
-      </div>
-
-      {/* Content */}
-      {!menu?.categories?.length ? (
-        <div className="py-4 text-center text-xs text-slate-500">No menu available</div>
-      ) : (
-        <>
-          {/* Categories Tabs */}
-          {!hasActiveSearch ? (
-            <div className="mb-2 h-[172px] min-h-[172px] shrink-0 overflow-auto pb-3 pr-1">
-              <div className="grid w-max grid-flow-col grid-rows-3 auto-cols-max auto-rows-[2.25rem] content-start gap-2">
-                {menuCategories.map((category) => (
-                  <button
-                    key={category._id}
-                    onClick={() => setActiveCategory(category._id)}
-                    className={`h-9 whitespace-nowrap rounded-full px-3 text-xs font-medium leading-none transition ${
-                      activeCategory === category._id
-                        ? 'bg-red-600 text-white'
-                        : 'border border-slate-300 text-slate-700 hover:border-red-400'
-                    }`}
-                  >
-                    {category.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="mb-1 text-xs text-slate-600">Search results ({visibleItems.length})</p>
-          )}
-
-          {/* Items Grid */}
-          <div className="mb-3 min-h-[420px] flex-1 space-y-2 overflow-y-auto pr-1">
-            {visibleItems.length > 0 ? (
-              visibleItems.map((item) => (
-                <div
-                  key={item._id}
-                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-2 text-xs hover:border-red-400"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="truncate font-medium text-slate-900">{item.name}</p>
-                    <p className="text-slate-600">{formatCurrencyINR(item.price)}</p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${item.isVeg === false ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
-                        {getDietLabel(item.isVeg)}
-                      </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
-                        {formatPortionSizeLabel(item.portionSize)}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleSelectItem(item)}
-                    disabled={createOrderMutation.isPending}
-                    className="ml-2 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-                  >
-                    +
-                  </button>
-                </div>
-              ))
-            ) : (
-              <p className="py-4 text-center text-xs text-slate-500">
-                {hasActiveSearch ? 'No items match your search' : 'No items in category'}
+        {!menu?.categories?.length ? (
+          <div className="py-4 text-center text-xs text-slate-500">No menu available</div>
+        ) : (
+          <>
+            <div className="mb-2 flex items-center justify-between gap-3 border-b border-red-100 pb-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--primary)]">
+                {hasActiveSearch ? `Search results (${visibleItems.length})` : menuCategories.find((category) => String(category?._id || '') === String(activeCategory || ''))?.name || 'Selected Category'}
               </p>
-            )}
-          </div>
+              {!hasActiveSearch && activeCategory ? (
+                <p className="text-[11px] text-slate-500">Tap cards below to add items</p>
+              ) : null}
+            </div>
 
-          {/* Cart Summary */}
-          {Object.keys(cart).length > 0 && (
-            <>
-              <div className="mb-2 space-y-2 border-t border-red-200 pt-2">
-                <div className="max-h-24 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2">
-                  {Object.values(cart).map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between rounded bg-white p-1.5 text-xs"
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1 pt-1">
+              {visibleItems.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                  {visibleItems.map((item) => (
+                    <button
+                      key={item._id}
+                      type="button"
+                      onClick={() => handleSelectItem(item)}
+                      disabled={createOrderMutation.isPending}
+                      className="group flex min-h-[8.75rem] flex-col justify-between rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-[0_8px_18px_rgba(15,23,42,0.05)] transition hover:-translate-y-0.5 hover:border-red-300 hover:shadow-[0_14px_26px_rgba(15,23,42,0.08)] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      <span className="flex-1 truncate text-slate-900">{item.name}</span>
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleUpdateItemQuantity(item.id, item.quantity - 1)}
-                          className="h-5 w-5 rounded border border-slate-300 text-center leading-4 hover:bg-red-50"
-                        >
-                          −
-                        </button>
-                        <span className="w-5 text-center font-medium">{item.quantity}</span>
-                        <button
-                          onClick={() => handleUpdateItemQuantity(item.id, item.quantity + 1)}
-                          className="h-5 w-5 rounded border border-slate-300 text-center leading-4 hover:bg-green-50"
-                        >
-                          +
-                        </button>
-                        <button
-                          onClick={() => handleRemoveItem(item.id)}
-                          className="ml-1 text-red-600 hover:text-red-700"
-                        >
-                          ✕
-                        </button>
+                      <div>
+                        <p className="line-clamp-2 text-sm font-semibold text-slate-900">{item.name}</p>
+                        <p className="mt-1 text-base font-bold text-[var(--primary)]">{formatCurrencyINR(item.price)}</p>
                       </div>
-                    </div>
+
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${item.isVeg === false ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                          {getDietLabel(item.isVeg)}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
+                          {formatPortionSizeLabel(item.portionSize)}
+                        </span>
+                        <span className="rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--primary)] opacity-0 transition group-hover:opacity-100">
+                          Click to add
+                        </span>
+                      </div>
+                    </button>
                   ))}
                 </div>
+              ) : (
+                <p className="py-4 text-center text-xs text-slate-500">
+                  {hasActiveSearch ? 'No items match your search' : 'No items in category'}
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </section>
 
-                <div className="rounded-lg bg-red-100 p-2">
-                  <div className="flex justify-between text-xs">
-                    <span className="font-medium text-slate-700">Items:</span>
-                    <span className="font-bold text-slate-900">{cartStats.count}</span>
-                  </div>
-                  <div className="mt-1 flex justify-between border-t border-red-200 pt-1">
-                    <span className="font-bold text-slate-900">Total:</span>
-                    <span className="font-bold text-red-700">{formatCurrencyINR(cartStats.total)}</span>
+      <section className="flex min-h-0 flex-col gap-3 overflow-hidden">
+        <div className="flex min-h-0 flex-[0_0_auto] flex-col overflow-hidden rounded-2xl border border-red-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 border-b border-red-100 pb-2">
+            <h3 className="text-base font-semibold text-slate-900">Billing Section</h3>
+            <p className="mt-1 text-xs text-slate-600">Manual add items, notes, and create order.</p>
+          </div>
+
+          {Object.keys(cart).length ? (
+            <div className="mb-2 max-h-28 space-y-1 overflow-y-auto rounded-lg bg-slate-50 p-2">
+              {Object.values(cart).map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between rounded bg-white p-1.5 text-xs"
+                >
+                  <span className="flex-1 truncate text-slate-900">{item.name}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => handleUpdateItemQuantity(item.id, item.quantity - 1)}
+                      className="h-5 w-5 rounded border border-slate-300 text-center leading-4 hover:bg-red-50"
+                    >
+                      −
+                    </button>
+                    <span className="w-5 text-center font-medium">{item.quantity}</span>
+                    <button
+                      onClick={() => handleUpdateItemQuantity(item.id, item.quantity + 1)}
+                      className="h-5 w-5 rounded border border-slate-300 text-center leading-4 hover:bg-green-50"
+                    >
+                      +
+                    </button>
+                    <button
+                      onClick={() => handleRemoveItem(item.id)}
+                      className="ml-1 text-red-600 hover:text-red-700"
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
-              </div>
-
-              <label className="mb-2 block">
-                <span className="mb-1 block text-xs font-medium text-slate-800">Additional Note (optional)</span>
-                <textarea
-                  className="input min-h-[68px] bg-white/95 text-sm"
-                  value={customerNote}
-                  onChange={(event) => setCustomerNote(event.target.value.slice(0, 500))}
-                  placeholder="Example: less spicy, no onion, serve together"
-                />
-                <p className="mt-1 text-xs text-slate-500">{customerNote.length}/500</p>
-              </label>
-
-              {/* Actions */}
-              <div className="flex gap-2">
-                <Button
-                  className="flex-1"
-                  size="sm"
-                  variant="secondary"
-                  onClick={handleClearCart}
-                  disabled={createOrderMutation.isPending}
-                >
-                  Clear
-                </Button>
-                <Button
-                  className="flex-1"
-                  size="sm"
-                  onClick={handleCreateOrder}
-                  disabled={!selectedTable || createOrderMutation.isPending}
-                >
-                  {createOrderMutation.isPending ? 'Creating...' : 'Create Order'}
-                </Button>
-              </div>
-            </>
+              ))}
+            </div>
+          ) : (
+            <p className="mb-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              Add items from the left panel to start billing.
+            </p>
           )}
-        </>
-      )}
+
+          <div className="mb-2 rounded-lg bg-red-100 p-2">
+            <div className="flex justify-between text-xs">
+              <span className="font-medium text-slate-700">Items:</span>
+              <span className="font-bold text-slate-900">{cartStats.count}</span>
+            </div>
+            <div className="mt-1 flex justify-between border-t border-red-200 pt-1">
+              <span className="font-bold text-slate-900">Total:</span>
+              <span className="font-bold text-red-700">{formatCurrencyINR(cartStats.total)}</span>
+            </div>
+          </div>
+
+          <label className="mb-2 block">
+            <span className="mb-1 block text-xs font-medium text-slate-800">Additional Note (optional)</span>
+            <textarea
+              className="input min-h-[68px] bg-white/95 text-sm"
+              value={customerNote}
+              onChange={(event) => setCustomerNote(event.target.value.slice(0, 500))}
+              placeholder="Example: less spicy, no onion, serve together"
+            />
+            <p className="mt-1 text-xs text-slate-500">{customerNote.length}/500</p>
+          </label>
+
+          <div className="flex gap-2">
+            <Button
+              className="flex-1"
+              size="sm"
+              variant="secondary"
+              onClick={handleClearCart}
+              disabled={createOrderMutation.isPending}
+            >
+              Clear
+            </Button>
+            <Button
+              className="flex-1"
+              size="sm"
+              onClick={handleCreateOrder}
+              disabled={!selectedTable || createOrderMutation.isPending}
+            >
+              {createOrderMutation.isPending ? 'Creating...' : 'Create Order'}
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
+          <h3 className="mb-2 text-base font-semibold text-slate-800">QR Orders</h3>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {qrOrdersPanel || <p className="text-sm text-slate-500">No active QR orders in this view.</p>}
+          </div>
+        </div>
+      </section>
     </div>
   )
 })
