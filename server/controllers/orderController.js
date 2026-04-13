@@ -10,6 +10,7 @@ import { sendKotReprintAuditEmail } from '../services/emailService.js'
 import {
   isOrderInventoryAsyncEnabled,
 } from '../services/orderInventoryQueueService.js'
+import { enqueueOrderJob } from '../services/orderQueueService.js'
 import { createOrderCreatedOutboxEvent } from '../services/orderOutboxService.js'
 import { createOrderStatusChangedOutboxEvent } from '../services/orderOutboxService.js'
 import { getOrderInventoryBehavior } from '../config/inventoryRuntime.js'
@@ -27,6 +28,7 @@ const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUB
 const CUSTOMER_FEEDBACK_WINDOW_MINUTES = Math.max(5, Math.min(Number(process.env.CUSTOMER_FEEDBACK_WINDOW_MINUTES || 60), 24 * 60))
 const ORDER_STATUS_ALLOWED = ['Preparing', 'Served', 'Completed']
 const METRICS_ASYNC_ENABLED = String(process.env.METRICS_ASYNC_ENABLED || 'true') === 'true'
+const USE_LEGACY_WORKERS = String(process.env.USE_LEGACY_WORKERS || 'false') === 'true'
 const ORDER_SEQUENCE_TIMEZONE = String(process.env.ORDER_SEQUENCE_TIMEZONE || 'Asia/Kolkata').trim() || 'Asia/Kolkata'
 const ORDER_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   timeZone: ORDER_SEQUENCE_TIMEZONE,
@@ -405,7 +407,7 @@ export async function updateOrderStatus(req, res, next) {
         }
 
         const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus
-        if (shouldQueueStatusWork) {
+        if (shouldQueueStatusWork && USE_LEGACY_WORKERS) {
           await createOrderStatusChangedOutboxEvent({
             orderId: previousOrder._id,
             restaurantId: restaurant._id,
@@ -416,8 +418,8 @@ export async function updateOrderStatus(req, res, next) {
             completedAt: update.completedAt,
             session,
           })
-          eventQueued = true
         }
+        eventQueued = shouldQueueStatusWork
       })
     } finally {
       session.endSession()
@@ -427,6 +429,38 @@ export async function updateOrderStatus(req, res, next) {
 
     if (eventQueued) {
       try {
+        if (!USE_LEGACY_WORKERS) {
+          const queued = await enqueueOrderJob({
+            jobType: 'order_status_changed',
+            jobData: {
+              orderId: previousOrder._id,
+              restaurantId: restaurant._id,
+              fromStatus: previousOrder.orderStatus,
+              toStatus: orderStatus,
+              inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
+              completedAt: update.completedAt,
+            },
+          })
+
+          if (!queued) {
+            logger.error('order_status_redis_queue_enqueue_failed', {
+              orderId: String(previousOrder?._id || ''),
+              restaurantId: String(restaurant?._id || ''),
+            })
+
+            // Fallback persistence for recovery (processed only if legacy workers are re-enabled).
+            await createOrderStatusChangedOutboxEvent({
+              orderId: previousOrder._id,
+              restaurantId: restaurant._id,
+              fromStatus: previousOrder.orderStatus,
+              toStatus: orderStatus,
+              transitionToken: previousOrder.updatedAt?.getTime?.() || previousOrder.updatedAt || '',
+              inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
+              completedAt: update.completedAt,
+            })
+          }
+        }
+
         // Keep board/status views coherent immediately after status changes.
         invalidateCacheByTags(
           buildOrderCacheTags({
@@ -773,13 +807,15 @@ export async function createOrder(req, res, next) {
 
             order = createdOrders[0]
 
-            await createOrderCreatedOutboxEvent({
-              orderId: order._id,
-              restaurantId: draft.restaurant._id,
-              policy: orderCreationInventoryBehavior.consumptionPolicy,
-              idempotencyPrefix: 'order',
-              session: orderCreateSession,
-            })
+            if (USE_LEGACY_WORKERS) {
+              await createOrderCreatedOutboxEvent({
+                orderId: order._id,
+                restaurantId: draft.restaurant._id,
+                policy: orderCreationInventoryBehavior.consumptionPolicy,
+                idempotencyPrefix: 'order',
+                session: orderCreateSession,
+              })
+            }
           })
           transactionDurationMs = Date.now() - transactionStartedAt
           if (traceEnabled) console.timeEnd('transaction')
@@ -847,7 +883,33 @@ export async function createOrder(req, res, next) {
     const inventoryStartedAt = Date.now()
     let inventoryMode = 'skipped'
     if (orderCreationInventoryBehavior.reserveOnCreate) {
-      inventoryMode = asyncInventoryEnabled ? 'async-outbox' : 'async-forced'
+      inventoryMode = asyncInventoryEnabled ? (USE_LEGACY_WORKERS ? 'async-outbox' : 'async-redis') : 'async-forced'
+      if (!USE_LEGACY_WORKERS && asyncInventoryEnabled && order?._id) {
+        const queuedReservation = await enqueueOrderJob({
+          jobType: 'reserve_order_inventory',
+          jobData: {
+            orderId: order._id,
+            restaurantId: draft.restaurant._id,
+            policy: orderCreationInventoryBehavior.consumptionPolicy,
+            idempotencyPrefix: 'order',
+          },
+        })
+
+        if (!queuedReservation) {
+          logger.error('order_create_redis_reservation_enqueue_failed', {
+            orderId: String(order?._id || ''),
+            restaurantId: String(draft?.restaurant?._id || ''),
+          })
+
+          // Fallback persistence for recovery (processed only if legacy workers are re-enabled).
+          await createOrderCreatedOutboxEvent({
+            orderId: order._id,
+            restaurantId: draft.restaurant._id,
+            policy: orderCreationInventoryBehavior.consumptionPolicy,
+            idempotencyPrefix: 'order',
+          })
+        }
+      }
     }
     const inventoryDurationMs = Date.now() - inventoryStartedAt
     if (traceEnabled) console.timeEnd('inventory')

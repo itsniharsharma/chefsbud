@@ -15,6 +15,7 @@ import { logger } from './utils/logger.js'
 const PORT = process.env.PORT || 5000
 const PROCESS_ROLE = String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase()
 const SHUTDOWN_TIMEOUT_MS = Math.max(1_000, Number(process.env.SHUTDOWN_TIMEOUT_MS || 15_000))
+const USE_LEGACY_WORKERS = String(process.env.USE_LEGACY_WORKERS || 'false') === 'true'
 
 let httpServer = null
 let shuttingDown = false
@@ -115,10 +116,15 @@ async function start() {
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
     initializeScheduler()
-    startOrderOutboxWorker()
-    startOrderInventoryWorker()
-    startOrderQueueWorker()
-    logger.info('Jobs process started', { processRole: PROCESS_ROLE })
+    if (USE_LEGACY_WORKERS) {
+      startOrderOutboxWorker()
+      startOrderInventoryWorker()
+      logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
+    } else {
+      startOrderQueueWorker()
+      logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false })
+    }
+    logger.info('Jobs process started', { processRole: PROCESS_ROLE, useLegacyWorkers: USE_LEGACY_WORKERS })
     return
   }
 
@@ -136,9 +142,14 @@ async function start() {
     initializeScheduler()
   }
 
-  startOrderOutboxWorker()
-  startOrderInventoryWorker()
-  startOrderQueueWorker()
+  if (USE_LEGACY_WORKERS) {
+    startOrderOutboxWorker()
+    startOrderInventoryWorker()
+    logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
+  } else {
+    startOrderQueueWorker()
+    logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false })
+  }
 
   httpServer.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000)
   httpServer.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 66000)

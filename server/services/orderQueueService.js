@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { getRedisClient, isRedisConfigured } from '../config/redis.js'
 import { logger } from '../utils/logger.js'
-import { syncCompletedOrderAnalytics } from './itemAnalyticsService.js'
-import { consumeReservationsForOrder } from './inventoryV2Service.js'
+import Order from '../models/Order.js'
+import { processOrderStatusTransition } from './orderStatusProcessingService.js'
+import { reserveStockForOrder } from './inventoryV2Service.js'
 
 const QUEUE_KEY = 'order:jobs:pending'
 const DEAD_LETTER_KEY = 'order:jobs:deadletter'
@@ -269,6 +270,12 @@ async function processJob(job) {
 
     // Process job
     switch (jobType) {
+      case 'order_status_changed':
+        await handleOrderStatusChanged(jobData)
+        break
+      case 'reserve_order_inventory':
+        await handleReserveOrderInventory(jobData)
+        break
       case 'update_inventory':
         await handleInventoryUpdate(jobData)
         break
@@ -360,49 +367,16 @@ async function moveToDeadLetter(job, error, attempts) {
 // Job handlers (implement as needed)
 
 async function handleInventoryUpdate(jobData) {
-  if (!jobData?.orderId || !jobData?.restaurantId) {
-    throw new Error('Invalid job data: missing orderId or restaurantId')
-  }
-
-  try {
-    await consumeReservationsForOrder({
-      restaurantId: jobData.restaurantId,
-      orderId: jobData.orderId,
-      policy: 'soft',
-      idempotencyPrefix: `queue_inventory_${jobData.orderId}`,
-    })
-    logger.info('order_queue_inventory_consumed', {
-      orderId: jobData.orderId,
-      restaurantId: jobData.restaurantId,
-    })
-  } catch (error) {
-    logger.error('order_queue_inventory_update_failed', {
-      orderId: jobData.orderId,
-      restaurantId: jobData.restaurantId,
-      error: error?.message,
-    })
-    throw error
-  }
+  // Backward-compat alias: map old job type to canonical handler.
+  await handleReserveOrderInventory(jobData)
 }
 
 async function handleAnalyticsTracking(jobData) {
-  if (!jobData?.orderId) {
-    throw new Error('Invalid job data: missing orderId')
-  }
-
-  try {
-    await syncCompletedOrderAnalytics(jobData.orderId)
-    logger.info('order_queue_analytics_synced', {
-      orderId: jobData.orderId,
-      restaurantId: jobData.restaurantId,
-    })
-  } catch (error) {
-    logger.error('order_queue_analytics_tracking_failed', {
-      orderId: jobData.orderId,
-      error: error?.message,
-    })
-    throw error
-  }
+  // Backward-compat alias: preserve old producer compatibility.
+  await handleOrderStatusChanged({
+    ...jobData,
+    toStatus: String(jobData?.toStatus || jobData?.orderStatus || 'Completed'),
+  })
 }
 
 async function handleOrderNotification(jobData) {
@@ -426,6 +400,50 @@ async function handleOrderNotification(jobData) {
     })
     throw error
   }
+}
+
+async function handleOrderStatusChanged(jobData) {
+  if (!jobData?.orderId || !jobData?.restaurantId || !jobData?.toStatus) {
+    throw new Error('Invalid job data: missing order status transition fields')
+  }
+
+  await processOrderStatusTransition({
+    orderId: jobData.orderId,
+    restaurantId: jobData.restaurantId,
+    fromStatus: jobData.fromStatus,
+    toStatus: jobData.toStatus,
+    inventoryCycle: Number(jobData.inventoryCycle || 0),
+    completedAt: jobData.completedAt || null,
+  })
+}
+
+async function handleReserveOrderInventory(jobData) {
+  if (!jobData?.orderId || !jobData?.restaurantId) {
+    throw new Error('Invalid job data: missing order reservation fields')
+  }
+
+  const order = await Order.findOne({
+    _id: jobData.orderId,
+    restaurantId: jobData.restaurantId,
+    isArchived: false,
+  })
+    .select('_id restaurantId items')
+    .lean()
+
+  if (!order) {
+    logger.warn('order_queue_reservation_order_not_found', {
+      orderId: String(jobData.orderId || ''),
+      restaurantId: String(jobData.restaurantId || ''),
+    })
+    return
+  }
+
+  await reserveStockForOrder({
+    restaurantId: order.restaurantId,
+    order,
+    policy: String(jobData.policy || 'soft'),
+    idempotencyPrefix: String(jobData.idempotencyPrefix || 'order'),
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────
