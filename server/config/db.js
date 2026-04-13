@@ -155,8 +155,16 @@ function delay(ms) {
 }
 
 function buildConnectOptions() {
+  const PROCESS_ROLE = String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase()
+  
+  // Reduce pool size for worker processes to prevent DB flooding
+  // Web processes: standard size for API responsiveness
+  // Worker processes: reduced size to batch operations efficiently
+  const isWorkerProcess = PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker'
+  const defaultMaxPoolSize = isWorkerProcess ? 5 : 15
+  
   return {
-    maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE || 15),
+    maxPoolSize: Number(process.env.MONGO_MAX_POOL_SIZE || defaultMaxPoolSize),
     minPoolSize: Number(process.env.MONGO_MIN_POOL_SIZE || 0),
     serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 8000),
     socketTimeoutMS: Number(process.env.MONGO_SOCKET_TIMEOUT_MS || 45000),

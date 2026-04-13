@@ -16,8 +16,6 @@ import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPr
 export default function OrdersPage() {
   const { restaurant } = useAuth()
   const [searchParams] = useSearchParams()
-  const [floorSearch, setFloorSearch] = useState('')
-  const [appliedFloor, setAppliedFloor] = useState('')
   const [error, setError] = useState('')
   const [shiftTargetOrder, setShiftTargetOrder] = useState(null)
   const [shiftFloorNumber, setShiftFloorNumber] = useState('')
@@ -35,7 +33,6 @@ export default function OrdersPage() {
     restaurantId: restaurant?._id,
     statusFilter: 'All',
     scope: 'All',
-    floorNumber: appliedFloor,
   })
 
   const activeOrders = useMemo(() => data?.activeOrders || [], [data])
@@ -267,32 +264,6 @@ export default function OrdersPage() {
     })
   }
 
-  const applyFloorSearch = (event) => {
-    event.preventDefault()
-
-    const nextValue = String(floorSearch || '').trim()
-    if (!nextValue) {
-      setAppliedFloor('')
-      setError('')
-      return
-    }
-
-    const parsedFloor = Number(nextValue)
-    if (!Number.isInteger(parsedFloor) || parsedFloor < 1) {
-      setError('Enter a valid floor number')
-      return
-    }
-
-    setAppliedFloor(String(parsedFloor))
-    setError('')
-  }
-
-  const clearFloorSearch = () => {
-    setFloorSearch('')
-    setAppliedFloor('')
-    setError('')
-  }
-
   const onManualOrderCreated = async () => {
     await playOrderAlertSound()
     await refreshBoard()
@@ -463,9 +434,7 @@ export default function OrdersPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-500">
-                {appliedFloor ? `No active QR orders for floor ${appliedFloor}.` : 'No active QR orders in this view.'}
-              </p>
+              <p className="text-sm text-slate-500">No active QR orders in this view.</p>
             )
           }
         />

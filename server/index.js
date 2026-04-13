@@ -9,6 +9,7 @@ import { closeSocketServer, initSocketServer } from './realtime/socketServer.js'
 import { performanceMetrics } from './services/performanceMetrics.js'
 import { startOrderInventoryWorker, stopOrderInventoryWorker } from './services/orderInventoryQueueService.js'
 import { startOrderOutboxWorker, stopOrderOutboxWorker } from './services/orderOutboxService.js'
+import { startOrderQueueWorker, stopOrderQueueWorker } from './services/orderQueueService.js'
 import { logger } from './utils/logger.js'
 
 const PORT = process.env.PORT || 5000
@@ -36,6 +37,7 @@ async function shutdown(signal, exitCode = 0) {
     await shutdownScheduler()
     stopOrderOutboxWorker()
     stopOrderInventoryWorker()
+    stopOrderQueueWorker()
     await cleanupAllLeaderships()
     performanceMetrics.stop()
     await closeSocketServer()
@@ -115,6 +117,7 @@ async function start() {
     initializeScheduler()
     startOrderOutboxWorker()
     startOrderInventoryWorker()
+    startOrderQueueWorker()
     logger.info('Jobs process started', { processRole: PROCESS_ROLE })
     return
   }
@@ -135,6 +138,7 @@ async function start() {
 
   startOrderOutboxWorker()
   startOrderInventoryWorker()
+  startOrderQueueWorker()
 
   httpServer.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000)
   httpServer.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS || 66000)

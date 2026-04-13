@@ -20,6 +20,7 @@ import { securityHeaders } from './middleware/securityHeaders.js'
 import { createRateLimiter } from './middleware/rateLimit.js'
 import { getDbStatus } from './config/db.js'
 import { getInventoryRuntimeConfig } from './config/inventoryRuntime.js'
+import { getQueueStats } from './services/orderQueueService.js'
 
 const app = express()
 app.disable('x-powered-by')
@@ -86,8 +87,9 @@ app.use('/api/payments/webhook', express.raw({ type: 'application/json', limit: 
 app.use(express.json({ limit: jsonLimit }))
 app.use(express.urlencoded({ extended: false, limit: urlEncodedLimit }))
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const inventoryConfig = getInventoryRuntimeConfig()
+  const queueStats = await getQueueStats()
 
   res.json({
     ok: true,
@@ -100,6 +102,7 @@ app.get('/api/health', (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     processRole: String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase(),
     db: getDbStatus(),
+    queue: queueStats,
   })
 })
 
