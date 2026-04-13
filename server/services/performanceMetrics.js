@@ -83,6 +83,13 @@ function buildSummary(stats) {
   }
 }
 
+function mapStatsToSummaries(statsMap = new Map()) {
+  return [...statsMap.entries()].map(([key, stats]) => ({
+    key,
+    ...buildSummary(stats),
+  }))
+}
+
 class PerformanceMetrics {
   constructor() {
     this.enabled = METRICS_ENABLED
@@ -158,6 +165,71 @@ class PerformanceMetrics {
     stats.totalMs += duration
     stats.maxMs = Math.max(stats.maxMs, duration)
     observeHistogram(stats.histogram, duration)
+  }
+
+  getMongoOperationSummaries({ operationPrefix = '', minCount = 1, limit = 100 } = {}) {
+    if (!this.enabled) {
+      return []
+    }
+
+    const normalizedPrefix = String(operationPrefix || '').trim()
+    const safeMinCount = Math.max(1, Number(minCount || 1))
+    const safeLimit = Math.max(1, Number(limit || 100))
+
+    return mapStatsToSummaries(this.mongoStats)
+      .map((entry) => ({
+        operationKey: entry.key,
+        count: entry.count,
+        errorCount: entry.errorCount,
+        errorRatePct: entry.errorRatePct,
+        avgMs: entry.avgMs,
+        p50Ms: entry.p50Ms,
+        p95Ms: entry.p95Ms,
+        p99Ms: entry.p99Ms,
+        maxMs: entry.maxMs,
+      }))
+      .filter((entry) => {
+        if (entry.count < safeMinCount) return false
+        if (!normalizedPrefix) return true
+        return String(entry.operationKey || '').startsWith(normalizedPrefix)
+      })
+      .sort((a, b) => b.p95Ms - a.p95Ms)
+      .slice(0, safeLimit)
+  }
+
+  getMongoPressure({ operationPrefix = '', minSamples = 10 } = {}) {
+    const rows = this.getMongoOperationSummaries({
+      operationPrefix,
+      minCount: Math.max(1, Number(minSamples || 10)),
+      limit: 250,
+    })
+
+    if (!rows.length) {
+      return {
+        available: false,
+        operationCount: 0,
+        sampleCount: 0,
+        weightedAvgMs: 0,
+        maxP95Ms: 0,
+        p95Ms: 0,
+      }
+    }
+
+    const sampleCount = rows.reduce((sum, row) => sum + Number(row.count || 0), 0)
+    const weightedAvgMs = sampleCount > 0
+      ? rows.reduce((sum, row) => sum + Number(row.avgMs || 0) * Number(row.count || 0), 0) / sampleCount
+      : 0
+    const maxP95Ms = rows.reduce((max, row) => Math.max(max, Number(row.p95Ms || 0)), 0)
+
+    return {
+      available: true,
+      operationCount: rows.length,
+      sampleCount,
+      weightedAvgMs: Math.round(weightedAvgMs * 100) / 100,
+      maxP95Ms: Math.round(maxP95Ms * 100) / 100,
+      p95Ms: Math.round(maxP95Ms * 100) / 100,
+      topOperations: rows.slice(0, 5),
+    }
   }
 
   flush() {

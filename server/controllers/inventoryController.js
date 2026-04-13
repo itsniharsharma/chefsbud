@@ -14,6 +14,7 @@ import {
 import { composePurchasePayload } from '../services/inventoryPurchaseService.js'
 import { invalidateRecipeVersionRuntimeCache } from '../services/recipeVersionRuntimeCache.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
+import { seedCachedResponse } from '../services/responseCache.js'
 import { emitInventoryChanged } from '../realtime/inventoryEvents.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 import { logger } from '../utils/logger.js'
@@ -24,6 +25,267 @@ const purchaseProjection =
   '_id sourceType supplierId supplierNameSnapshot invoiceDate invoiceNumber gstNo cgstPercent sgstPercent igstPercent deliveryCharge discountType discountValue totalDiscountAmount paymentType items subtotalAmount taxableAmount cgstAmount sgstAmount igstAmount grandTotalAmount createdAt updatedAt'
 
 const activeRecipeRefreshJobs = new Set()
+const INVENTORY_ANALYTICS_ASYNC_CACHE_ONLY = String(process.env.INVENTORY_ANALYTICS_ASYNC_CACHE_ONLY || 'true') !== 'false'
+const INVENTORY_ANALYTICS_HOT_TTL_MS = Math.max(10_000, Number(process.env.INVENTORY_ANALYTICS_HOT_TTL_MS || 45_000))
+const INVENTORY_ANALYTICS_SNAPSHOT_TTL_MS = Math.max(60_000, Number(process.env.INVENTORY_ANALYTICS_SNAPSHOT_TTL_MS || 15 * 60 * 1000))
+const INVENTORY_ANALYTICS_REFRESH_COOLDOWN_MS = Math.max(1_000, Number(process.env.INVENTORY_ANALYTICS_REFRESH_COOLDOWN_MS || 8_000))
+const inventoryAnalyticsHotCache = new Map()
+const inventoryAnalyticsSnapshotCache = new Map()
+const inventoryAnalyticsInFlight = new Map()
+const inventoryAnalyticsLastQueuedAt = new Map()
+
+function inventoryAnalyticsCacheKey(restaurantId) {
+  return String(restaurantId || '').trim()
+}
+
+function readInventoryAnalyticsHot(restaurantId) {
+  const key = inventoryAnalyticsCacheKey(restaurantId)
+  const entry = inventoryAnalyticsHotCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    inventoryAnalyticsHotCache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function readInventoryAnalyticsSnapshot(restaurantId) {
+  const key = inventoryAnalyticsCacheKey(restaurantId)
+  const entry = inventoryAnalyticsSnapshotCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    inventoryAnalyticsSnapshotCache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function writeInventoryAnalyticsCache(restaurantId, value) {
+  const key = inventoryAnalyticsCacheKey(restaurantId)
+  if (!key) return
+
+  inventoryAnalyticsHotCache.set(key, {
+    value,
+    expiresAt: Date.now() + INVENTORY_ANALYTICS_HOT_TTL_MS,
+  })
+  inventoryAnalyticsSnapshotCache.set(key, {
+    value,
+    expiresAt: Date.now() + INVENTORY_ANALYTICS_SNAPSHOT_TTL_MS,
+  })
+}
+
+async function buildInventoryAnalyticsOverviewPayload(restaurantId) {
+  const now = new Date()
+  const start90d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+
+  const [
+    inventoryItems,
+    menuItemsCount,
+    recipeCount,
+    purchaseRateRows,
+  ] = await Promise.all([
+    InventoryItem.find({ restaurantId, isActive: true })
+      .select('_id name currentStock currentStockUnit defaultUnit')
+      .lean(),
+    MenuItem.countDocuments({ restaurantId }),
+    Recipe.countDocuments({ restaurantId }),
+    InventoryPurchase.aggregate([
+      { $match: { restaurantId, createdAt: { $gte: start90d } } },
+      { $unwind: '$items' },
+      {
+        $project: {
+          itemId: '$items.itemId',
+          amount: '$items.amount',
+          baseUnit: purchaseBaseUnitExpression(),
+          baseQuantity: {
+            $multiply: ['$items.quantity', purchaseUnitFactorExpression()],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: { itemId: '$itemId', baseUnit: '$baseUnit' },
+          totalAmount: { $sum: '$amount' },
+          totalBaseQuantity: { $sum: '$baseQuantity' },
+        },
+      },
+    ]),
+  ])
+
+  const rateByItemAndUnit = new Map()
+  for (const row of purchaseRateRows) {
+    const itemId = String(row?._id?.itemId || '')
+    const baseUnit = String(row?._id?.baseUnit || 'unit')
+    const quantity = Number(row?.totalBaseQuantity || 0)
+    const amount = Number(row?.totalAmount || 0)
+    const avgRate = quantity > 0 ? amount / quantity : 0
+    if (!itemId || !Number.isFinite(avgRate) || avgRate <= 0) continue
+
+    if (!rateByItemAndUnit.has(itemId)) {
+      rateByItemAndUnit.set(itemId, new Map())
+    }
+    rateByItemAndUnit.get(itemId).set(baseUnit, avgRate)
+  }
+
+  const stockByItem = []
+  const stockTotals = { g: 0, ml: 0, unit: 0 }
+  let itemsWithStock = 0
+  let zeroOrNegativeStockItems = 0
+  let estimatedStockValue = 0
+
+  for (const item of inventoryItems) {
+    const itemId = String(item._id)
+    const quantity = Number(item.currentStock || 0)
+    const unit = String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))
+    const avgRatePerBaseUnit = Number(rateByItemAndUnit.get(itemId)?.get(unit) || 0)
+    const value = quantity > 0 && avgRatePerBaseUnit > 0 ? quantity * avgRatePerBaseUnit : 0
+
+    if (quantity > 0) itemsWithStock += 1
+    if (quantity <= 0) zeroOrNegativeStockItems += 1
+
+    if (!stockTotals[unit]) stockTotals[unit] = 0
+    stockTotals[unit] += quantity
+    estimatedStockValue += value
+
+    stockByItem.push({
+      itemId,
+      name: String(item.name || ''),
+      stockQuantity: round6(quantity),
+      stockUnit: unit,
+      avgPurchaseRatePerBaseUnit: round6(avgRatePerBaseUnit),
+      estimatedStockValue: round2(value),
+    })
+  }
+
+  stockByItem.sort((a, b) => {
+    const byValue = Number(b.estimatedStockValue || 0) - Number(a.estimatedStockValue || 0)
+    if (byValue !== 0) return byValue
+    return Number(b.stockQuantity || 0) - Number(a.stockQuantity || 0)
+  })
+
+  const stockValueDistribution = buildStockDistribution(stockByItem, 'estimatedStockValue', 'value')
+  const stockQuantityDistribution = buildStockDistribution(stockByItem, 'stockQuantity', 'mixed')
+  const stockValueFullDistribution = stockByItem
+    .filter((row) => Number(row?.estimatedStockValue || 0) > 0)
+    .map((row) => ({
+      itemId: row.itemId,
+      name: row.name,
+      value: round2(row.estimatedStockValue),
+      valueRaw: Number(row.estimatedStockValue || 0),
+      stockUnit: row.stockUnit,
+      stockQuantity: row.stockQuantity,
+      estimatedStockValue: row.estimatedStockValue,
+    }))
+  const stockQuantityFullDistribution = stockByItem
+    .filter((row) => Number(row?.stockQuantity || 0) > 0)
+    .map((row) => ({
+      itemId: row.itemId,
+      name: row.name,
+      value: round6(row.stockQuantity),
+      valueRaw: Number(row.stockQuantity || 0),
+      stockUnit: row.stockUnit,
+      stockQuantity: row.stockQuantity,
+      estimatedStockValue: row.estimatedStockValue,
+    }))
+  const pieMetric = stockValueDistribution.length ? 'estimatedStockValue' : 'stockQuantity'
+  const stockDistribution = pieMetric === 'estimatedStockValue'
+    ? stockValueDistribution
+    : stockQuantityDistribution
+
+  return {
+    generatedAt: now.toISOString(),
+    windows: {
+      purchaseRateDays: 90,
+    },
+    kpis: {
+      totalInventoryItems: Number(inventoryItems.length || 0),
+      itemsWithStock,
+      zeroOrNegativeStockItems,
+      stockAvailabilityPercent: toPercent(itemsWithStock, inventoryItems.length),
+      estimatedStockValue,
+      averageStockValuePerItem: inventoryItems.length ? round2(estimatedStockValue / inventoryItems.length) : 0,
+      recipeCoveragePercent: toPercent(recipeCount, menuItemsCount),
+      menuItemsCount: Number(menuItemsCount || 0),
+      recipeCount: Number(recipeCount || 0),
+    },
+    stock: {
+      totalsByBaseUnit: {
+        g: round6(stockTotals.g || 0),
+        ml: round6(stockTotals.ml || 0),
+        unit: round6(stockTotals.unit || 0),
+      },
+      pieMetric,
+      stockDistribution,
+      stockValueDistribution,
+      stockQuantityDistribution,
+      stockValueFullDistribution,
+      stockQuantityFullDistribution,
+    },
+  }
+}
+
+function scheduleInventoryAnalyticsRefresh(restaurantId) {
+  const cacheKey = inventoryAnalyticsCacheKey(restaurantId)
+  if (!cacheKey) return false
+
+  if (inventoryAnalyticsInFlight.has(cacheKey)) {
+    logger.info('inventory_analytics_refresh_queue_state', {
+      action: 'skip_inflight',
+      cacheKey,
+      inFlightDepth: inventoryAnalyticsInFlight.size,
+    })
+    return false
+  }
+
+  const now = Date.now()
+  const lastQueuedAt = Number(inventoryAnalyticsLastQueuedAt.get(cacheKey) || 0)
+  if (now - lastQueuedAt < INVENTORY_ANALYTICS_REFRESH_COOLDOWN_MS) {
+    logger.info('inventory_analytics_refresh_queue_state', {
+      action: 'skip_cooldown',
+      cacheKey,
+      inFlightDepth: inventoryAnalyticsInFlight.size,
+      cooldownMsRemaining: Math.max(0, INVENTORY_ANALYTICS_REFRESH_COOLDOWN_MS - (now - lastQueuedAt)),
+    })
+    return false
+  }
+
+  inventoryAnalyticsLastQueuedAt.set(cacheKey, now)
+  logger.info('inventory_analytics_refresh_queue_state', {
+    action: 'queued',
+    cacheKey,
+    inFlightDepth: inventoryAnalyticsInFlight.size + 1,
+  })
+  const task = (async () => {
+    try {
+      const payload = await buildInventoryAnalyticsOverviewPayload(restaurantId)
+      writeInventoryAnalyticsCache(restaurantId, payload)
+      await seedCachedResponse({
+        key: `inventory:analytics:${cacheKey}`,
+        payload,
+        status: 200,
+        tags: [`inventory:analytics:${cacheKey}`],
+        ttlSeconds: 45,
+      })
+      logger.info('inventory_analytics_refresh_queue_state', {
+        action: 'completed',
+        cacheKey,
+        inFlightDepth: Math.max(0, inventoryAnalyticsInFlight.size - 1),
+      })
+    } catch (error) {
+      logger.warn('inventory_analytics_refresh_queue_state', {
+        action: 'failed',
+        cacheKey,
+        inFlightDepth: Math.max(0, inventoryAnalyticsInFlight.size - 1),
+        message: error?.message || 'inventory_analytics_refresh_failed',
+      })
+    } finally {
+      inventoryAnalyticsInFlight.delete(cacheKey)
+    }
+  })()
+
+  inventoryAnalyticsInFlight.set(cacheKey, task)
+  return true
+}
 
 function inventoryCacheTags(restaurantId, options = {}) {
   const id = String(restaurantId)
@@ -1629,153 +1891,29 @@ export async function getInventoryAnalyticsOverview(req, res, next) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
-    const now = new Date()
-    const start90d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
+    const restaurantId = String(restaurant._id)
+    const fresh = readInventoryAnalyticsHot(restaurantId)
+    if (fresh) {
+      res.set('X-Inventory-Analytics-Cache', 'hot')
+      return res.json(fresh)
+    }
 
-    const [
-      inventoryItems,
-      menuItemsCount,
-      recipeCount,
-      purchaseRateRows,
-    ] = await Promise.all([
-      InventoryItem.find({ restaurantId: restaurant._id, isActive: true })
-        .select('_id name currentStock currentStockUnit defaultUnit')
-        .lean(),
-      MenuItem.countDocuments({ restaurantId: restaurant._id }),
-      Recipe.countDocuments({ restaurantId: restaurant._id }),
-      InventoryPurchase.aggregate([
-        { $match: { restaurantId: restaurant._id, createdAt: { $gte: start90d } } },
-        { $unwind: '$items' },
-        {
-          $project: {
-            itemId: '$items.itemId',
-            amount: '$items.amount',
-            baseUnit: purchaseBaseUnitExpression(),
-            baseQuantity: {
-              $multiply: ['$items.quantity', purchaseUnitFactorExpression()],
-            },
-          },
-        },
-        {
-          $group: {
-            _id: { itemId: '$itemId', baseUnit: '$baseUnit' },
-            totalAmount: { $sum: '$amount' },
-            totalBaseQuantity: { $sum: '$baseQuantity' },
-          },
-        },
-      ]),
-    ])
-    const rateByItemAndUnit = new Map()
+    const stale = readInventoryAnalyticsSnapshot(restaurantId)
+    if (INVENTORY_ANALYTICS_ASYNC_CACHE_ONLY) {
+      scheduleInventoryAnalyticsRefresh(restaurantId)
 
-    for (const row of purchaseRateRows) {
-      const itemId = String(row?._id?.itemId || '')
-      const baseUnit = String(row?._id?.baseUnit || 'unit')
-      const quantity = Number(row?.totalBaseQuantity || 0)
-      const amount = Number(row?.totalAmount || 0)
-      const avgRate = quantity > 0 ? amount / quantity : 0
-      if (!itemId || !Number.isFinite(avgRate) || avgRate <= 0) continue
-
-      if (!rateByItemAndUnit.has(itemId)) {
-        rateByItemAndUnit.set(itemId, new Map())
+      if (stale) {
+        res.set('X-Inventory-Analytics-Cache', 'stale')
+        return res.json(stale)
       }
-      rateByItemAndUnit.get(itemId).set(baseUnit, avgRate)
+
+      res.locals.skipResponseCache = true
+      return res.status(202).json({ status: 'processing', data: null })
     }
 
-    const stockByItem = []
-    const stockTotals = { g: 0, ml: 0, unit: 0 }
-    let itemsWithStock = 0
-    let zeroOrNegativeStockItems = 0
-    let estimatedStockValue = 0
-
-    for (const item of inventoryItems) {
-      const itemId = String(item._id)
-      const quantity = Number(item.currentStock || 0)
-      const unit = String(item.currentStockUnit || resolveBaseUnit(item.defaultUnit || 'Unit'))
-      const avgRatePerBaseUnit = Number(rateByItemAndUnit.get(itemId)?.get(unit) || 0)
-      const value = quantity > 0 && avgRatePerBaseUnit > 0 ? quantity * avgRatePerBaseUnit : 0
-
-      if (quantity > 0) itemsWithStock += 1
-      if (quantity <= 0) zeroOrNegativeStockItems += 1
-
-      if (!stockTotals[unit]) stockTotals[unit] = 0
-      stockTotals[unit] += quantity
-      estimatedStockValue += value
-
-      stockByItem.push({
-        itemId,
-        name: String(item.name || ''),
-        stockQuantity: round6(quantity),
-        stockUnit: unit,
-        avgPurchaseRatePerBaseUnit: round6(avgRatePerBaseUnit),
-        estimatedStockValue: round2(value),
-      })
-    }
-
-    stockByItem.sort((a, b) => {
-      const byValue = Number(b.estimatedStockValue || 0) - Number(a.estimatedStockValue || 0)
-      if (byValue !== 0) return byValue
-      return Number(b.stockQuantity || 0) - Number(a.stockQuantity || 0)
-    })
-
-    const stockValueDistribution = buildStockDistribution(stockByItem, 'estimatedStockValue', 'value')
-    const stockQuantityDistribution = buildStockDistribution(stockByItem, 'stockQuantity', 'mixed')
-    const stockValueFullDistribution = stockByItem
-      .filter((row) => Number(row?.estimatedStockValue || 0) > 0)
-      .map((row) => ({
-        itemId: row.itemId,
-        name: row.name,
-        value: round2(row.estimatedStockValue),
-        valueRaw: Number(row.estimatedStockValue || 0),
-        stockUnit: row.stockUnit,
-        stockQuantity: row.stockQuantity,
-        estimatedStockValue: row.estimatedStockValue,
-      }))
-    const stockQuantityFullDistribution = stockByItem
-      .filter((row) => Number(row?.stockQuantity || 0) > 0)
-      .map((row) => ({
-        itemId: row.itemId,
-        name: row.name,
-        value: round6(row.stockQuantity),
-        valueRaw: Number(row.stockQuantity || 0),
-        stockUnit: row.stockUnit,
-        stockQuantity: row.stockQuantity,
-        estimatedStockValue: row.estimatedStockValue,
-      }))
-    const pieMetric = stockValueDistribution.length ? 'estimatedStockValue' : 'stockQuantity'
-    const stockDistribution = pieMetric === 'estimatedStockValue'
-      ? stockValueDistribution
-      : stockQuantityDistribution
-
-    return res.json({
-      generatedAt: now.toISOString(),
-      windows: {
-        purchaseRateDays: 90,
-      },
-      kpis: {
-        totalInventoryItems: Number(inventoryItems.length || 0),
-        itemsWithStock,
-        zeroOrNegativeStockItems,
-        stockAvailabilityPercent: toPercent(itemsWithStock, inventoryItems.length),
-        estimatedStockValue,
-        averageStockValuePerItem: inventoryItems.length ? round2(estimatedStockValue / inventoryItems.length) : 0,
-        recipeCoveragePercent: toPercent(recipeCount, menuItemsCount),
-        menuItemsCount: Number(menuItemsCount || 0),
-        recipeCount: Number(recipeCount || 0),
-      },
-      stock: {
-        totalsByBaseUnit: {
-          g: round6(stockTotals.g || 0),
-          ml: round6(stockTotals.ml || 0),
-          unit: round6(stockTotals.unit || 0),
-        },
-        pieMetric,
-        stockDistribution,
-        stockValueDistribution,
-        stockQuantityDistribution,
-        stockValueFullDistribution,
-        stockQuantityFullDistribution,
-      },
-    })
+    const payload = await buildInventoryAnalyticsOverviewPayload(restaurantId)
+    writeInventoryAnalyticsCache(restaurantId, payload)
+    return res.json(payload)
   } catch (error) {
     next(error)
   }

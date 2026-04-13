@@ -11,13 +11,21 @@ import Order from '../models/Order.js'
 import OrderHourlyMetrics from '../models/OrderHourlyMetrics.js'
 import { withRedis } from '../config/redis.js'
 import { invalidateCacheByTags } from './responseCache.js'
+import { performanceMetrics } from './performanceMetrics.js'
 import { logger } from '../utils/logger.js'
 
 const ANALYTICS_BACKFILL_LOCK_SECONDS = Math.max(30, Number(process.env.ANALYTICS_BACKFILL_LOCK_SECONDS || 120))
 const ANALYTICS_BACKFILL_BATCH_SIZE = Math.max(50, Math.min(Number(process.env.ANALYTICS_BACKFILL_BATCH_SIZE || 250), 1000))
 const ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN || 8), 50))
-const ANALYTICS_BACKFILL_CONCURRENCY = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_CONCURRENCY || 6), 20))
+const ANALYTICS_BACKFILL_CONCURRENCY = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_CONCURRENCY || 4), 20))
+const ANALYTICS_BACKFILL_BATCH_DELAY_MS = Math.max(0, Number(process.env.ANALYTICS_BACKFILL_BATCH_DELAY_MS || 250))
 const ANALYTICS_TRACKING_STALE_SECONDS = Math.max(60, Number(process.env.ANALYTICS_TRACKING_STALE_SECONDS || 300))
+const ANALYTICS_ADAPTIVE_THROTTLE_ENABLED = String(process.env.ANALYTICS_ADAPTIVE_THROTTLE_ENABLED || 'true') !== 'false'
+const ANALYTICS_ADAPTIVE_MIN_SAMPLES = Math.max(5, Number(process.env.ANALYTICS_ADAPTIVE_MIN_SAMPLES || 20))
+const ANALYTICS_DB_P95_SOFT_MS = Math.max(10, Number(process.env.ANALYTICS_DB_P95_SOFT_MS || 120))
+const ANALYTICS_DB_P95_HARD_MS = Math.max(ANALYTICS_DB_P95_SOFT_MS + 20, Number(process.env.ANALYTICS_DB_P95_HARD_MS || 220))
+const ANALYTICS_BACKFILL_MAX_DELAY_MS = Math.max(ANALYTICS_BACKFILL_BATCH_DELAY_MS, Number(process.env.ANALYTICS_BACKFILL_MAX_DELAY_MS || 900))
+const ANALYTICS_BACKFILL_MIN_CONCURRENCY = Math.max(1, Math.min(Number(process.env.ANALYTICS_BACKFILL_MIN_CONCURRENCY || 1), ANALYTICS_BACKFILL_CONCURRENCY))
 const localBackfillLocks = new Map()
 
 function normalizeDate(dateLike = new Date()) {
@@ -775,7 +783,7 @@ export async function applyOrderRatingAnalytics({
   return true
 }
 
-export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize = 200 } = {}) {
+export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize = 200, concurrency = ANALYTICS_BACKFILL_CONCURRENCY } = {}) {
   if (!restaurantId) return 0
 
   const candidates = await Order.find({
@@ -800,9 +808,14 @@ export async function backfillCompletedOrderAnalytics({ restaurantId, batchSize 
     ? await loadMenuItemsMap(restaurantId, uniqueMenuIds)
     : new Map()
 
+  const effectiveConcurrency = Math.max(
+    ANALYTICS_BACKFILL_MIN_CONCURRENCY,
+    Math.min(Number(concurrency || ANALYTICS_BACKFILL_CONCURRENCY), ANALYTICS_BACKFILL_CONCURRENCY),
+  )
+
   let processedCount = 0
-  for (let offset = 0; offset < candidates.length; offset += ANALYTICS_BACKFILL_CONCURRENCY) {
-    const batch = candidates.slice(offset, offset + ANALYTICS_BACKFILL_CONCURRENCY)
+  for (let offset = 0; offset < candidates.length; offset += effectiveConcurrency) {
+    const batch = candidates.slice(offset, offset + effectiveConcurrency)
 
     const results = await Promise.all(
       batch.map(async (order) => {
@@ -1075,6 +1088,72 @@ function cleanupExpiredLocalBackfillLocks() {
   }
 }
 
+function delay(ms) {
+  const timeoutMs = Math.max(0, Number(ms || 0))
+  if (!timeoutMs) return Promise.resolve()
+  return new Promise((resolve) => setTimeout(resolve, timeoutMs))
+}
+
+function resolveAdaptiveBackfillControls() {
+  const baseControls = {
+    mode: 'baseline',
+    concurrency: ANALYTICS_BACKFILL_CONCURRENCY,
+    delayMs: ANALYTICS_BACKFILL_BATCH_DELAY_MS,
+    mongoP95Ms: 0,
+    operationCount: 0,
+    sampleCount: 0,
+  }
+
+  if (!ANALYTICS_ADAPTIVE_THROTTLE_ENABLED || !performanceMetrics.isEnabled) {
+    return baseControls
+  }
+
+  const pressure = performanceMetrics.getMongoPressure({
+    operationPrefix: '',
+    minSamples: ANALYTICS_ADAPTIVE_MIN_SAMPLES,
+  })
+
+  if (!pressure?.available) {
+    return baseControls
+  }
+
+  const p95 = Number(pressure.p95Ms || 0)
+  if (p95 >= ANALYTICS_DB_P95_HARD_MS) {
+    return {
+      mode: 'hard',
+      concurrency: ANALYTICS_BACKFILL_MIN_CONCURRENCY,
+      delayMs: ANALYTICS_BACKFILL_MAX_DELAY_MS,
+      mongoP95Ms: p95,
+      operationCount: Number(pressure.operationCount || 0),
+      sampleCount: Number(pressure.sampleCount || 0),
+    }
+  }
+
+  if (p95 >= ANALYTICS_DB_P95_SOFT_MS) {
+    return {
+      mode: 'soft',
+      concurrency: Math.max(
+        ANALYTICS_BACKFILL_MIN_CONCURRENCY,
+        Math.floor(ANALYTICS_BACKFILL_CONCURRENCY * 0.75),
+      ),
+      delayMs: Math.min(
+        ANALYTICS_BACKFILL_MAX_DELAY_MS,
+        ANALYTICS_BACKFILL_BATCH_DELAY_MS + 200,
+      ),
+      mongoP95Ms: p95,
+      operationCount: Number(pressure.operationCount || 0),
+      sampleCount: Number(pressure.sampleCount || 0),
+    }
+  }
+
+  return {
+    ...baseControls,
+    mongoP95Ms: p95,
+    operationCount: Number(pressure.operationCount || 0),
+    sampleCount: Number(pressure.sampleCount || 0),
+  }
+}
+
 async function acquireAnalyticsBackfillLock(restaurantId) {
   const normalizedRestaurantId = String(restaurantId || '').trim()
   if (!normalizedRestaurantId) {
@@ -1129,15 +1208,76 @@ export async function scheduleCompletedOrderAnalyticsBackfill({ restaurantId } =
       let processed = 0
       let batches = 0
       let totalProcessed = 0
+      let lastMode = 'baseline'
+
+      const initialDepth = await Order.countDocuments({
+        restaurantId,
+        isArchived: false,
+        orderStatus: 'Completed',
+        analyticsTrackedAt: null,
+      })
+
+      logger.info('analytics_backfill_queue_depth', {
+        restaurantId: String(restaurantId),
+        stage: 'start',
+        pendingOrders: Number(initialDepth || 0),
+      })
 
       do {
+        const controls = resolveAdaptiveBackfillControls()
+        if (controls.mode !== lastMode) {
+          logger.info('analytics_backfill_throttle_mode_changed', {
+            restaurantId: String(restaurantId),
+            mode: controls.mode,
+            mongoP95Ms: Number(controls.mongoP95Ms || 0),
+            concurrency: Number(controls.concurrency || ANALYTICS_BACKFILL_CONCURRENCY),
+            delayMs: Number(controls.delayMs || ANALYTICS_BACKFILL_BATCH_DELAY_MS),
+            mongoOperationCount: Number(controls.operationCount || 0),
+            mongoSampleCount: Number(controls.sampleCount || 0),
+          })
+          lastMode = controls.mode
+        }
+
         processed = await backfillCompletedOrderAnalytics({
           restaurantId,
           batchSize: ANALYTICS_BACKFILL_BATCH_SIZE,
+          concurrency: controls.concurrency,
         })
         totalProcessed += processed
         batches += 1
+
+        if (batches % 3 === 0 || processed === 0) {
+          logger.info('analytics_backfill_progress', {
+            restaurantId: String(restaurantId),
+            batches,
+            processedInBatch: Number(processed || 0),
+            totalProcessed,
+            throttleMode: controls.mode,
+            concurrency: Number(controls.concurrency || ANALYTICS_BACKFILL_CONCURRENCY),
+            delayMs: Number(controls.delayMs || ANALYTICS_BACKFILL_BATCH_DELAY_MS),
+            mongoP95Ms: Number(controls.mongoP95Ms || 0),
+          })
+        }
+
+        if (processed > 0 && Number(controls.delayMs || 0) > 0) {
+          await delay(controls.delayMs)
+        }
       } while (processed > 0 && batches < ANALYTICS_BACKFILL_MAX_BATCHES_PER_RUN)
+
+      const remainingDepth = await Order.countDocuments({
+        restaurantId,
+        isArchived: false,
+        orderStatus: 'Completed',
+        analyticsTrackedAt: null,
+      })
+
+      logger.info('analytics_backfill_queue_depth', {
+        restaurantId: String(restaurantId),
+        stage: 'end',
+        pendingOrders: Number(remainingDepth || 0),
+        totalProcessed,
+        batches,
+      })
 
       if (totalProcessed > 0) {
         invalidateCacheByTags([`analytics:${String(restaurantId)}`])

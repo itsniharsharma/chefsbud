@@ -308,6 +308,13 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip }
     const originalJson = res.json.bind(res)
 
     res.json = (payload) => {
+      if (res.locals?.skipResponseCache) {
+        settled = true
+        inflightStore.delete(key)
+        resolveInflight({ status: res.statusCode || 200, payload })
+        return originalJson(payload)
+      }
+
       const status = res.statusCode || 200
       if (status >= 200 && status < 300) {
         ensureCacheCapacity()
@@ -352,4 +359,37 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip }
 
     return next()
   }
+}
+
+export async function seedCachedResponse({ key, payload, status = 200, tags = [], ttlSeconds = 60 }) {
+  const normalizedKey = String(key || '').trim()
+  if (!normalizedKey) {
+    return false
+  }
+
+  const ttl = Math.max(1, Number(ttlSeconds) || 60)
+  const normalizedTags = new Set(normalizeTags(tags))
+
+  ensureCacheCapacity()
+  const entry = {
+    status: Number(status || 200),
+    payload,
+    tags: normalizedTags,
+    expiresAt: nowMs() + ttl * 1000,
+  }
+
+  cacheStore.set(normalizedKey, entry)
+  for (const tag of normalizedTags) {
+    attachKeyToTag(tag, normalizedKey)
+  }
+
+  await writeToRedisCache({
+    key: normalizedKey,
+    status: entry.status,
+    payload,
+    tags: [...normalizedTags],
+    ttlSeconds: ttl,
+  })
+
+  return true
 }

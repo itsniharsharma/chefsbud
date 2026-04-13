@@ -13,8 +13,10 @@ import {
   trackMenuExposure,
 } from '../services/itemAnalyticsService.js'
 import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
+import { seedCachedResponse } from '../services/responseCache.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 import { resolveRestaurantIdentityBySlug } from '../services/orderDraftCache.js'
+import { logger } from '../utils/logger.js'
 
 const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(process.env.ANALYTICS_INLINE_BACKFILL_BATCH_SIZE || 40), 200))
 const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS || 60_000))
@@ -29,7 +31,13 @@ const LOW_STOCK_CACHE_MAX_ENTRIES = Math.max(100, Number(process.env.LOW_STOCK_C
 const analyticsWarmStateByRestaurant = new Map()
 const lowStockNotificationsCache = new Map()
 const analyticsResponseCache = new Map()
+const analyticsSnapshotCache = new Map()
 const ANALYTICS_RESPONSE_CACHE_TTL_MS = Math.max(10_000, Number(process.env.ANALYTICS_RESPONSE_CACHE_TTL_MS || 60_000))
+const ANALYTICS_SNAPSHOT_TTL_MS = Math.max(60_000, Number(process.env.ANALYTICS_SNAPSHOT_TTL_MS || 15 * 60 * 1000))
+const ANALYTICS_ASYNC_CACHE_ONLY = String(process.env.ANALYTICS_ASYNC_CACHE_ONLY || 'true') !== 'false'
+const ANALYTICS_REFRESH_COOLDOWN_MS = Math.max(1_000, Number(process.env.ANALYTICS_REFRESH_COOLDOWN_MS || 8_000))
+const analyticsRefreshInFlight = new Map()
+const analyticsRefreshLastQueuedAt = new Map()
 
 function analyticsCacheKey(type, restaurantId, range) {
   return `${type}:${String(restaurantId || '')}:${String(range || '14d')}`
@@ -55,6 +63,22 @@ function writeAnalyticsCache(type, restaurantId, range, value) {
     value,
     expiresAt: Date.now() + ANALYTICS_RESPONSE_CACHE_TTL_MS,
   })
+
+  analyticsSnapshotCache.set(analyticsCacheKey(type, restaurantId, range), {
+    value,
+    expiresAt: Date.now() + ANALYTICS_SNAPSHOT_TTL_MS,
+  })
+}
+
+function readAnalyticsSnapshot(type, restaurantId, range) {
+  const key = analyticsCacheKey(type, restaurantId, range)
+  const entry = analyticsSnapshotCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    analyticsSnapshotCache.delete(key)
+    return null
+  }
+  return entry.value
 }
 
 function round2(value) {
@@ -262,14 +286,238 @@ async function warmAnalyticsState(restaurantId) {
 
   // Keep request freshness while capping synchronous work on hot endpoints.
   if (now - lastWarmAt >= ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS) {
-    await backfillCompletedOrderAnalytics({
+    analyticsWarmStateByRestaurant.set(restaurantKey, now)
+    void backfillCompletedOrderAnalytics({
       restaurantId,
       batchSize: ANALYTICS_INLINE_BACKFILL_BATCH_SIZE,
     })
-    analyticsWarmStateByRestaurant.set(restaurantKey, now)
   }
 
   void scheduleCompletedOrderAnalyticsBackfill({ restaurantId })
+}
+
+function buildAnalyticsRouteCacheTarget({ type, userId, restaurantId, range = '14d' }) {
+  const normalizedUserId = String(userId || '').trim()
+  const normalizedRestaurantId = String(restaurantId || '').trim()
+  const normalizedRange = String(range || '14d')
+
+  if (!normalizedUserId || !normalizedRestaurantId) {
+    return null
+  }
+
+  if (type === 'dashboard') {
+    return {
+      key: `analytics:dashboard:${normalizedUserId}:${normalizedRestaurantId}`,
+      tags: [`analytics:${normalizedRestaurantId}`],
+      ttlSeconds: 120,
+    }
+  }
+
+  if (type === 'decision') {
+    return {
+      key: `analytics:decision:${normalizedUserId}:${normalizedRestaurantId}:range:${normalizedRange}`,
+      tags: [`analytics:${normalizedRestaurantId}`],
+      ttlSeconds: 60,
+    }
+  }
+
+  return {
+    key: `analytics:detail:${normalizedUserId}:${normalizedRestaurantId}:range:${normalizedRange}`,
+    tags: [`analytics:${normalizedRestaurantId}`],
+    ttlSeconds: 60,
+  }
+}
+
+function queueAnalyticsRefresh({
+  refreshKey,
+  cooldownKey,
+  refreshFn,
+}) {
+  const now = Date.now()
+  if (analyticsRefreshInFlight.has(refreshKey)) {
+    logger.info('analytics_refresh_queue_state', {
+      action: 'skip_inflight',
+      refreshKey,
+      inFlightDepth: analyticsRefreshInFlight.size,
+    })
+    return false
+  }
+
+  const lastQueuedAt = Number(analyticsRefreshLastQueuedAt.get(cooldownKey) || 0)
+  if (now - lastQueuedAt < ANALYTICS_REFRESH_COOLDOWN_MS) {
+    logger.info('analytics_refresh_queue_state', {
+      action: 'skip_cooldown',
+      refreshKey,
+      inFlightDepth: analyticsRefreshInFlight.size,
+      cooldownMsRemaining: Math.max(0, ANALYTICS_REFRESH_COOLDOWN_MS - (now - lastQueuedAt)),
+    })
+    return false
+  }
+
+  analyticsRefreshLastQueuedAt.set(cooldownKey, now)
+  logger.info('analytics_refresh_queue_state', {
+    action: 'queued',
+    refreshKey,
+    inFlightDepth: analyticsRefreshInFlight.size + 1,
+  })
+  const task = (async () => {
+    try {
+      await refreshFn()
+      logger.info('analytics_refresh_queue_state', {
+        action: 'completed',
+        refreshKey,
+        inFlightDepth: Math.max(0, analyticsRefreshInFlight.size - 1),
+      })
+    } catch (error) {
+      logger.warn('analytics_refresh_queue_state', {
+        action: 'failed',
+        refreshKey,
+        inFlightDepth: Math.max(0, analyticsRefreshInFlight.size - 1),
+        message: error?.message || 'analytics_refresh_failed',
+      })
+    } finally {
+      analyticsRefreshInFlight.delete(refreshKey)
+    }
+  })()
+
+  analyticsRefreshInFlight.set(refreshKey, task)
+  return true
+}
+
+async function buildDashboardPayload(ownerRestaurant) {
+  const lowStockThresholdPercent = resolveLowStockThresholdPercent(ownerRestaurant)
+
+  const now = new Date()
+  const startDay = new Date(now)
+  startDay.setHours(0, 0, 0, 0)
+  const trendStart = new Date(startDay)
+  trendStart.setDate(trendStart.getDate() - 6)
+
+  const [metricsDocs, activeTables, lowStockNotifications] = await Promise.all([
+    ensureOrderMetricsRange({
+      restaurantId: ownerRestaurant._id,
+      startDate: trendStart,
+      endDate: startDay,
+    }),
+    Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
+    LOW_STOCK_NOTIFICATIONS_ENABLED
+      ? buildLowStockDashboardNotifications(ownerRestaurant._id, lowStockThresholdPercent)
+      : Promise.resolve([]),
+  ])
+
+  const metricsByDateKey = new Map(
+    metricsDocs.map((entry) => [
+      entry.dateKey,
+      {
+        totalRevenue: Number(entry.totalRevenue || 0),
+        totalOrders: Number(entry.totalOrders || 0),
+        averageOrderValue: Number(entry.averageOrderValue || 0),
+      },
+    ]),
+  )
+  const todayKey = startDay.toISOString().slice(0, 10)
+  const todayMetrics = metricsByDateKey.get(todayKey) || {
+    totalRevenue: 0,
+    totalOrders: 0,
+    averageOrderValue: 0,
+  }
+  const revenueTrend = buildDateKeys(trendStart, startDay).map((isoDate) => ({
+    day: formatShortDate(isoDate),
+    revenue: Number(metricsByDateKey.get(isoDate)?.totalRevenue || 0),
+  }))
+
+  return {
+    cards: {
+      todayRevenue: todayMetrics.totalRevenue,
+      totalOrdersToday: todayMetrics.totalOrders,
+      averageOrderValue: todayMetrics.averageOrderValue,
+      activeTables,
+    },
+    recentOrders: [],
+    topSellingItems: [],
+    revenueTrend,
+    notifications: {
+      lowStock: lowStockNotifications,
+      ttlHours: 24,
+      enabled: LOW_STOCK_NOTIFICATIONS_ENABLED,
+      thresholdPercent: lowStockThresholdPercent,
+    },
+  }
+}
+
+function scheduleDashboardRefresh({ ownerRestaurant, userId }) {
+  const restaurantId = String(ownerRestaurant?._id || '').trim()
+  if (!restaurantId) return false
+  const rangeKey = 'default'
+  const refreshKey = `dashboard:${restaurantId}:${rangeKey}`
+
+  return queueAnalyticsRefresh({
+    refreshKey,
+    cooldownKey: refreshKey,
+    refreshFn: async () => {
+      void warmAnalyticsState(restaurantId)
+      const payload = await buildDashboardPayload(ownerRestaurant)
+      writeAnalyticsCache('dashboard', restaurantId, rangeKey, payload)
+
+      const routeCache = buildAnalyticsRouteCacheTarget({
+        type: 'dashboard',
+        userId,
+        restaurantId,
+      })
+      if (routeCache) {
+        await seedCachedResponse({
+          key: routeCache.key,
+          payload,
+          status: 200,
+          tags: routeCache.tags,
+          ttlSeconds: routeCache.ttlSeconds,
+        })
+      }
+    },
+  })
+}
+
+function scheduleAnalyticsDetailRefresh({ ownerRestaurant, userId, range, type }) {
+  const restaurantId = String(ownerRestaurant?._id || '').trim()
+  if (!restaurantId) return false
+
+  const normalizedRange = String(range || '14d')
+  const refreshKey = `${String(type || 'advanced')}:${restaurantId}:${normalizedRange}`
+
+  return queueAnalyticsRefresh({
+    refreshKey,
+    cooldownKey: refreshKey,
+    refreshFn: async () => {
+      void warmAnalyticsState(restaurantId)
+      const analytics = type === 'decision'
+        ? await buildDecisionAnalytics({ restaurantId, range: normalizedRange })
+        : await buildAdvancedAnalytics({ restaurantId, range: normalizedRange })
+
+      const payload = {
+        restaurantId,
+        ...analytics,
+      }
+
+      writeAnalyticsCache(type === 'decision' ? 'decision' : 'advanced', restaurantId, normalizedRange, payload)
+
+      const routeCache = buildAnalyticsRouteCacheTarget({
+        type: type === 'decision' ? 'decision' : 'advanced',
+        userId,
+        restaurantId,
+        range: normalizedRange,
+      })
+
+      if (routeCache) {
+        await seedCachedResponse({
+          key: routeCache.key,
+          payload,
+          status: 200,
+          tags: routeCache.tags,
+          ttlSeconds: routeCache.ttlSeconds,
+        })
+      }
+    },
+  })
 }
 
 function buildDateKeys(startDate, endDate) {
@@ -296,64 +544,33 @@ export async function getDashboard(req, res, next) {
   try {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
-    const lowStockThresholdPercent = resolveLowStockThresholdPercent(ownerRestaurant)
-
-    const now = new Date()
-    const startDay = new Date(now)
-    startDay.setHours(0, 0, 0, 0)
-    const trendStart = new Date(startDay)
-    trendStart.setDate(trendStart.getDate() - 6)
-
-    const [metricsDocs, activeTables, lowStockNotifications] = await Promise.all([
-      ensureOrderMetricsRange({
-        restaurantId: ownerRestaurant._id,
-        startDate: trendStart,
-        endDate: startDay,
-      }),
-      Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
-      LOW_STOCK_NOTIFICATIONS_ENABLED
-        ? buildLowStockDashboardNotifications(ownerRestaurant._id, lowStockThresholdPercent)
-        : Promise.resolve([]),
-    ])
-
-    const metricsByDateKey = new Map(
-      metricsDocs.map((entry) => [
-        entry.dateKey,
-        {
-          totalRevenue: Number(entry.totalRevenue || 0),
-          totalOrders: Number(entry.totalOrders || 0),
-          averageOrderValue: Number(entry.averageOrderValue || 0),
-        },
-      ]),
-    )
-    const todayKey = startDay.toISOString().slice(0, 10)
-    const todayMetrics = metricsByDateKey.get(todayKey) || {
-      totalRevenue: 0,
-      totalOrders: 0,
-      averageOrderValue: 0,
+    const cacheRange = 'default'
+    const fresh = readAnalyticsCache('dashboard', ownerRestaurant._id, cacheRange)
+    if (fresh) {
+      void warmAnalyticsState(ownerRestaurant._id)
+      res.set('X-Analytics-Cache', 'hot')
+      return res.json(fresh)
     }
-    const revenueTrend = buildDateKeys(trendStart, startDay).map((isoDate) => ({
-      day: formatShortDate(isoDate),
-      revenue: Number(metricsByDateKey.get(isoDate)?.totalRevenue || 0),
-    }))
 
-    return res.json({
-      cards: {
-        todayRevenue: todayMetrics.totalRevenue,
-        totalOrdersToday: todayMetrics.totalOrders,
-        averageOrderValue: todayMetrics.averageOrderValue,
-        activeTables,
-      },
-      recentOrders: [],
-      topSellingItems: [],
-      revenueTrend,
-      notifications: {
-        lowStock: lowStockNotifications,
-        ttlHours: 24,
-        enabled: LOW_STOCK_NOTIFICATIONS_ENABLED,
-        thresholdPercent: lowStockThresholdPercent,
-      },
-    })
+    const stale = readAnalyticsSnapshot('dashboard', ownerRestaurant._id, cacheRange)
+    if (ANALYTICS_ASYNC_CACHE_ONLY) {
+      scheduleDashboardRefresh({
+        ownerRestaurant,
+        userId: req.user?._id,
+      })
+
+      if (stale) {
+        res.set('X-Analytics-Cache', 'stale')
+        return res.json(stale)
+      }
+
+      res.locals.skipResponseCache = true
+      return res.status(202).json({ status: 'processing', data: null })
+    }
+
+    const payload = await buildDashboardPayload(ownerRestaurant)
+    writeAnalyticsCache('dashboard', ownerRestaurant._id, cacheRange, payload)
+    return res.json(payload)
   } catch (error) {
     next(error)
   }
@@ -364,11 +581,30 @@ export async function getAnalytics(req, res, next) {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    const range = req.query.range || req.query.rangeDays
+    const range = String(req.query.range || req.query.rangeDays || '14d')
     const cached = readAnalyticsCache('advanced', ownerRestaurant._id, range)
     if (cached) {
       void warmAnalyticsState(ownerRestaurant._id)
+      res.set('X-Analytics-Cache', 'hot')
       return res.json(cached)
+    }
+
+    const stale = readAnalyticsSnapshot('advanced', ownerRestaurant._id, range)
+    if (ANALYTICS_ASYNC_CACHE_ONLY) {
+      scheduleAnalyticsDetailRefresh({
+        ownerRestaurant,
+        userId: req.user?._id,
+        range,
+        type: 'advanced',
+      })
+
+      if (stale) {
+        res.set('X-Analytics-Cache', 'stale')
+        return res.json(stale)
+      }
+
+      res.locals.skipResponseCache = true
+      return res.status(202).json({ status: 'processing', data: null })
     }
 
     void warmAnalyticsState(ownerRestaurant._id)
@@ -394,11 +630,30 @@ export async function getDecisionAnalytics(req, res, next) {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    const range = req.query.range || req.query.rangeDays
+    const range = String(req.query.range || req.query.rangeDays || '14d')
     const cached = readAnalyticsCache('decision', ownerRestaurant._id, range)
     if (cached) {
       void warmAnalyticsState(ownerRestaurant._id)
+      res.set('X-Analytics-Cache', 'hot')
       return res.json(cached)
+    }
+
+    const stale = readAnalyticsSnapshot('decision', ownerRestaurant._id, range)
+    if (ANALYTICS_ASYNC_CACHE_ONLY) {
+      scheduleAnalyticsDetailRefresh({
+        ownerRestaurant,
+        userId: req.user?._id,
+        range,
+        type: 'decision',
+      })
+
+      if (stale) {
+        res.set('X-Analytics-Cache', 'stale')
+        return res.json(stale)
+      }
+
+      res.locals.skipResponseCache = true
+      return res.status(202).json({ status: 'processing', data: null })
     }
 
     void warmAnalyticsState(ownerRestaurant._id)

@@ -436,25 +436,6 @@ export default function OrdersPage() {
         onConfirm={(payload) => printKotForOrder(reprintTargetOrder, payload)}
       />
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
-      <form className="card flex flex-col gap-3 p-4 md:flex-row md:items-end" onSubmit={applyFloorSearch}>
-        <label className="flex flex-1 flex-col gap-1 text-sm text-slate-700">
-          <span className="font-medium">Search by floor</span>
-          <input
-            className="input"
-            type="number"
-            min="1"
-            inputMode="numeric"
-            placeholder="Enter floor number"
-            value={floorSearch}
-            onChange={(event) => setFloorSearch(event.target.value)}
-          />
-        </label>
-        <Button type="submit">Search Floor</Button>
-        <Button type="button" variant="secondary" onClick={clearFloorSearch} disabled={!floorSearch && !appliedFloor}>
-          Clear
-        </Button>
-      </form>
-
       <div className="h-[calc(100vh-150px)] min-h-[780px]">
         <ManualOrderPanel
           restaurantId={restaurant?._id}
