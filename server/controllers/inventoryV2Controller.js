@@ -296,7 +296,7 @@ export async function approvePurchaseOrder(req, res, next) {
           approvedBy: req.user?._id || null,
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     )
 
     if (!po) return res.status(404).json({ message: 'Purchase order not found' })

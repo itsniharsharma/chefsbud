@@ -429,7 +429,7 @@ async function claimCompletedOrderForAnalytics(orderId) {
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
     },
   ).lean()
 }

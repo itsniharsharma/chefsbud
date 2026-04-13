@@ -100,7 +100,7 @@ async function claimNextJob(workerId) {
     },
     {
       sort: { nextRunAt: 1, createdAt: 1 },
-      new: true,
+      returnDocument: 'after',
     },
   ).lean()
 }

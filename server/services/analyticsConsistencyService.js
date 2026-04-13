@@ -103,12 +103,12 @@ export async function safeAnalyticsUpsert({
       resourceKey,
     })
     // Fall back to unsafe upsert if lock acquisition fails
-    return model.findOneAndUpdate(filter, update, { upsert: true, new: true, session })
+    return model.findOneAndUpdate(filter, update, { upsert: true, returnDocument: 'after', session })
   }
 
   try {
     // Perform upsert within lock
-    const result = await model.findOneAndUpdate(filter, update, { upsert: true, new: true, session })
+    const result = await model.findOneAndUpdate(filter, update, { upsert: true, returnDocument: 'after', session })
     return result
   } finally {
     // Always release lock
@@ -148,7 +148,7 @@ export async function safeAnalyticsBatchUpsert({
     for (const operation of operations) {
       const result = await model.findOneAndUpdate(operation.filter, operation.update, {
         upsert: true,
-        new: true,
+        returnDocument: 'after',
         session,
       })
       results.push(result)

@@ -512,7 +512,7 @@ async function rebuildRecipeVersionSnapshot({
       $inc: { version: 1 },
     },
     {
-      new: true,
+      returnDocument: 'after',
     },
   )
 
@@ -538,7 +538,7 @@ async function rebuildRecipeVersionSnapshot({
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: 'after',
     },
   )
 
@@ -1546,7 +1546,7 @@ export async function upsertRecipe(req, res, next) {
             createdBy: req.user?._id || null,
           },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       )
     } else {
       existingRecipe.ingredients = ingredients
@@ -1568,7 +1568,7 @@ export async function upsertRecipe(req, res, next) {
             createdBy: req.user?._id || null,
           },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       )
     }
 

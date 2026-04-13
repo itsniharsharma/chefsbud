@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import app from './app.js'
-import { closeDB, connectDB } from './config/db.js'
+import { closeDB, connectDB, isMongoStalePrimaryError, refreshMongoTopology } from './config/db.js'
 import config from './config/dataLifecycle.js'
 import { initializeScheduler, shutdownScheduler } from './services/dataLifecycleScheduler.js'
 import { cleanupAllLeaderships } from './services/schedulerLeaderElection.js'
@@ -68,6 +68,15 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason) => {
   logger.error('unhandled_rejection', { reason: String(reason?.message || reason) })
+
+  if (isMongoStalePrimaryError(reason)) {
+    void refreshMongoTopology('unhandled_rejection_stale_primary').catch((error) => {
+      logger.error('mongodb_topology_refresh_failed', {
+        message: error?.message,
+        source: 'unhandled_rejection',
+      })
+    })
+  }
 })
 
 process.on('SIGTERM', () => {

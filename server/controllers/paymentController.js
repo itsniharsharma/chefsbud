@@ -492,7 +492,7 @@ export async function handleRazorpayWebhook(req, res, next) {
     const user = await User.findOneAndUpdate(
       { 'billing.razorpaySubscriptionId': context.subscriptionId },
       { $set: patch },
-      { new: true, projection: { email: 1, name: 1, billing: 1 } },
+      { returnDocument: 'after', projection: { email: 1, name: 1, billing: 1 } },
     ).lean()
 
     if (!user) {
