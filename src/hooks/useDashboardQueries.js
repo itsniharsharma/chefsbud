@@ -22,6 +22,7 @@ export function useOrdersBoardQuery({ restaurantId, statusFilter, scope, floorNu
     staleTime: 20_000,
     refetchInterval: boardRefetchIntervalMs,
     refetchIntervalInBackground: false,
+    refetchOnMount: 'always',
     refetchOnWindowFocus: false,
     placeholderData: (previousData) => previousData,
   })

@@ -305,7 +305,11 @@ export async function getOrders(req, res, next) {
       restaurantId: req.params.restaurantId,
       page: pagination.page,
       limit: pagination.limit,
-      filters: { scope, floor: floorNumber || 'all' },
+      filters: {
+        scope,
+        floor: floorNumber || 'all',
+        status: view === 'active' ? String(req.query.status || 'All') : 'Completed',
+      },
     })
 
     if (cachedResult?.data) {
@@ -323,7 +327,11 @@ export async function getOrders(req, res, next) {
       restaurantId: req.params.restaurantId,
       page: pagination.page,
       limit: pagination.limit,
-      filters: { scope, floor: floorNumber || 'all' },
+      filters: {
+        scope,
+        floor: floorNumber || 'all',
+        status: view === 'active' ? String(req.query.status || 'All') : 'Completed',
+      },
     }, orders)
 
     return res.json(orders)
@@ -410,22 +418,22 @@ export async function updateOrderStatus(req, res, next) {
     const responseOrder = buildOptimisticOrderStatusPayload(previousOrder, update, orderStatus)
 
     if (eventQueued) {
-      runNonCriticalTask('order_status_side_effects', async () => {
-        invalidateCacheByTags(
-          buildOrderCacheTags({
-            restaurant,
-            tableNumber: responseOrder.tableNumber,
-            orderId: responseOrder._id,
-            includeAnalytics: wasCompleted !== isCompleted,
-          }),
-        )
-        invalidateOrderQueries(restaurant._id)
-        publishOrderChange({
-          restaurantId: restaurant._id,
-          type: 'status-updated',
+      // Keep board/status views coherent immediately after status changes.
+      invalidateCacheByTags(
+        buildOrderCacheTags({
+          restaurant,
+          tableNumber: responseOrder.tableNumber,
           orderId: responseOrder._id,
-          extra: { orderStatus: responseOrder.orderStatus },
-        })
+          includeAnalytics: wasCompleted !== isCompleted,
+        }),
+      )
+
+      await invalidateOrderQueries(restaurant._id)
+      publishOrderChange({
+        restaurantId: restaurant._id,
+        type: 'status-updated',
+        orderId: responseOrder._id,
+        extra: { orderStatus: responseOrder.orderStatus },
       })
     }
 
