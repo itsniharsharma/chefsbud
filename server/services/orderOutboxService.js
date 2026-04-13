@@ -1,5 +1,6 @@
 import OutboxEvent from '../models/OutboxEvent.js'
 import { enqueueOrderInventoryReservationJob } from './orderInventoryQueueService.js'
+import { processOrderStatusTransition } from './orderStatusProcessingService.js'
 import { logger } from '../utils/logger.js'
 
 const OUTBOX_WORKER_ENABLED = String(process.env.ORDER_OUTBOX_WORKER_ENABLED || 'true') === 'true'
@@ -53,13 +54,53 @@ export async function createOrderCreatedOutboxEvent({
   )
 }
 
+export async function createOrderStatusChangedOutboxEvent({
+  orderId,
+  restaurantId,
+  fromStatus,
+  toStatus,
+  transitionToken = '',
+  inventoryCycle = 0,
+  completedAt = null,
+  session,
+}) {
+  const normalizedOrderId = String(orderId || '').trim()
+  const normalizedRestaurantId = String(restaurantId || '').trim()
+  const normalizedFromStatus = String(fromStatus || '').trim()
+  const normalizedToStatus = String(toStatus || '').trim()
+
+  if (!normalizedOrderId || !normalizedRestaurantId || !normalizedToStatus) {
+    throw new Error('order_status_outbox_invalid_payload')
+  }
+
+  await OutboxEvent.create(
+    [
+      {
+        type: 'ORDER_STATUS_CHANGED',
+        eventKey: `ORDER_STATUS_CHANGED:${normalizedOrderId}:${normalizedFromStatus}:${normalizedToStatus}:${String(transitionToken || '0')}`,
+        payload: {
+          orderId: normalizedOrderId,
+          restaurantId: normalizedRestaurantId,
+          fromStatus: normalizedFromStatus,
+          toStatus: normalizedToStatus,
+          transitionToken: String(transitionToken || ''),
+          inventoryCycle: Number(inventoryCycle || 0),
+          completedAt: completedAt ? new Date(completedAt).toISOString() : null,
+        },
+        status: 'pending',
+      },
+    ],
+    { session },
+  )
+}
+
 async function claimNextEvent(workerId) {
   const now = new Date()
   const staleLockThreshold = new Date(now.getTime() - OUTBOX_LOCK_TIMEOUT_MS)
 
   return OutboxEvent.findOneAndUpdate(
     {
-      type: 'ORDER_CREATED',
+      type: { $in: ['ORDER_CREATED', 'ORDER_STATUS_CHANGED'] },
       $or: [
         {
           status: { $in: ['pending', 'retry'] },
@@ -88,12 +129,24 @@ async function claimNextEvent(workerId) {
 
 async function processEvent(event, workerId) {
   const payload = event?.payload || {}
-  await enqueueOrderInventoryReservationJob({
-    restaurantId: payload.restaurantId,
-    orderId: payload.orderId,
-    policy: String(payload.policy || 'soft'),
-    idempotencyPrefix: String(payload.idempotencyPrefix || 'order'),
-  })
+
+  if (event?.type === 'ORDER_CREATED') {
+    await enqueueOrderInventoryReservationJob({
+      restaurantId: payload.restaurantId,
+      orderId: payload.orderId,
+      policy: String(payload.policy || 'soft'),
+      idempotencyPrefix: String(payload.idempotencyPrefix || 'order'),
+    })
+  } else if (event?.type === 'ORDER_STATUS_CHANGED') {
+    await processOrderStatusTransition({
+      restaurantId: payload.restaurantId,
+      orderId: payload.orderId,
+      fromStatus: payload.fromStatus,
+      toStatus: payload.toStatus,
+      inventoryCycle: payload.inventoryCycle,
+      completedAt: payload.completedAt,
+    })
+  }
 
   await OutboxEvent.updateOne(
     { _id: event._id, workerId },
@@ -202,7 +255,7 @@ export function startOrderOutboxWorker() {
   outboxSummaryTimer = setInterval(async () => {
     try {
       const failedCount = await OutboxEvent.countDocuments({
-        type: 'ORDER_CREATED',
+        type: { $in: ['ORDER_CREATED', 'ORDER_STATUS_CHANGED'] },
         status: 'failed',
       })
       logger.info('order_outbox_failed_summary', { failedCount })

@@ -8,25 +8,14 @@ import { buildCustomerOrderDraft } from '../services/customerOrderService.js'
 import { buildValidatedBillAdjustments } from '../services/orderBillComposerService.js'
 import { sendKotReprintAuditEmail } from '../services/emailService.js'
 import {
-  processOrderConsumption,
-  reverseOrderConsumption,
-} from '../services/inventoryService.js'
-import {
-  consumeReservationsForOrder,
-} from '../services/inventoryV2Service.js'
-import {
   isOrderInventoryAsyncEnabled,
 } from '../services/orderInventoryQueueService.js'
 import { createOrderCreatedOutboxEvent } from '../services/orderOutboxService.js'
-import {
-  getOrderInventoryBehavior,
-  isInventoryConstraintError,
-} from '../config/inventoryRuntime.js'
+import { createOrderStatusChangedOutboxEvent } from '../services/orderOutboxService.js'
+import { getOrderInventoryBehavior } from '../config/inventoryRuntime.js'
 import {
   applyOrderRatingAnalytics,
-  syncCompletedOrderAnalytics,
 } from '../services/itemAnalyticsService.js'
-import { rebuildOrderMetricsForDate } from '../services/orderMetricsService.js'
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { invalidateOrderQueries } from '../services/queryResultCache.js'
 import { getCachedQueryResult, setCachedQueryResult } from '../services/queryResultCache.js'
@@ -77,6 +66,21 @@ function publishOrderChange({ restaurantId, type, orderId, extra = {} }) {
     orderId: String(orderId),
     ...extra,
   })
+}
+
+function buildOptimisticOrderStatusPayload(order, update, orderStatus) {
+  const completedAt = update.completedAt ?? order.completedAt ?? null
+  const deletedByOwnerAt = update.deletedByOwnerAt ?? order.deletedByOwnerAt ?? null
+
+  return {
+    ...order,
+    orderStatus,
+    completedAt,
+    hiddenFromActive: Boolean(update.hiddenFromActive),
+    hiddenFromRecent: typeof update.hiddenFromRecent === 'boolean' ? update.hiddenFromRecent : Boolean(order.hiddenFromRecent),
+    deletedByOwnerAt,
+    updatedAt: update.updatedAt || new Date(),
+  }
 }
 
 function runNonCriticalTask(taskName, taskFn) {
@@ -355,22 +359,6 @@ export async function updateOrderStatus(req, res, next) {
     const wasCompleted = existingOrder.orderStatus === 'Completed'
     const isCompleted = orderStatus === 'Completed'
 
-    if (wasCompleted && !isCompleted) {
-      // Treat delayed retries as idempotent: return latest state instead of conflict.
-      // This avoids noisy client errors when a stale transition arrives after completion.
-      const latestOrder = await Order.findOne({
-        _id: req.params.orderId,
-        restaurantId: restaurant._id,
-        isArchived: false,
-      })
-
-      if (!latestOrder) {
-        return res.status(404).json({ message: 'Order not found' })
-      }
-
-      return res.json(latestOrder)
-    }
-
     const update = {
       orderStatus,
       completedAt: isCompleted ? new Date() : null,
@@ -380,124 +368,69 @@ export async function updateOrderStatus(req, res, next) {
     }
 
     const session = await mongoose.startSession()
-    let order = null
+    let previousOrder = null
+    let eventQueued = false
 
     try {
       await session.withTransaction(async () => {
-        order = await Order.findOneAndUpdate(
+        previousOrder = await Order.findOneAndUpdate(
           { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
           { $set: update },
-          { returnDocument: 'after', runValidators: true, session },
+          {
+            returnDocument: 'before',
+            runValidators: true,
+            session,
+            projection: '_id restaurantId tableNumber floorNumber orderStatus items subtotalAmount discountTotal totalAmount inventoryConsumptionCycle inventoryProcessedAt completedAt analyticsTrackedAt hiddenFromActive hiddenFromRecent deletedByOwnerAt createdAt updatedAt',
+          },
         )
 
-        if (!order) {
+        if (!previousOrder) {
           throw new Error('Order not found')
         }
 
-        if (isCompleted && !wasCompleted && !existingOrder.inventoryProcessedAt) {
-          const inventoryBehavior = getOrderInventoryBehavior()
-          const cycle = Math.max(0, Number(existingOrder.inventoryConsumptionCycle || 0)) + 1
-
-          try {
-            let consumedFromReservation = 0
-            if (inventoryBehavior.mode !== 'off') {
-              const reservationResult = await consumeReservationsForOrder({
-                restaurantId: restaurant._id,
-                orderId: order._id,
-                createdBy: req.user?._id || null,
-                cycle,
-                policy: inventoryBehavior.consumptionPolicy,
-                session,
-              })
-
-              consumedFromReservation = Number(reservationResult?.consumedCount || 0)
-            }
-
-            if (!consumedFromReservation && inventoryBehavior.allowLegacyFallback) {
-              await processOrderConsumption(order, {
-                session,
-                createdBy: req.user?._id || null,
-                cycle,
-              })
-            }
-
-            order.inventoryConsumptionCycle = cycle
-            order.inventoryProcessedAt = new Date()
-            await order.save({ session })
-          } catch (inventoryError) {
-            if (
-              inventoryBehavior.blockOrderCompletionOnInventoryFailure ||
-              isInventoryConstraintError(inventoryError)
-            ) {
-              logger.error('order_inventory_policy_violation_non_blocking', {
-                orderId: String(order?._id || req.params.orderId || ''),
-                restaurantId: String(restaurant?._id || ''),
-                message: inventoryError?.message || 'inventory_policy_violation',
-                policy: inventoryBehavior.consumptionPolicy,
-              })
-
-              // Don't throw - allow order completion
-            } else {
-              logger.warn('order_inventory_consumption_failed', {
-                orderId: String(order?._id || req.params.orderId || ''),
-                restaurantId: String(restaurant?._id || ''),
-                message: inventoryError?.message || 'inventory_consumption_failed',
-              })
-            }
-          }
-        }
-
-        if (!isCompleted && wasCompleted && existingOrder.inventoryProcessedAt) {
-          const cycle = Math.max(1, Number(existingOrder.inventoryConsumptionCycle || 1))
-          try {
-            await reverseOrderConsumption(existingOrder, {
-              session,
-              createdBy: req.user?._id || null,
-              cycle,
-            })
-            order.inventoryProcessedAt = null
-            await order.save({ session })
-          } catch (inventoryError) {
-            logger.warn('order_inventory_reverse_failed', {
-              orderId: String(existingOrder?._id || req.params.orderId || ''),
-              restaurantId: String(restaurant?._id || ''),
-              message: inventoryError?.message || 'inventory_reverse_failed',
-            })
-          }
+        const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus || isCompleted || previousOrder.orderStatus === 'Completed'
+        if (shouldQueueStatusWork) {
+          await createOrderStatusChangedOutboxEvent({
+            orderId: previousOrder._id,
+            restaurantId: restaurant._id,
+            fromStatus: previousOrder.orderStatus,
+            toStatus: orderStatus,
+            transitionToken: previousOrder.updatedAt?.getTime?.() || previousOrder.updatedAt || '',
+            inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
+            completedAt: update.completedAt,
+            session,
+          })
+          eventQueued = true
         }
       })
     } finally {
       session.endSession()
     }
 
-    if (isCompleted && !wasCompleted) {
-      await Promise.all([
-        runMetricsTask('sync_completed_order_analytics', () => syncCompletedOrderAnalytics(order._id)),
-        runMetricsTask('rebuild_order_metrics_on_complete', () =>
-          rebuildOrderMetricsForDate({
-            restaurantId: restaurant._id,
-            date: order.completedAt || new Date(),
+    const responseOrder = buildOptimisticOrderStatusPayload(previousOrder, update, orderStatus)
+
+    if (eventQueued) {
+      runNonCriticalTask('order_status_side_effects', async () => {
+        invalidateCacheByTags(
+          buildOrderCacheTags({
+            restaurant,
+            tableNumber: responseOrder.tableNumber,
+            orderId: responseOrder._id,
+            includeAnalytics: wasCompleted !== isCompleted,
           }),
-        ),
-      ])
+        )
+        invalidateOrderQueries(restaurant._id)
+        publishOrderChange({
+          restaurantId: restaurant._id,
+          type: 'status-updated',
+          orderId: responseOrder._id,
+          extra: { orderStatus: responseOrder.orderStatus },
+        })
+      })
     }
 
-    invalidateCacheByTags(
-      buildOrderCacheTags({
-        restaurant,
-        tableNumber: order.tableNumber,
-        orderId: order._id,
-        includeAnalytics: wasCompleted !== isCompleted,
-      }),
-    )
-    invalidateOrderQueries(restaurant._id) // Invalidate query cache on status change
-    publishOrderChange({
-      restaurantId: restaurant._id,
-      type: 'status-updated',
-      orderId: order._id,
-      extra: { orderStatus: order.orderStatus },
-    })
-    return res.json(order)
+    res.set('X-Background-Jobs-Queued', eventQueued ? '1' : '0')
+    return res.json(responseOrder)
   } catch (error) {
     next(error)
   }
