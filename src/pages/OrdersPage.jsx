@@ -13,13 +13,9 @@ import { useOrdersBoardQuery, useTablesQuery, useMenuQuery } from '../hooks/useD
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
-const statusFilters = ['All', 'Preparing', 'Served']
-
 export default function OrdersPage() {
   const { restaurant } = useAuth()
   const [searchParams] = useSearchParams()
-  const [statusFilter, setStatusFilter] = useState('All')
-  const [scope, setScope] = useState('All')
   const [floorSearch, setFloorSearch] = useState('')
   const [appliedFloor, setAppliedFloor] = useState('')
   const [error, setError] = useState('')
@@ -37,8 +33,8 @@ export default function OrdersPage() {
 
   const { data } = useOrdersBoardQuery({
     restaurantId: restaurant?._id,
-    statusFilter,
-    scope,
+    statusFilter: 'All',
+    scope: 'All',
     floorNumber: appliedFloor,
   })
 
@@ -440,24 +436,6 @@ export default function OrdersPage() {
         onConfirm={(payload) => printKotForOrder(reprintTargetOrder, payload)}
       />
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
-      <div className="card flex flex-wrap gap-2 p-4">
-        {statusFilters.map((filter) => (
-          <Button
-            key={filter}
-            variant={statusFilter === filter ? 'primary' : 'secondary'}
-            onClick={() => setStatusFilter(filter)}
-          >
-            {filter}
-          </Button>
-        ))}
-        <Button variant={scope === 'Today' ? 'primary' : 'secondary'} onClick={() => setScope('Today')}>
-          Today
-        </Button>
-        <Button variant={scope === 'All' ? 'primary' : 'secondary'} onClick={() => setScope('All')}>
-          All
-        </Button>
-      </div>
-
       <form className="card flex flex-col gap-3 p-4 md:flex-row md:items-end" onSubmit={applyFloorSearch}>
         <label className="flex flex-1 flex-col gap-1 text-sm text-slate-700">
           <span className="font-medium">Search by floor</span>
