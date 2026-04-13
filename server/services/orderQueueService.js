@@ -8,8 +8,8 @@ import { reserveStockForOrder } from './inventoryV2Service.js'
 const QUEUE_KEY = 'order:jobs:pending'
 const DEAD_LETTER_KEY = 'order:jobs:deadletter'
 const BATCH_SIZE = Math.max(1, Number(process.env.ORDER_QUEUE_BATCH_SIZE || 10))
-const BATCH_DELAY_MS = Math.max(50, Number(process.env.ORDER_QUEUE_BATCH_DELAY_MS || 250))
 const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.ORDER_QUEUE_CONCURRENCY || 5)))
+const BRPOP_TIMEOUT_SECONDS = Math.max(1, Number(process.env.ORDER_QUEUE_BLOCK_TIMEOUT_SECONDS || 5))
 const MAX_RETRIES = Math.max(1, Number(process.env.ORDER_QUEUE_MAX_RETRIES || 3))
 const PROCESSED_JOBS_KEY = 'order:jobs:processed'
 const INFLIGHT_JOBS_KEY = 'order:jobs:inflight'
@@ -81,7 +81,7 @@ export async function enqueueOrderJob(job) {
 }
 
 /**
- * Start queue worker (poll and process jobs)
+ * Start queue worker (blocking BRPOP, not polling)
  */
 export async function startOrderQueueWorker() {
   if (queueWorkerRunning) {
@@ -94,15 +94,14 @@ export async function startOrderQueueWorker() {
   }
 
   queueWorkerRunning = true
-  logger.info('order_queue_worker_started', { concurrency: CONCURRENCY })
+  logger.info('order_queue_worker_started', { concurrency: CONCURRENCY, mode: 'blocking-brpop' })
 
   const workLoop = async (workerNo) => {
     while (queueWorkerRunning) {
       try {
         // Fetch next batch
-        const batch = await fetchJobBatch(BATCH_SIZE)
+        const batch = await fetchJobBatch(BATCH_SIZE, { blocking: true })
         if (!batch || batch.length === 0) {
-          await sleep(BATCH_DELAY_MS)
           continue
         }
 
@@ -113,8 +112,6 @@ export async function startOrderQueueWorker() {
         } finally {
           activeWorkers -= 1
         }
-
-        await sleep(BATCH_DELAY_MS)
       } catch (error) {
         logger.error('order_queue_work_loop_error', { error: error?.message, workerNo })
         await sleep(1000)
@@ -134,7 +131,46 @@ export async function stopOrderQueueWorker() {
 
 // ─────────────────────────────────────────────────────────────────
 
-async function fetchJobBatch(limit) {
+function extractBrpopPayload(result) {
+  if (!result) return null
+  if (Array.isArray(result)) {
+    if (result.length >= 2) return result[1]
+    if (result.length === 1) return result[0]
+    return null
+  }
+  if (typeof result === 'object') {
+    if (typeof result.value === 'string') return result.value
+    if (typeof result.element === 'string') return result.element
+  }
+  return typeof result === 'string' ? result : null
+}
+
+async function parseAndCollectJob(redis, rawPayload, jobs) {
+  if (!rawPayload) return
+
+  // JSON parse safety - catch and DLQ corrupted jobs
+  let job = null
+  try {
+    job = JSON.parse(rawPayload)
+  } catch (parseError) {
+    logger.error('order_queue_parse_error', {
+      error: parseError?.message,
+      rawData: String(rawPayload).substring(0, 100),
+    })
+    await redis.lpush(DEAD_LETTER_KEY, JSON.stringify({
+      rawData: String(rawPayload),
+      parseError: parseError?.message,
+      failedAt: new Date().toISOString(),
+    }))
+    return
+  }
+
+  if (job) {
+    jobs.push(job)
+  }
+}
+
+async function fetchJobBatch(limit, { blocking = false } = {}) {
   try {
     const redis = getRedisClient()
     if (!redis) {
@@ -143,31 +179,20 @@ async function fetchJobBatch(limit) {
 
     const jobs = []
 
-    for (let i = 0; i < limit; i++) {
+    if (blocking) {
+      const firstResult = await redis.brpop(QUEUE_KEY, BRPOP_TIMEOUT_SECONDS)
+      const firstPayload = extractBrpopPayload(firstResult)
+      if (!firstPayload) {
+        return []
+      }
+      await parseAndCollectJob(redis, firstPayload, jobs)
+    }
+
+    const alreadyFetched = jobs.length
+    for (let i = alreadyFetched; i < limit; i++) {
       const jobData = await redis.rpop(QUEUE_KEY)
       if (!jobData) break
-
-      // JSON parse safety - catch and DLQ corrupted jobs
-      let job = null
-      try {
-        job = JSON.parse(jobData)
-      } catch (parseError) {
-        logger.error('order_queue_parse_error', {
-          error: parseError?.message,
-          rawData: jobData.substring(0, 100),
-        })
-        // Move corrupted job to DLQ
-        await redis.lpush(DEAD_LETTER_KEY, JSON.stringify({
-          rawData: jobData,
-          parseError: parseError?.message,
-          failedAt: new Date().toISOString(),
-        }))
-        continue
-      }
-
-      if (job) {
-        jobs.push(job)
-      }
+      await parseAndCollectJob(redis, jobData, jobs)
     }
 
     if (jobs.length > 0) {
