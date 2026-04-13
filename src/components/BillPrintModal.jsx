@@ -251,6 +251,19 @@ export default function BillPrintModal({
         </div>
       ) : (
         <div className="space-y-3" aria-live="polite">
+          {/* Top actions */}
+          <div className="sticky top-0 z-10 -mx-1 flex justify-end gap-2 border-b border-slate-100 bg-white px-1 pb-2">
+            <Button type="button" variant="secondary" className="text-xs" onClick={() => setStep('choice')} disabled={printing}>
+              Back
+            </Button>
+            <Button type="button" variant="secondary" className="text-xs" onClick={onClose} disabled={printing}>
+              Cancel
+            </Button>
+            <Button type="button" className="text-xs" onClick={submitAdjustments} disabled={printing || !adjustments.length}>
+              {printing ? 'Printing...' : 'Print Final Bill'}
+            </Button>
+          </div>
+
           {/* Bill total summary */}
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
             <div className="flex items-center justify-between">
@@ -417,18 +430,6 @@ export default function BillPrintModal({
             ) : null}
           </div>
 
-          {/* Footer actions */}
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-2">
-            <Button type="button" variant="secondary" className="text-xs" onClick={() => setStep('choice')} disabled={printing}>
-              Back
-            </Button>
-            <Button type="button" variant="secondary" className="text-xs" onClick={onClose} disabled={printing}>
-              Cancel
-            </Button>
-            <Button type="button" className="text-xs" onClick={submitAdjustments} disabled={printing || !adjustments.length}>
-              {printing ? 'Printing...' : 'Print Final Bill'}
-            </Button>
-          </div>
         </div>
       )}
     </Modal>
