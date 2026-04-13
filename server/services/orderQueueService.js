@@ -103,6 +103,9 @@ export async function startOrderQueueWorker() {
         // Fetch next batch
         const batch = await fetchJobBatch(BATCH_SIZE, { blocking: true })
         if (!batch || batch.length === 0) {
+          // Some REST clients may return empty immediately for BRPOP-style commands.
+          // Back off to prevent tight idle loops and command amplification.
+          await sleep(BRPOP_TIMEOUT_SECONDS * 1000)
           continue
         }
 
