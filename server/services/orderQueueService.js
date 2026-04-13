@@ -21,6 +21,7 @@ const INFLIGHT_LOCK_TTL_SECONDS = 300
 
 let queueWorkerRunning = false
 let activeWorkers = 0
+let warnedBrpopUnsupported = false
 
 
 export async function enqueueOrderJob(job) {
@@ -145,6 +146,29 @@ function extractBrpopPayload(result) {
   return typeof result === 'string' ? result : null
 }
 
+async function blockingPop(redis, key, timeoutSeconds) {
+  if (typeof redis?.brpop === 'function') {
+    return redis.brpop(key, timeoutSeconds)
+  }
+
+  // Upstash REST SDK compatibility path: some versions expose low-level command() only.
+  if (typeof redis?.command === 'function') {
+    return redis.command(['BRPOP', key, String(timeoutSeconds)])
+  }
+
+  // Last-resort compatibility: no BRPOP support, fallback to a paced single RPOP.
+  if (!warnedBrpopUnsupported) {
+    warnedBrpopUnsupported = true
+    logger.warn('order_queue_brpop_not_supported_fallback_rpop', {
+      note: 'Using compatibility fallback; upgrade redis SDK for native BRPOP support.',
+    })
+  }
+
+  await sleep(Math.max(1, timeoutSeconds) * 1000)
+  const payload = await redis.rpop(key)
+  return payload ? [key, payload] : null
+}
+
 async function parseAndCollectJob(redis, rawPayload, jobs) {
   if (!rawPayload) return
 
@@ -180,7 +204,7 @@ async function fetchJobBatch(limit, { blocking = false } = {}) {
     const jobs = []
 
     if (blocking) {
-      const firstResult = await redis.brpop(QUEUE_KEY, BRPOP_TIMEOUT_SECONDS)
+      const firstResult = await blockingPop(redis, QUEUE_KEY, BRPOP_TIMEOUT_SECONDS)
       const firstPayload = extractBrpopPayload(firstResult)
       if (!firstPayload) {
         return []
