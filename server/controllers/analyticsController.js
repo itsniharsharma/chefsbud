@@ -1,5 +1,4 @@
 import MenuItem from '../models/MenuItem.js'
-import Restaurant from '../models/Restaurant.js'
 import Table from '../models/Table.js'
 import InventoryItem from '../models/InventoryItem.js'
 import InventoryPurchase from '../models/InventoryPurchase.js'
@@ -15,6 +14,7 @@ import {
 } from '../services/itemAnalyticsService.js'
 import { ensureOrderMetricsRange } from '../services/orderMetricsService.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
+import { resolveRestaurantIdentityBySlug } from '../services/orderDraftCache.js'
 
 const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(process.env.ANALYTICS_INLINE_BACKFILL_BATCH_SIZE || 40), 200))
 const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS || 60_000))
@@ -28,6 +28,34 @@ const LOW_STOCK_CACHE_TTL_MS = Math.max(30_000, Number(process.env.LOW_STOCK_CAC
 const LOW_STOCK_CACHE_MAX_ENTRIES = Math.max(100, Number(process.env.LOW_STOCK_CACHE_MAX_ENTRIES || 2000))
 const analyticsWarmStateByRestaurant = new Map()
 const lowStockNotificationsCache = new Map()
+const analyticsResponseCache = new Map()
+const ANALYTICS_RESPONSE_CACHE_TTL_MS = Math.max(10_000, Number(process.env.ANALYTICS_RESPONSE_CACHE_TTL_MS || 60_000))
+
+function analyticsCacheKey(type, restaurantId, range) {
+  return `${type}:${String(restaurantId || '')}:${String(range || '14d')}`
+}
+
+function readAnalyticsCache(type, restaurantId, range) {
+  const key = analyticsCacheKey(type, restaurantId, range)
+  const entry = analyticsResponseCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    analyticsResponseCache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function writeAnalyticsCache(type, restaurantId, range, value) {
+  if (analyticsResponseCache.size > 1000) {
+    const oldestKey = analyticsResponseCache.keys().next().value
+    if (oldestKey) analyticsResponseCache.delete(oldestKey)
+  }
+  analyticsResponseCache.set(analyticsCacheKey(type, restaurantId, range), {
+    value,
+    expiresAt: Date.now() + ANALYTICS_RESPONSE_CACHE_TTL_MS,
+  })
+}
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
@@ -336,16 +364,26 @@ export async function getAnalytics(req, res, next) {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    await warmAnalyticsState(ownerRestaurant._id)
+    const range = req.query.range || req.query.rangeDays
+    const cached = readAnalyticsCache('advanced', ownerRestaurant._id, range)
+    if (cached) {
+      void warmAnalyticsState(ownerRestaurant._id)
+      return res.json(cached)
+    }
+
+    void warmAnalyticsState(ownerRestaurant._id)
     const analytics = await buildAdvancedAnalytics({
       restaurantId: ownerRestaurant._id,
-      range: req.query.range || req.query.rangeDays,
+      range,
     })
 
-    return res.json({
+    const responsePayload = {
       restaurantId: String(ownerRestaurant._id),
       ...analytics,
-    })
+    }
+    writeAnalyticsCache('advanced', ownerRestaurant._id, range, responsePayload)
+
+    return res.json(responsePayload)
   } catch (error) {
     next(error)
   }
@@ -356,16 +394,26 @@ export async function getDecisionAnalytics(req, res, next) {
     const ownerRestaurant = await resolveRequestRestaurant(req, req.params.restaurantId)
     if (!ownerRestaurant) return res.status(404).json({ message: 'Restaurant not found' })
 
-    await warmAnalyticsState(ownerRestaurant._id)
+    const range = req.query.range || req.query.rangeDays
+    const cached = readAnalyticsCache('decision', ownerRestaurant._id, range)
+    if (cached) {
+      void warmAnalyticsState(ownerRestaurant._id)
+      return res.json(cached)
+    }
+
+    void warmAnalyticsState(ownerRestaurant._id)
     const analytics = await buildDecisionAnalytics({
       restaurantId: ownerRestaurant._id,
-      range: req.query.range || req.query.rangeDays,
+      range,
     })
 
-    return res.json({
+    const responsePayload = {
       restaurantId: String(ownerRestaurant._id),
       ...analytics,
-    })
+    }
+    writeAnalyticsCache('decision', ownerRestaurant._id, range, responsePayload)
+
+    return res.json(responsePayload)
   } catch (error) {
     next(error)
   }
@@ -403,13 +451,13 @@ export async function trackPublicMenuExposure(req, res, next) {
       return res.status(400).json({ message: 'restaurantSlug, sessionId, and menuItemIds are required' })
     }
 
-    const restaurant = await Restaurant.findOne({ slug: restaurantSlug }).select('_id').lean()
-    if (!restaurant) {
+    const restaurantLookup = await resolveRestaurantIdentityBySlug(restaurantSlug)
+    if (!restaurantLookup?.restaurantId) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
     const validItemIds = await MenuItem.find({
-      restaurantId: restaurant._id,
+      restaurantId: restaurantLookup.restaurantId,
       _id: { $in: menuItemIds },
       available: true,
     })
@@ -421,7 +469,7 @@ export async function trackPublicMenuExposure(req, res, next) {
     }
 
     const result = await trackMenuExposure({
-      restaurantId: restaurant._id,
+      restaurantId: restaurantLookup.restaurantId,
       sessionId,
       eventId,
       menuItemIds: validItemIds.map((item) => item._id),
@@ -445,13 +493,13 @@ export async function trackPublicAddToCart(req, res, next) {
       return res.status(400).json({ message: 'restaurantSlug and menuItemId are required' })
     }
 
-    const restaurant = await Restaurant.findOne({ slug: restaurantSlug }).select('_id').lean()
-    if (!restaurant) {
+    const restaurantLookup = await resolveRestaurantIdentityBySlug(restaurantSlug)
+    if (!restaurantLookup?.restaurantId) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
 
     const result = await trackAddToCart({
-      restaurantId: restaurant._id,
+      restaurantId: restaurantLookup.restaurantId,
       eventId,
       menuItemId,
       quantity,

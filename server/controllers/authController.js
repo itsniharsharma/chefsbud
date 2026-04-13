@@ -28,6 +28,8 @@ const OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.EMAIL_OTP_RESEND_COOLDOWN
 const OTP_MAX_ATTEMPTS = Number(process.env.EMAIL_OTP_MAX_ATTEMPTS || 5)
 const OTP_MAX_RESENDS = Number(process.env.EMAIL_OTP_MAX_RESENDS || 8)
 const PENDING_TTL_MINUTES = Number(process.env.REGISTRATION_PENDING_TTL_MINUTES || 60)
+const AUTH_RESTAURANT_CACHE_TTL_MS = Math.max(10_000, Number(process.env.AUTH_RESTAURANT_CACHE_TTL_MS || 60_000))
+const ownerRestaurantCache = new Map()
 
 function normalizeGstin(value) {
   return String(value || '').toUpperCase().replace(/\s+/g, '').trim()
@@ -77,10 +79,34 @@ function signToken(payload) {
 }
 
 async function getOwnerRestaurant(ownerId) {
+  const cacheKey = String(ownerId || '')
+  if (cacheKey) {
+    const cached = ownerRestaurantCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value
+    }
+    if (cached && cached.expiresAt <= Date.now()) {
+      ownerRestaurantCache.delete(cacheKey)
+    }
+  }
+
   const restaurant = await Restaurant.findOne({ ownerId })
     .select(sessionRestaurantProjection)
     .lean()
-  return serializeSessionRestaurant(restaurant)
+  const serialized = serializeSessionRestaurant(restaurant)
+
+  if (cacheKey) {
+    if (ownerRestaurantCache.size > 5000) {
+      const oldestKey = ownerRestaurantCache.keys().next().value
+      if (oldestKey) ownerRestaurantCache.delete(oldestKey)
+    }
+    ownerRestaurantCache.set(cacheKey, {
+      value: serialized,
+      expiresAt: Date.now() + AUTH_RESTAURANT_CACHE_TTL_MS,
+    })
+  }
+
+  return serialized
 }
 
 function serializeUser(user) {
@@ -344,6 +370,8 @@ export async function login(req, res, next) {
     const { email, password } = req.body
     const normalizedEmail = normalizeEmail(email)
     const user = await User.findOne({ email: normalizedEmail })
+      .select('_id name email password emailVerified role billing tokenVersion')
+      .lean()
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' })
     }
@@ -425,7 +453,7 @@ export async function staffLogin(req, res, next) {
       return res.status(403).json({ message: 'Manager email is not verified' })
     }
 
-    await StaffAccount.updateOne({ _id: staff._id }, { $set: { lastLoginAt: new Date() } })
+    void StaffAccount.updateOne({ _id: staff._id }, { $set: { lastLoginAt: new Date() } })
 
     const token = signToken({
       userId: String(owner._id),
@@ -474,12 +502,19 @@ export async function me(req, res, next) {
       })
     }
 
-    const currentUser = await User.findById(req.user._id).lean()
+    const [currentUser, restaurant] = await Promise.all([
+      User.findById(req.user._id)
+        .select('_id name email emailVerified role billing tokenVersion')
+        .lean(),
+      serializeSessionRestaurant(req.restaurant)
+        ? Promise.resolve(serializeSessionRestaurant(req.restaurant))
+        : getOwnerRestaurant(req.user._id),
+    ])
+
     if (!currentUser) {
       return res.status(401).json({ message: 'Unauthorized' })
     }
 
-    const restaurant = serializeSessionRestaurant(req.restaurant) || (await getOwnerRestaurant(req.user._id))
     return res.json({
       user: serializeUser(currentUser),
       restaurant,
