@@ -73,17 +73,131 @@ export function buildBillHtml({ order, restaurantName }) {
   <head>
     <meta charset="utf-8" />
     <title>Bill ${escapeHtml(orderDisplayNumber)}</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: auto;
+        height: auto;
+        min-height: 0;
+        background: #fff;
+        color: #0f172a;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        display: inline-block;
+      }
+
+      .bill-container {
+        box-sizing: border-box;
+        display: inline-block;
+        width: 190mm;
+        max-width: 100%;
+        margin: 0;
+        padding: 8mm;
+        min-height: 0;
+        height: auto;
+      }
+
+      .bill-title {
+        margin: 0 0 6px 0;
+        font-size: 22px;
+      }
+
+      .meta {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      hr {
+        margin: 8px 0;
+        border: 0;
+        border-top: 1px solid #cbd5e1;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        page-break-inside: avoid;
+      }
+
+      th,
+      td {
+        padding: 3px 0;
+      }
+
+      .totals {
+        font-size: 13px;
+        line-height: 1.5;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+      }
+
+      .totals-strong {
+        font-weight: 700;
+        font-size: 15px;
+      }
+
+      .avoid-break {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+
+      @page {
+        size: A4 portrait;
+        margin: 6mm;
+      }
+
+      @media print {
+        html,
+        body {
+          margin: 0 !important;
+          padding: 0 !important;
+          width: auto !important;
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+        }
+
+        .bill-container {
+          width: auto !important;
+          max-width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          min-height: 0 !important;
+          height: auto !important;
+        }
+
+        .avoid-break {
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+
+        hr {
+          margin: 6px 0;
+        }
+      }
+    </style>
   </head>
-  <body style="font-family:Arial,sans-serif;padding:16px;color:#0f172a;">
-    <h2 style="margin:0 0 8px 0;">${escapeHtml(restaurantName || "Chef's Bud")}</h2>
-    <div style="font-size:12px;line-height:1.6;">
+  <body>
+    <main class="bill-container">
+    <h2 class="bill-title">${escapeHtml(restaurantName || "Chef's Bud")}</h2>
+    <div class="meta avoid-break">
       <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
       <div><strong>Table:</strong> ${escapeHtml(order.tableNumber)} | <strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</div>
       <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
       <div><strong>Status:</strong> ${escapeHtml(order.orderStatus || '-')}</div>
     </div>
-    <hr style="margin:10px 0;"/>
-    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+    <hr />
+    <table class="avoid-break">
       <thead>
         <tr>
           <th style="text-align:left;padding:4px 0;">Item</th>
@@ -95,9 +209,9 @@ export function buildBillHtml({ order, restaurantName }) {
       <tbody>${buildBillRows(order.items || [])}</tbody>
     </table>
     ${hasAdjustments ? `
-    <hr style="margin:10px 0;"/>
-    <div style="font-size:12px;font-weight:700;margin-bottom:4px;">Bill Adjustments</div>
-    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+    <hr />
+    <div style="font-size:12px;font-weight:700;margin-bottom:4px;" class="avoid-break">Bill Adjustments</div>
+    <table class="avoid-break">
       <thead>
         <tr>
           <th style="text-align:left;padding:4px 0;">Item</th>
@@ -109,13 +223,14 @@ export function buildBillHtml({ order, restaurantName }) {
       </thead>
       <tbody>${buildAdjustmentRows(order)}</tbody>
     </table>` : ''}
-    <hr style="margin:10px 0;"/>
-    <div style="font-size:13px;line-height:1.7;display:flex;flex-direction:column;align-items:flex-end;">
+    <hr />
+    <div class="totals avoid-break">
       <div>Order subtotal: ${escapeHtml(formatCurrencyINR(baseSubtotal))}</div>
       ${discountTotal > 0 ? `<div>Discounts: -${escapeHtml(formatCurrencyINR(discountTotal))}</div>` : ''}
       ${adjustmentSubtotal > 0 ? `<div>Bill adjustments: +${escapeHtml(formatCurrencyINR(adjustmentSubtotal))}</div>` : ''}
-      <div style="font-weight:700;font-size:15px;">Total: ${escapeHtml(formatCurrencyINR(finalTotal))}</div>
+      <div class="totals-strong">Total: ${escapeHtml(formatCurrencyINR(finalTotal))}</div>
     </div>
+    </main>
   </body>
 </html>`
 }
@@ -130,22 +245,106 @@ export function buildKotHtml({ order }) {
   <head>
     <meta charset="utf-8" />
     <title>KOT - ${escapeHtml(orderDisplayNumber)}</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: auto;
+        height: auto;
+        min-height: 0;
+        background: #fff;
+        color: #0f172a;
+        font-family: Arial, sans-serif;
+      }
+
+      body {
+        display: inline-block;
+      }
+
+      .kot-container {
+        box-sizing: border-box;
+        display: inline-block;
+        width: 80mm;
+        max-width: 100%;
+        margin: 0;
+        padding: 6mm;
+        min-height: 0;
+        height: auto;
+      }
+
+      .kot-title {
+        margin: 0 0 6px 0;
+        font-size: 20px;
+      }
+
+      .meta {
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      hr {
+        margin: 8px 0;
+        border: 0;
+        border-top: 1px solid #cbd5e1;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        page-break-inside: avoid;
+      }
+
+      .avoid-break {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+
+      @page {
+        size: auto;
+        margin: 5mm;
+      }
+
+      @media print {
+        html,
+        body {
+          margin: 0 !important;
+          padding: 0 !important;
+          width: auto !important;
+          height: auto !important;
+          min-height: 0 !important;
+          overflow: visible !important;
+        }
+
+        .kot-container {
+          width: auto !important;
+          max-width: 100% !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          min-height: 0 !important;
+          height: auto !important;
+        }
+      }
+    </style>
   </head>
-  <body style="font-family:Arial,sans-serif;padding:14px;color:#0f172a;">
-    <h2 style="margin:0 0 8px 0;">KITCHEN ORDER TICKET</h2>
-    <div style="font-size:12px;line-height:1.6;">
+  <body>
+    <main class="kot-container">
+    <h2 class="kot-title">KITCHEN ORDER TICKET</h2>
+    <div class="meta avoid-break">
       <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
       <div><strong>Table:</strong> ${order.tableNumber} | <strong>Floor:</strong> ${order.floorNumber || 1}</div>
       <div><strong>Time:</strong> ${createdAt}</div>
       <div><strong>Status:</strong> ${order.orderStatus}</div>
     </div>
-    <hr style="margin:10px 0;"/>
-    <table style="width:100%;font-size:13px;border-collapse:collapse;">
+    <hr />
+    <table class="avoid-break">
       <tbody>
         ${buildKotRows(order)}
       </tbody>
     </table>
-    ${note ? `<hr style="margin:10px 0;"/><div style="font-size:12px;"><strong>Note:</strong> ${note}</div>` : ''}
+    ${note ? `<hr /><div style="font-size:12px;" class="avoid-break"><strong>Note:</strong> ${note}</div>` : ''}
+    </main>
   </body>
 </html>`
 }
