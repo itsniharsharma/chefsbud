@@ -81,6 +81,8 @@ const ManualOrderPanel = memo(function ManualOrderPanel({
   onOrderCreated,
   externalActiveCategory = '',
   qrOrdersPanel = null,
+  onRefreshOrders = null,
+  refreshingOrders = false,
 }) {
   const [selectedFloor, setSelectedFloor] = useState('1')
   const [selectedTable, setSelectedTable] = useState('')
@@ -555,7 +557,19 @@ const ManualOrderPanel = memo(function ManualOrderPanel({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-          <h3 className="mb-2 text-base font-semibold text-slate-800">Orders</h3>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-slate-800">Orders</h3>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={onRefreshOrders}
+              disabled={refreshingOrders || typeof onRefreshOrders !== 'function'}
+              className="px-3 py-1.5 text-xs"
+            >
+              {refreshingOrders ? 'Refreshing...' : 'Refresh'}
+            </Button>
+          </div>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
             {qrOrdersPanel || <p className="text-sm text-slate-500"> All orders will appear here.</p>}
           </div>

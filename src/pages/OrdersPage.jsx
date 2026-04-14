@@ -29,7 +29,7 @@ export default function OrdersPage() {
   const statusMutationLockRef = useRef(false)
   const queryClient = useQueryClient()
 
-  const { data } = useOrdersBoardQuery({
+  const { data, isFetching: isBoardRefreshing } = useOrdersBoardQuery({
     restaurantId: restaurant?._id,
     statusFilter: 'All',
     scope: 'All',
@@ -106,6 +106,21 @@ export default function OrdersPage() {
     return queryClient.invalidateQueries({
       queryKey: ['dashboard', 'recent-orders', restaurant._id],
     })
+  }
+
+  const forceRefreshOrders = async () => {
+    if (!restaurant?._id) return
+
+    await Promise.all([
+      queryClient.refetchQueries({
+        queryKey: ['dashboard', 'orders-board', restaurant._id],
+        type: 'active',
+      }),
+      queryClient.refetchQueries({
+        queryKey: ['dashboard', 'recent-orders', restaurant._id],
+        type: 'active',
+      }),
+    ])
   }
 
   const updateStatusMutation = useMutation({
@@ -414,6 +429,8 @@ export default function OrdersPage() {
           menu={menu}
           tables={tables}
           onOrderCreated={onManualOrderCreated}
+          onRefreshOrders={forceRefreshOrders}
+          refreshingOrders={isBoardRefreshing}
           externalActiveCategory={sidebarCategoryId}
           qrOrdersPanel={
             activeOrders.length ? (
