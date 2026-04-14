@@ -434,7 +434,7 @@ export default function OrdersPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-slate-500">No active QR orders in this view.</p>
+              <p className="text-sm text-slate-500"> All orders will appear here.</p>
             )
           }
         />

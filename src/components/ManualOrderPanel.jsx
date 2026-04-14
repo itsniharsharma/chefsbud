@@ -555,9 +555,9 @@ const ManualOrderPanel = memo(function ManualOrderPanel({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-red-100 bg-white p-4 shadow-sm">
-          <h3 className="mb-2 text-base font-semibold text-slate-800">QR Orders</h3>
+          <h3 className="mb-2 text-base font-semibold text-slate-800">Orders</h3>
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-            {qrOrdersPanel || <p className="text-sm text-slate-500">No active QR orders in this view.</p>}
+            {qrOrdersPanel || <p className="text-sm text-slate-500"> All orders will appear here.</p>}
           </div>
         </div>
       </section>
