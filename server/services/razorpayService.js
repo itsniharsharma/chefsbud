@@ -117,3 +117,14 @@ export function listCustomers(params = {}) {
 export function createSubscription(payload) {
   return razorpayPost('/subscriptions', payload)
 }
+
+export function getSubscription(subscriptionId) {
+  const normalizedId = String(subscriptionId || '').trim()
+  if (!normalizedId) {
+    const error = new Error('Subscription id is required')
+    error.statusCode = 400
+    throw error
+  }
+
+  return razorpayGet(`/subscriptions/${normalizedId}`)
+}

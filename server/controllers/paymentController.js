@@ -4,6 +4,7 @@ import { validationResult } from 'express-validator'
 import {
   createCustomer,
   createSubscription,
+  getSubscription,
   getRazorpayKeyId,
   listCustomers,
   verifySignature,
@@ -25,7 +26,50 @@ const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
 const CUSTOMER_LOOKUP_PAGE_SIZE = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_PAGE_SIZE || 100), 100))
 const CUSTOMER_LOOKUP_MAX_PAGES = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_MAX_PAGES || 3), 50))
+const SUBSCRIPTION_REUSE_STALE_MS = Math.max(5 * 60 * 1000, Number(process.env.RAZORPAY_SUBSCRIPTION_REUSE_STALE_MS || 45 * 60 * 1000))
 const customerIdByEmailCache = new Map()
+
+function isReusableSubscriptionStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  return ['created', 'authenticated', 'active'].includes(normalized)
+}
+
+function isTerminalSubscriptionStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase()
+  return ['cancelled', 'completed', 'expired', 'halted'].includes(normalized)
+}
+
+function isStaleCreatedSubscription(subscription) {
+  const status = String(subscription?.status || '').trim().toLowerCase()
+  if (status !== 'created' && status !== 'authenticated') {
+    return false
+  }
+
+  const createdAtSeconds = Number(subscription?.created_at || 0)
+  if (!Number.isFinite(createdAtSeconds) || createdAtSeconds <= 0) {
+    return false
+  }
+
+  return Date.now() - createdAtSeconds * 1000 > SUBSCRIPTION_REUSE_STALE_MS
+}
+
+function buildPlanSummary() {
+  return {
+    setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+    firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+    totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
+    recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+  }
+}
+
+function buildCheckoutResponse({ subscriptionId, customerId }) {
+  return {
+    keyId: getRazorpayKeyId(),
+    subscriptionId,
+    customerId: customerId || '',
+    planSummary: buildPlanSummary(),
+  }
+}
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase()
@@ -234,33 +278,47 @@ export async function createHybridSubscription(req, res, next) {
     }
 
     const user = await getUserOrThrow(req.user._id)
+    const existingSubscriptionId = String(user.billing?.razorpaySubscriptionId || '').trim()
 
-    if (user.billing?.status === 'active' && user.billing?.razorpaySubscriptionId) {
-      return res.status(200).json({
-        keyId: getRazorpayKeyId(),
-        subscriptionId: user.billing.razorpaySubscriptionId,
-        customerId: user.billing?.razorpayCustomerId || '',
-        planSummary: {
-          setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
-          firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-          totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
-          recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-        },
-      })
-    }
+    if (existingSubscriptionId) {
+      try {
+        const existingSubscription = await getSubscription(existingSubscriptionId)
+        const existingStatus = String(existingSubscription?.status || '').trim().toLowerCase()
 
-    if (user.billing?.razorpaySubscriptionId) {
-      return res.status(200).json({
-        keyId: getRazorpayKeyId(),
-        subscriptionId: user.billing.razorpaySubscriptionId,
-        customerId: user.billing?.razorpayCustomerId || '',
-        planSummary: {
-          setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
-          firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-          totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
-          recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-        },
-      })
+        if (isReusableSubscriptionStatus(existingStatus) && !isStaleCreatedSubscription(existingSubscription)) {
+          return res.status(200).json(
+            buildCheckoutResponse({
+              subscriptionId: existingSubscriptionId,
+              customerId: user.billing?.razorpayCustomerId,
+            }),
+          )
+        }
+
+        if (isTerminalSubscriptionStatus(existingStatus) || isStaleCreatedSubscription(existingSubscription)) {
+          user.billing = {
+            ...user.billing,
+            status: user.billing?.status === 'active' ? 'active' : 'pending',
+            razorpaySubscriptionId: '',
+          }
+          await user.save()
+        }
+      } catch (subscriptionError) {
+        const statusCode = Number(subscriptionError?.statusCode || 0)
+        if (statusCode === 404) {
+          user.billing = {
+            ...user.billing,
+            status: user.billing?.status === 'active' ? 'active' : 'pending',
+            razorpaySubscriptionId: '',
+          }
+          await user.save()
+        } else {
+          logger.warn('hybrid_subscription_lookup_failed', {
+            userId: String(user._id),
+            subscriptionId: existingSubscriptionId,
+            message: subscriptionError?.message || 'subscription_lookup_failed',
+          })
+        }
+      }
     }
 
     let customerId = user.billing?.razorpayCustomerId
@@ -344,15 +402,10 @@ export async function createHybridSubscription(req, res, next) {
     await user.save()
 
     return res.status(201).json({
-      keyId: getRazorpayKeyId(),
-      subscriptionId: subscription.id,
-      customerId,
-      planSummary: {
-        setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
-        firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-        totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
-        recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-      },
+      ...buildCheckoutResponse({
+        subscriptionId: subscription.id,
+        customerId,
+      }),
     })
   } catch (error) {
     next(error)
