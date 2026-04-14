@@ -10,6 +10,7 @@ import { orderService } from '../services/orderService'
 import { playOrderAlertSound } from '../services/orderAlertAudio'
 import { useAuth } from '../hooks/useAuth'
 import { useOrdersBoardQuery, useTablesQuery, useMenuQuery } from '../hooks/useDashboardQueries'
+import { queryKeys } from '../lib/queryKeys'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
@@ -24,6 +25,7 @@ export default function OrdersPage() {
   const [printingBillOrderId, setPrintingBillOrderId] = useState('')
   const [printingKotOrderId, setPrintingKotOrderId] = useState('')
   const [statusActionBusy, setStatusActionBusy] = useState(false)
+  const [manualRefreshPending, setManualRefreshPending] = useState(false)
   const [billTargetOrder, setBillTargetOrder] = useState(null)
   const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
   const statusMutationLockRef = useRef(false)
@@ -111,16 +113,24 @@ export default function OrdersPage() {
   const forceRefreshOrders = async () => {
     if (!restaurant?._id) return
 
-    await Promise.all([
-      queryClient.refetchQueries({
-        queryKey: ['dashboard', 'orders-board', restaurant._id],
-        type: 'active',
-      }),
-      queryClient.refetchQueries({
-        queryKey: ['dashboard', 'recent-orders', restaurant._id],
-        type: 'active',
-      }),
-    ])
+    setManualRefreshPending(true)
+    try {
+      const [activeOrders, recentOrders] = await Promise.all([
+        orderService.listBoard(restaurant._id, { status: 'All', scope: 'all', refresh: '1' }),
+        orderService.list(restaurant._id, { view: 'completed', scope: 'all', limit: 200, refresh: '1' }),
+      ])
+
+      queryClient.setQueryData(
+        queryKeys.dashboard.ordersBoard(restaurant._id, 'All', 'All'),
+        activeOrders,
+      )
+      queryClient.setQueryData(
+        queryKeys.dashboard.recentOrders(restaurant._id, 'All'),
+        Array.isArray(recentOrders) ? recentOrders : [],
+      )
+    } finally {
+      setManualRefreshPending(false)
+    }
   }
 
   const updateStatusMutation = useMutation({
@@ -430,7 +440,7 @@ export default function OrdersPage() {
           tables={tables}
           onOrderCreated={onManualOrderCreated}
           onRefreshOrders={forceRefreshOrders}
-          refreshingOrders={isBoardRefreshing}
+          refreshingOrders={isBoardRefreshing || manualRefreshPending}
           externalActiveCategory={sidebarCategoryId}
           qrOrdersPanel={
             activeOrders.length ? (

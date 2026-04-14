@@ -21,6 +21,7 @@ import { invalidateCacheByTags } from '../services/responseCache.js'
 import { invalidateOrderQueries } from '../services/queryResultCache.js'
 import { getCachedQueryResult, setCachedQueryResult } from '../services/queryResultCache.js'
 import { emitOrderChanged } from '../realtime/orderEvents.js'
+import { recordEndpointMetric } from '../middleware/performanceTracing.js'
 import { logger } from '../utils/logger.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 
@@ -36,12 +37,49 @@ const ORDER_DATE_KEY_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit',
 })
+const ORDER_READ_TRACE_TIMING = String(process.env.ORDER_READ_TRACE_TIMING || 'false') === 'true'
+const ORDER_READ_SLOW_MS = Math.max(250, Number(process.env.ORDER_READ_SLOW_MS || 300))
 
 const orderListProjection =
   '_id floorNumber tableNumber items subtotalAmount discountTotal billAdjustments billAdjustmentSubtotal billFinalTotalAmount appliedOffers customerNote totalAmount paymentStatus billPrinted billPrintedAt kotPrinted kotPrintedAt orderStatus inventoryConsumptionCycle inventoryProcessedAt createdAt completedAt hiddenFromActive deletedByOwnerAt paymentProvider providerOrderId providerPaymentId paymentCapturedAt paymentFailureReason orderDateKey dailyOrderNumber'
 
 function round2(value) {
   return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
+function elapsedMs(startNs) {
+  return Number(process.hrtime.bigint() - startNs) / 1_000_000
+}
+
+function shouldLogReadTiming(totalMs) {
+  return ORDER_READ_TRACE_TIMING || totalMs >= ORDER_READ_SLOW_MS
+}
+
+function logOrdersReadTiming({ req, restaurantId, view, scope, floorNumber, cacheHit, timings }) {
+  const totalMs = Number(timings?.totalMs || 0)
+  recordEndpointMetric(req, 'orders_read_ms', totalMs, {
+    view,
+    scope,
+    floor: floorNumber || 'all',
+    cacheHit: cacheHit ? 'yes' : 'no',
+  })
+
+  if (!shouldLogReadTiming(totalMs)) {
+    return
+  }
+
+  logger.info('orders_read_timing', {
+    restaurantId,
+    view,
+    scope,
+    floorNumber: floorNumber || 'all',
+    cacheHit: cacheHit ? 'yes' : 'no',
+    resolveRestaurantMs: Math.round(Number(timings?.resolveRestaurantMs || 0)),
+    cacheLookupMs: Math.round(Number(timings?.cacheLookupMs || 0)),
+    queryMs: Math.round(Number(timings?.queryMs || 0)),
+    enrichMs: Math.round(Number(timings?.enrichMs || 0)),
+    totalMs: Math.round(totalMs),
+  })
 }
 
 function respondRestaurantNotFound(res) {
@@ -273,10 +311,13 @@ async function enrichOrdersWithFloorNumbers(restaurantId, orders = []) {
 
 export async function getOrders(req, res, next) {
   try {
+    const requestStartedAt = process.hrtime.bigint()
+    const resolveStartedAt = process.hrtime.bigint()
     const restaurant = await resolveRequestRestaurant(req)
     if (!restaurant) {
       return respondRestaurantNotFound(res)
     }
+    const resolveRestaurantMs = elapsedMs(resolveStartedAt)
 
     if (String(restaurant._id) !== req.params.restaurantId) {
       return res.status(403).json({ message: 'Forbidden' })
@@ -298,9 +339,12 @@ export async function getOrders(req, res, next) {
       query.floorNumber = floorNumber
     }
 
-    const shouldUseQueryCache = view === 'completed'
+    const bypassReadCache = String(req.query.refresh || req.headers['x-bypass-response-cache'] || '') === '1'
+    const shouldUseQueryCache = view === 'completed' && !bypassReadCache
+    let cacheLookupMs = 0
 
     if (shouldUseQueryCache) {
+      const cacheLookupStartedAt = process.hrtime.bigint()
       const cachedResult = await getCachedQueryResult('completed_today', {
         restaurantId: req.params.restaurantId,
         page: pagination.page,
@@ -311,15 +355,49 @@ export async function getOrders(req, res, next) {
           status: 'Completed',
         },
       })
+      cacheLookupMs = elapsedMs(cacheLookupStartedAt)
 
       if (cachedResult?.data) {
+        logOrdersReadTiming({
+          req,
+          restaurantId: req.params.restaurantId,
+          view,
+          scope,
+          floorNumber,
+          cacheHit: true,
+          timings: {
+            totalMs: elapsedMs(requestStartedAt),
+            resolveRestaurantMs,
+            cacheLookupMs,
+          },
+        })
         res.set('X-Cache-Hit', cachedResult.source)
         return res.json(cachedResult.data)
       }
     }
 
+    const queryStartedAt = process.hrtime.bigint()
     const rawOrders = await listOrdersByQuery(query, pagination)
+    const queryMs = elapsedMs(queryStartedAt)
+    const enrichStartedAt = process.hrtime.bigint()
     const orders = await enrichOrdersWithFloorNumbers(restaurant._id, rawOrders)
+    const enrichMs = elapsedMs(enrichStartedAt)
+
+    logOrdersReadTiming({
+      req,
+      restaurantId: req.params.restaurantId,
+      view,
+      scope,
+      floorNumber,
+      cacheHit: false,
+      timings: {
+        totalMs: elapsedMs(requestStartedAt),
+        resolveRestaurantMs,
+        cacheLookupMs,
+        queryMs,
+        enrichMs,
+      },
+    })
 
     if (shouldUseQueryCache) {
       void setCachedQueryResult('completed_today', {
@@ -469,6 +547,7 @@ export async function updateOrderStatus(req, res, next) {
             orderId: responseOrder._id,
             includeAnalytics: wasCompleted !== isCompleted,
           }),
+          { skipRedis: true },
         )
 
         runNonCriticalTask('order_status_cache_and_realtime', async () => {
@@ -623,7 +702,7 @@ export async function shiftTableOrders(req, res, next) {
       `orders:board:${String(restaurant._id)}`,
       `orders:table:${restaurant.slug}:${sourceTableNumber}`,
       `orders:table:${restaurant.slug}:${targetTableNumber}`,
-    ])
+    ], { skipRedis: true })
 
     publishOrderChange({
       restaurantId: restaurant._id,
@@ -689,6 +768,7 @@ export async function deleteOrder(req, res, next) {
         orderId: req.params.orderId,
         includeAnalytics: Boolean(order.analyticsTrackedAt),
       }),
+      { skipRedis: true },
     )
     runNonCriticalTask('order_delete_cache_and_realtime', async () => {
       await invalidateOrderQueries(restaurant._id)
@@ -923,6 +1003,7 @@ export async function createOrder(req, res, next) {
         orderId: responsePayload._id,
         includeAnalytics: true,
       }),
+      { skipRedis: true },
     )
     runNonCriticalTask('order_create_cache_and_realtime', async () => {
       await invalidateOrderQueries(draft.restaurant._id)
@@ -1104,7 +1185,7 @@ export async function ratePublicOrder(req, res, next) {
     invalidateCacheByTags([
       `orders:table:${restaurantSlug}:${tableNumber}`,
       `orders:order:${orderId}`,
-    ])
+    ], { skipRedis: true })
 
     if (updated.restaurantId) {
       await runMetricsTask('apply_order_rating_analytics', () =>
@@ -1224,6 +1305,7 @@ export async function markOrderKotPrinted(req, res, next) {
         tableNumber: order.tableNumber,
         orderId: order._id,
       }),
+      { skipRedis: true },
     )
     publishOrderChange({
       restaurantId: restaurant._id,
@@ -1292,6 +1374,7 @@ export async function markOrderBillPrinted(req, res, next) {
         tableNumber: order.tableNumber,
         orderId: order._id,
       }),
+      { skipRedis: true },
     )
     publishOrderChange({
       restaurantId: restaurant._id,

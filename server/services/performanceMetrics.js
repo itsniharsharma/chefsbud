@@ -96,6 +96,7 @@ class PerformanceMetrics {
     this.flushTimer = null
     this.httpStats = new Map()
     this.mongoStats = new Map()
+    this.histogramStats = new Map()
   }
 
   start() {
@@ -162,6 +163,27 @@ class PerformanceMetrics {
     if (failed) {
       stats.errorCount += 1
     }
+    stats.totalMs += duration
+    stats.maxMs = Math.max(stats.maxMs, duration)
+    observeHistogram(stats.histogram, duration)
+  }
+
+  recordHistogram({ metricKey, durationMs }) {
+    if (!this.enabled) return
+
+    const requestedKey = normalizeKey(metricKey, 'UNKNOWN_HISTOGRAM')
+    const canCreateNewKey = this.histogramStats.has(requestedKey) || this.histogramStats.size < MAX_KEYS_PER_FAMILY
+    const key = canCreateNewKey ? requestedKey : 'OTHER'
+
+    if (!this.histogramStats.has(key)) {
+      this.histogramStats.set(key, createStats())
+    }
+
+    const stats = this.histogramStats.get(key) || this.histogramStats.get('OTHER')
+    if (!stats) return
+
+    const duration = Math.max(0, Number(durationMs || 0))
+    stats.count += 1
     stats.totalMs += duration
     stats.maxMs = Math.max(stats.maxMs, duration)
     observeHistogram(stats.histogram, duration)
@@ -261,9 +283,28 @@ class PerformanceMetrics {
       })
     }
 
+    if (this.histogramStats.size > 0) {
+      const histograms = [...this.histogramStats.entries()]
+        .map(([metricKey, stats]) => ({ metricKey, ...buildSummary(stats) }))
+        .sort((a, b) => b.p95Ms - a.p95Ms)
+        .slice(0, 25)
+
+      logger.info('perf_histogram_window', {
+        flushIntervalMs: FLUSH_INTERVAL_MS,
+        histogramCount: histograms.length,
+        histograms,
+      })
+    }
+
     this.httpStats.clear()
     this.mongoStats.clear()
+    this.histogramStats.clear()
   }
 }
 
 export const performanceMetrics = new PerformanceMetrics()
+
+export function recordHistogramMetric(metricName, durationMs, tags = {}) {
+  void tags
+  performanceMetrics.recordHistogram({ metricKey: metricName, durationMs })
+}

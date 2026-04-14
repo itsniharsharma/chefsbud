@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { getRedisClient, isRedisConfigured } from '../config/redis.js'
+import { getBlockingRedisClient, getRedisClient, isRedisConfigured } from '../config/redis.js'
 import { logger } from '../utils/logger.js'
 import Order from '../models/Order.js'
 import { processOrderStatusTransition } from './orderStatusProcessingService.js'
@@ -170,8 +170,13 @@ function extractBrpopPayload(result) {
 }
 
 async function blockingPop(redis, key, timeoutSeconds) {
-  if (typeof redis?.brpop === 'function') {
-    return redis.brpop(key, timeoutSeconds)
+  const blockingRedis = await getBlockingRedisClient()
+  if (blockingRedis && typeof blockingRedis.brPop === 'function') {
+    return blockingRedis.brPop(key, timeoutSeconds)
+  }
+
+  if (blockingRedis && typeof blockingRedis.brpop === 'function') {
+    return blockingRedis.brpop(key, timeoutSeconds)
   }
 
   // Upstash REST SDK compatibility path: some versions expose low-level command() only.

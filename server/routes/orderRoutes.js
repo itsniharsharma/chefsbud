@@ -109,8 +109,8 @@ router.get(
 	requireAuth,
 	requireActiveBilling,
 	cacheResponse({
-		ttlSeconds: 20,
-		skip: (req) => String(req.query.view || 'active').toLowerCase() !== 'completed',
+		ttlSeconds: 12,
+		distributedCache: false,
 		keyBuilder: (req) =>
 			`orders:board:${req.user._id}:${req.params.restaurantId}:v:${req.query.view || 'active'}:s:${req.query.status || 'All'}:sc:${req.query.scope || 'all'}:f:${req.query.floorNumber || 'all'}`,
 		tagsBuilder: (req) => [`orders:board:${req.params.restaurantId}`],

@@ -204,7 +204,7 @@ async function invalidateRedisByTags(tags) {
   )
 }
 
-export function invalidateCacheByTags(tags = []) {
+export function invalidateCacheByTags(tags = [], { skipRedis = false } = {}) {
   const normalizedTags = normalizeTags(tags)
   if (!normalizedTags.length) {
     return
@@ -228,14 +228,21 @@ export function invalidateCacheByTags(tags = []) {
     }
   }
 
-  void invalidateRedisByTags(normalizedTags)
+  if (!skipRedis) {
+    void invalidateRedisByTags(normalizedTags)
+  }
 }
 
-export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip } = {}) {
+export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip, distributedCache = true } = {}) {
   const ttl = Math.max(1, Number(ttlSeconds) || 20)
 
   return async (req, res, next) => {
     if (req.method !== 'GET') {
+      return next()
+    }
+
+    const bypassResponseCache = String(req.headers['x-bypass-response-cache'] || req.query?.refresh || '') === '1'
+    if (bypassResponseCache) {
       return next()
     }
 
@@ -263,25 +270,27 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip }
       clearKey(key)
     }
 
-    const distributedCached = await readFromRedisCache(key)
-    if (distributedCached) {
-      ensureCacheCapacity()
-      const tags = new Set(normalizeTags(distributedCached.tags || []))
+    if (distributedCache) {
+      const distributedCached = await readFromRedisCache(key)
+      if (distributedCached) {
+        ensureCacheCapacity()
+        const tags = new Set(normalizeTags(distributedCached.tags || []))
 
-      const entry = {
-        status: Number(distributedCached.status || 200),
-        payload: distributedCached.payload,
-        tags,
-        expiresAt: Number(distributedCached.expiresAt || nowMs() + ttl * 1000),
+        const entry = {
+          status: Number(distributedCached.status || 200),
+          payload: distributedCached.payload,
+          tags,
+          expiresAt: Number(distributedCached.expiresAt || nowMs() + ttl * 1000),
+        }
+
+        cacheStore.set(key, entry)
+
+        for (const tag of tags) {
+          attachKeyToTag(tag, key)
+        }
+
+        return res.status(entry.status).json(entry.payload)
       }
-
-      cacheStore.set(key, entry)
-
-      for (const tag of tags) {
-        attachKeyToTag(tag, key)
-      }
-
-      return res.status(entry.status).json(entry.payload)
     }
 
     const inflight = inflightStore.get(key)
@@ -332,13 +341,15 @@ export function cacheResponse({ ttlSeconds = 20, keyBuilder, tagsBuilder, skip }
           attachKeyToTag(tag, key)
         }
 
-        void writeToRedisCache({
-          key,
-          status,
-          payload,
-          tags: [...tags],
-          ttlSeconds: ttl,
-        })
+        if (distributedCache) {
+          void writeToRedisCache({
+            key,
+            status,
+            payload,
+            tags: [...tags],
+            ttlSeconds: ttl,
+          })
+        }
       }
 
       if (!settled) {
