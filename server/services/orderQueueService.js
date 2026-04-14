@@ -22,6 +22,25 @@ const INFLIGHT_LOCK_TTL_SECONDS = 300
 let queueWorkerRunning = false
 let activeWorkers = 0
 let warnedBrpopUnsupported = false
+const queueSnapshot = {
+  pendingJobs: 0,
+  deadLetterJobs: 0,
+  lastQueueEventAt: null,
+}
+
+function markQueueEvent() {
+  queueSnapshot.lastQueueEventAt = new Date().toISOString()
+}
+
+function incrementPendingJobs(delta = 1) {
+  queueSnapshot.pendingJobs = Math.max(0, queueSnapshot.pendingJobs + Number(delta || 0))
+  markQueueEvent()
+}
+
+function incrementDeadLetterJobs(delta = 1) {
+  queueSnapshot.deadLetterJobs = Math.max(0, queueSnapshot.deadLetterJobs + Number(delta || 0))
+  markQueueEvent()
+}
 
 
 export async function enqueueOrderJob(job) {
@@ -59,6 +78,7 @@ export async function enqueueOrderJob(job) {
       })
 
       await redis.lpush(QUEUE_KEY, jobData)
+      incrementPendingJobs(1)
       logger.info('order_queue_job_enqueued', {
         jobType: job.jobType,
         jobId: job.jobId,
@@ -189,6 +209,8 @@ async function parseAndCollectJob(redis, rawPayload, jobs) {
       parseError: parseError?.message,
       failedAt: new Date().toISOString(),
     }))
+    incrementDeadLetterJobs(1)
+    incrementPendingJobs(-1)
     return
   }
 
@@ -378,6 +400,7 @@ async function requeueJob(job, newAttempts) {
       retryAt: new Date().toISOString(),
     }
     await redis.lpush(QUEUE_KEY, JSON.stringify(retryJob))
+    incrementPendingJobs(1)
     logger.info('order_queue_job_requeued', {
       jobType: job.jobType,
       attempt: newAttempts,
@@ -405,6 +428,7 @@ async function moveToDeadLetter(job, error, attempts) {
       error: error?.message || 'unknown error',
     }
     await redis.lpush(DEAD_LETTER_KEY, JSON.stringify(dlJob))
+    incrementDeadLetterJobs(1)
     logger.warn('order_queue_job_deadlettered', {
       jobType: job.jobType,
       attempts,
@@ -501,37 +525,14 @@ async function handleReserveOrderInventory(jobData) {
 // ─────────────────────────────────────────────────────────────────
 
 export async function getQueueStats() {
-  try {
-    const redis = getRedisClient()
-    if (!redis) {
-      return {
-        pendingJobs: 0,
-        deadLetterJobs: 0,
-        activeWorkers,
-        maxConcurrency: CONCURRENCY,
-        maxQueueSize: MAX_QUEUE_SIZE,
-        queueHealthy: false,
-      }
-    }
-    const pendingCount = (await redis.llen(QUEUE_KEY)) || 0
-    const deadLetterCount = (await redis.llen(DEAD_LETTER_KEY)) || 0
-
-    return {
-      pendingJobs: pendingCount,
-      deadLetterJobs: deadLetterCount,
-      activeWorkers,
-      maxConcurrency: CONCURRENCY,
-      maxQueueSize: MAX_QUEUE_SIZE,
-      queueHealthy: pendingCount < MAX_QUEUE_SIZE && deadLetterCount < 100,
-    }
-  } catch (error) {
-    logger.error('order_queue_stats_error', { error: error?.message })
-    return {
-      pendingJobs: 0,
-      deadLetterJobs: 0,
-      activeWorkers,
-      maxConcurrency: CONCURRENCY,
-    }
+  return {
+    pendingJobs: queueSnapshot.pendingJobs,
+    deadLetterJobs: queueSnapshot.deadLetterJobs,
+    activeWorkers,
+    maxConcurrency: CONCURRENCY,
+    maxQueueSize: MAX_QUEUE_SIZE,
+    queueHealthy: queueSnapshot.pendingJobs < MAX_QUEUE_SIZE && queueSnapshot.deadLetterJobs < 100,
+    lastQueueEventAt: queueSnapshot.lastQueueEventAt,
   }
 }
 
