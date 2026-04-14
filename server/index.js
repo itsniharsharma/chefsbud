@@ -116,8 +116,8 @@ async function start() {
 
   if (PROCESS_ROLE === 'jobs' || PROCESS_ROLE === 'worker') {
     initializeScheduler()
+    startOrderOutboxWorker()
     if (USE_LEGACY_WORKERS) {
-      startOrderOutboxWorker()
       startOrderInventoryWorker()
       logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
     } else {
@@ -142,8 +142,9 @@ async function start() {
     initializeScheduler()
   }
 
+  startOrderOutboxWorker()
+
   if (USE_LEGACY_WORKERS) {
-    startOrderOutboxWorker()
     startOrderInventoryWorker()
     logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
   } else {
