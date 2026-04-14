@@ -68,27 +68,43 @@ export default function BillPrintModal({
   printing,
   onClose,
   onSimplePrint,
-  onPrintWithAdjustments,
 }) {
   const [step, setStep] = useState('choice')
   const [menuData, setMenuData] = useState({ categories: [], items: [] })
   const [menuLoading, setMenuLoading] = useState(false)
   const [menuError, setMenuError] = useState('')
   const [adjustments, setAdjustments] = useState([])
+  const [billDiscountPercent, setBillDiscountPercent] = useState('0')
   const [manualForm, setManualForm] = useState({ name: '', quantity: 1, unitPrice: '' })
   const [formError, setFormError] = useState('')
+
+  const normalizePercent = (value) => {
+    const parsed = Number.parseFloat(String(value ?? '').trim())
+    if (!Number.isFinite(parsed)) return 0
+    return Math.min(100, Math.max(0, parsed))
+  }
 
   useEffect(() => {
     if (!open) {
       setStep('choice')
-      setMenuData({ categories: [], items: [] })
       setMenuLoading(false)
       setMenuError('')
       setAdjustments([])
+      setBillDiscountPercent('0')
       setManualForm({ name: '', quantity: 1, unitPrice: '' })
       setFormError('')
     }
   }, [open])
+
+  useEffect(() => {
+    setMenuData({ categories: [], items: [] })
+    setMenuError('')
+  }, [restaurantId])
+
+  useEffect(() => {
+    if (!open) return
+    setBillDiscountPercent(String(Number(order?.billDiscountPercent || 0)))
+  }, [open, order?.billDiscountPercent])
 
   const loadMenu = async () => {
     if (!restaurantId || menuLoading || menuData.items.length) return
@@ -147,9 +163,18 @@ export default function BillPrintModal({
   )
 
   const finalBillTotal = useMemo(
-    () => baseBillTotal + Number(adjustmentSubtotal || 0),
-    [baseBillTotal, adjustmentSubtotal],
+    () => {
+      const gross = Number(baseBillTotal || 0) + Number(adjustmentSubtotal || 0)
+      const discountAmount = (gross * normalizePercent(billDiscountPercent)) / 100
+      return gross - discountAmount
+    },
+    [baseBillTotal, adjustmentSubtotal, billDiscountPercent],
   )
+
+  const discountAmount = useMemo(() => {
+    const gross = Number(baseBillTotal || 0) + Number(adjustmentSubtotal || 0)
+    return (gross * normalizePercent(billDiscountPercent)) / 100
+  }, [baseBillTotal, adjustmentSubtotal, billDiscountPercent])
 
   const toggleMenuItem = (item) => {
     const menuItemId = String(item?._id || '')
@@ -211,8 +236,8 @@ export default function BillPrintModal({
     setFormError('')
   }
 
-  const submitAdjustments = () => {
-    const normalizedAdjustments = adjustments.map((entry) => ({
+  const getNormalizedAdjustments = () =>
+    adjustments.map((entry) => ({
       sourceType: entry.sourceType,
       menuItemId: entry.sourceType === 'menu' ? entry.menuItemId : undefined,
       name: entry.sourceType === 'custom' ? normalizeName(entry.name) : undefined,
@@ -220,7 +245,8 @@ export default function BillPrintModal({
       unitPrice: clampPrice(entry.unitPrice, MIN_PRICE, MAX_PRICE),
     }))
 
-    onPrintWithAdjustments?.({ billAdjustments: normalizedAdjustments })
+  const submitAdjustments = () => {
+    setStep('choice')
   }
 
   return (
@@ -236,6 +262,33 @@ export default function BillPrintModal({
               <span>Current total</span>
               <span className="font-semibold text-slate-900">{formatCurrencyINR(order?.billFinalTotalAmount ?? order?.totalAmount ?? 0)}</span>
             </div>
+            <div className="mt-2 grid grid-cols-[1fr_auto] items-center gap-2">
+              <label htmlFor="bill-discount-percent" className="text-xs font-medium text-slate-600">Discount (%)</label>
+              <input
+                id="bill-discount-percent"
+                className="input w-24 px-2 py-1 text-right text-xs"
+                type="number"
+                min={0}
+                max={100}
+                step={0.01}
+                value={billDiscountPercent}
+                onChange={(event) => setBillDiscountPercent(event.target.value)}
+              />
+            </div>
+            {adjustments.length ? (
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span>Extra items ({adjustments.length})</span>
+                <span className="font-semibold text-slate-900">+{formatCurrencyINR(adjustmentSubtotal)}</span>
+              </div>
+            ) : null}
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span>Discount amount</span>
+              <span className="font-semibold text-slate-900">-{formatCurrencyINR(discountAmount)}</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-1 text-xs">
+              <span className="font-medium">Final total</span>
+              <span className="font-bold text-[var(--primary)]">{formatCurrencyINR(finalBillTotal)}</span>
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={onClose} disabled={printing}>
@@ -244,7 +297,16 @@ export default function BillPrintModal({
             <Button type="button" variant="secondary" onClick={openComposer} disabled={printing}>
               Add Extra Items
             </Button>
-            <Button type="button" onClick={onSimplePrint} disabled={printing}>
+            <Button
+              type="button"
+              onClick={() =>
+                onSimplePrint?.({
+                  billAdjustments: getNormalizedAdjustments(),
+                  billDiscountPercent: normalizePercent(billDiscountPercent),
+                })
+              }
+              disabled={printing}
+            >
               {printing ? 'Printing...' : 'Simply Print'}
             </Button>
           </div>
@@ -259,8 +321,8 @@ export default function BillPrintModal({
             <Button type="button" variant="secondary" className="text-xs" onClick={onClose} disabled={printing}>
               Cancel
             </Button>
-            <Button type="button" className="text-xs" onClick={submitAdjustments} disabled={printing || !adjustments.length}>
-              {printing ? 'Printing...' : 'Print Final Bill'}
+            <Button type="button" className="text-xs" onClick={submitAdjustments} disabled={printing}>
+              Next
             </Button>
           </div>
 
@@ -273,6 +335,10 @@ export default function BillPrintModal({
             <div className="flex items-center justify-between">
               <span>Adjustments</span>
               <span className="font-semibold text-slate-900">+{formatCurrencyINR(adjustmentSubtotal)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Discount ({normalizePercent(billDiscountPercent)}%)</span>
+              <span className="font-semibold text-slate-900">-{formatCurrencyINR(discountAmount)}</span>
             </div>
             <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-1">
               <span className="font-medium">Final total</span>

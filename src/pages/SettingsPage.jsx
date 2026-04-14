@@ -8,6 +8,7 @@ export default function SettingsPage() {
   const { restaurant, setRestaurant } = useAuth()
   const [form, setForm] = useState({
     restaurantName: '',
+    gstin: '',
     address: '',
     phone: '',
     lowStockThresholdPercent: '10',
@@ -27,6 +28,7 @@ export default function SettingsPage() {
     if (!restaurant) return
     setForm({
       restaurantName: restaurant.name || '',
+      gstin: restaurant.gstin || '',
       address: restaurant.address || '',
       phone: restaurant.phone || '',
       lowStockThresholdPercent: String(restaurant.inventoryAlertConfig?.lowStockThresholdPercent ?? 10),
@@ -117,6 +119,12 @@ export default function SettingsPage() {
           label="Restaurant Name"
           value={form.restaurantName}
           onChange={(e) => setForm((prev) => ({ ...prev, restaurantName: e.target.value }))}
+        />
+        <FormInput
+          label="GSTIN"
+          value={form.gstin}
+          readOnly
+          className="bg-slate-50 text-slate-600"
         />
         <FormInput label="Address" value={form.address} onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))} />
         <FormInput label="Phone" value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} />

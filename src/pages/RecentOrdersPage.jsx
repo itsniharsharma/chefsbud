@@ -10,7 +10,7 @@ import { useRecentOrdersQuery } from '../hooks/useDashboardQueries'
 import { orderService } from '../services/orderService'
 import { formatCurrencyINR } from '../utils/currency'
 import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
-import { buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
+import { applyBillDiscountToOrder, buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
 export default function RecentOrdersPage() {
   const { restaurant } = useAuth()
@@ -230,12 +230,20 @@ export default function RecentOrdersPage() {
 
       let orderForPrint
       if (order?.billPrinted) {
-        orderForPrint = buildReprintOrderForBill({ order, billAdjustments: payload.billAdjustments })
+        orderForPrint = buildReprintOrderForBill({
+          order,
+          billAdjustments: payload.billAdjustments,
+          billDiscountPercent: payload.billDiscountPercent,
+        })
       } else {
-        orderForPrint = await markBillPrintedMutation.mutateAsync({ id: orderId, payload })
+        const savedOrder = await markBillPrintedMutation.mutateAsync({ id: orderId, payload })
+        orderForPrint = applyBillDiscountToOrder({
+          order: savedOrder,
+          billDiscountPercent: payload.billDiscountPercent,
+        })
       }
 
-      printIntoWindow(printWindow, buildBillHtml({ order: orderForPrint, restaurantName: restaurant?.name }))
+      printIntoWindow(printWindow, buildBillHtml({ order: orderForPrint, restaurant }))
       setBillTargetOrder(null)
     } catch (requestError) {
       closePrintWindow(printWindow)
@@ -293,7 +301,7 @@ export default function RecentOrdersPage() {
         restaurantId={restaurant?._id}
         printing={Boolean(printingBillOrderId)}
         onClose={() => setBillTargetOrder(null)}
-        onSimplePrint={() => printBillForOrder(billTargetOrder, { confirmed: true })}
+        onSimplePrint={(payload) => printBillForOrder(billTargetOrder, { confirmed: true, ...(payload || {}) })}
         onPrintWithAdjustments={(payload) => printBillForOrder(billTargetOrder, { confirmed: true, ...payload })}
       />
       <KotReprintModal

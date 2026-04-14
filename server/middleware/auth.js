@@ -150,7 +150,7 @@ export async function requireAuth(req, res, next) {
           _id: restaurantId,
           ownerId,
         })
-          .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
+          .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
           .lean(),
       ])
 
@@ -204,7 +204,7 @@ export async function requireAuth(req, res, next) {
         .select('_id name email role emailVerified tokenVersion billing')
         .lean(),
       Restaurant.findOne({ ownerId: decoded.userId })
-        .select('_id ownerId slug name address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
+        .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.updatedAt inventoryAlertConfig')
         .lean(),
     ])
 

@@ -34,14 +34,12 @@ function buildAdjustmentRows(order) {
       const qty = Number(item.quantity || 0)
       const price = Number(item.unitPrice || 0)
       const subtotal = qty * price
-      const sourceLabel = item.sourceType === 'custom' ? 'Manual' : 'Extra'
       return `
           <tr>
             <td>${escapeHtml(item.name)}</td>
             <td style="text-align:center;">${qty}</td>
             <td style="text-align:right;">${escapeHtml(formatCurrencyINR(price))}</td>
             <td style="text-align:right;">${escapeHtml(formatCurrencyINR(subtotal))}</td>
-            <td style="text-align:right;">${escapeHtml(sourceLabel)}</td>
           </tr>
         `
     })
@@ -60,11 +58,42 @@ function buildKotRows(order) {
     : ''
 }
 
-export function buildBillHtml({ order, restaurantName }) {
-  const baseSubtotal = Number(order.subtotalAmount || 0)
-  const discountTotal = Number(order.discountTotal || 0)
+function round2(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100
+}
+
+function normalizePercent(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return 0
+  if (parsed < 0) return 0
+  if (parsed > 100) return 100
+  return round2(parsed)
+}
+
+export function buildBillHtml({ order, restaurant, restaurantName }) {
+  const fallbackRestaurantName = String(restaurant?.name || restaurantName || "Chef's Bud")
+  const restaurantGstin = String(restaurant?.gstin || '').trim()
+  const baseSubtotal = Number(order.totalAmount ?? order.subtotalAmount ?? 0)
   const adjustmentSubtotal = Number(order.billAdjustmentSubtotal || 0)
-  const finalTotal = Number(order.billFinalTotalAmount ?? order.totalAmount ?? 0)
+  const grossBeforeDiscount = round2(baseSubtotal + adjustmentSubtotal)
+  const billDiscountPercent = normalizePercent(order.billDiscountPercent)
+  const billDiscountAmount = round2(
+    order.billDiscountAmount ?? ((grossBeforeDiscount * billDiscountPercent) / 100),
+  )
+  const billTaxableAmount = round2(
+    order.billTaxableAmount ?? Math.max(0, grossBeforeDiscount - billDiscountAmount),
+  )
+  const billServiceChargePercent = normalizePercent(
+    order.billServiceChargePercent ?? restaurant?.billingSettings?.serviceChargePercent,
+  )
+  const billServiceChargeAmount = round2(
+    order.billServiceChargeAmount ?? ((billTaxableAmount * billServiceChargePercent) / 100),
+  )
+  const billGstPercent = normalizePercent(order.billGstPercent ?? restaurant?.billingSettings?.gstPercent)
+  const billGstAmount = round2(order.billGstAmount ?? ((billTaxableAmount * billGstPercent) / 100))
+  const finalTotal = round2(
+    order.billFinalTotalAmount ?? (billTaxableAmount + billServiceChargeAmount + billGstAmount),
+  )
   const hasAdjustments = Array.isArray(order.billAdjustments) && order.billAdjustments.length > 0
   const orderDisplayNumber = getOrderDisplayNumber(order)
 
@@ -106,8 +135,17 @@ export function buildBillHtml({ order, restaurantName }) {
       }
 
       .bill-title {
-        margin: 0 0 6px 0;
-        font-size: 22px;
+        margin: 0;
+        font-size: 23px;
+        text-align: center;
+        letter-spacing: 0.3px;
+      }
+
+      .bill-subtitle {
+        margin-top: 2px;
+        font-size: 11px;
+        text-align: center;
+        color: #475569;
       }
 
       .meta {
@@ -138,12 +176,29 @@ export function buildBillHtml({ order, restaurantName }) {
         line-height: 1.5;
         display: flex;
         flex-direction: column;
-        align-items: flex-end;
+      }
+
+      .total-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
       }
 
       .totals-strong {
         font-weight: 700;
         font-size: 15px;
+        color: #0f172a;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #cbd5e1;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 10px;
+        color: #334155;
       }
 
       .avoid-break {
@@ -189,12 +244,14 @@ export function buildBillHtml({ order, restaurantName }) {
   </head>
   <body>
     <main class="bill-container">
-    <h2 class="bill-title">${escapeHtml(restaurantName || "Chef's Bud")}</h2>
+    <h2 class="bill-title">${escapeHtml(fallbackRestaurantName)}</h2>
+    <div class="bill-subtitle">${restaurantGstin ? `GSTIN: ${escapeHtml(restaurantGstin)}` : 'GSTIN: NA'}</div>
     <div class="meta avoid-break">
       <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
-      <div><strong>Table:</strong> ${escapeHtml(order.tableNumber)} | <strong>Floor:</strong> ${escapeHtml(order.floorNumber || 1)}</div>
       <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
-      <div><strong>Status:</strong> ${escapeHtml(order.orderStatus || '-')}</div>
+      <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">
+        <span class="badge">TAX INVOICE</span>
+      </div>
     </div>
     <hr />
     <table class="avoid-break">
@@ -218,17 +275,21 @@ export function buildBillHtml({ order, restaurantName }) {
           <th style="text-align:center;padding:4px 0;">Qty</th>
           <th style="text-align:right;padding:4px 0;">Price</th>
           <th style="text-align:right;padding:4px 0;">Subtotal</th>
-          <th style="text-align:right;padding:4px 0;">Type</th>
         </tr>
       </thead>
       <tbody>${buildAdjustmentRows(order)}</tbody>
     </table>` : ''}
     <hr />
     <div class="totals avoid-break">
-      <div>Order subtotal: ${escapeHtml(formatCurrencyINR(baseSubtotal))}</div>
-      ${discountTotal > 0 ? `<div>Discounts: -${escapeHtml(formatCurrencyINR(discountTotal))}</div>` : ''}
-      ${adjustmentSubtotal > 0 ? `<div>Bill adjustments: +${escapeHtml(formatCurrencyINR(adjustmentSubtotal))}</div>` : ''}
-      <div class="totals-strong">Total: ${escapeHtml(formatCurrencyINR(finalTotal))}</div>
+      <div class="total-line"><span>Base amount</span><strong>${escapeHtml(formatCurrencyINR(baseSubtotal))}</strong></div>
+      <div class="total-line"><span>Extra items</span><strong>+${escapeHtml(formatCurrencyINR(adjustmentSubtotal))}</strong></div>
+      <div class="total-line"><span>Gross amount</span><strong>${escapeHtml(formatCurrencyINR(grossBeforeDiscount))}</strong></div>
+      <div class="total-line"><span>Discount (${escapeHtml(String(billDiscountPercent))}%)</span><strong>-${escapeHtml(formatCurrencyINR(billDiscountAmount))}</strong></div>
+      <div class="total-line"><span>Taxable amount</span><strong>${escapeHtml(formatCurrencyINR(billTaxableAmount))}</strong></div>
+      <div class="total-line"><span>Service charge (${escapeHtml(String(billServiceChargePercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(billServiceChargeAmount))}</strong></div>
+      <div class="total-line"><span>GST (${escapeHtml(String(billGstPercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(billGstAmount))}</strong></div>
+      <hr />
+      <div class="total-line totals-strong"><span>Grand Total</span><span>${escapeHtml(formatCurrencyINR(finalTotal))}</span></div>
     </div>
     </main>
   </body>
