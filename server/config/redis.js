@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js'
 
 const redisUrl = String(process.env.UPSTASH_REDIS_REST_URL || '').trim()
 const redisToken = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim()
-const redisSocketUrl = String(process.env.REDIS_SOCKET_URL || '').trim()
+const redisSocketUrl = String(process.env.REDIS_SOCKET_URL || process.env.REDIS_URL || '').trim()
 
 let redisClient = null
 let blockingRedisClient = null
