@@ -40,6 +40,14 @@ const globalLimiter = createRateLimiter({
   windowMs: Number(process.env.RATE_LIMIT_GLOBAL_WINDOW_MS || 60_000),
   keyFn: (req) => req.ip,
   skip: (req) =>
+    req.method === 'OPTIONS' ||
+    req.method === 'HEAD' ||
+    req.path === '/' ||
+    req.path === '/favicon.ico' ||
+    req.path === '/robots.txt' ||
+    req.path === '/manifest.json' ||
+    req.path.startsWith('/socket.io') ||
+    req.path === '/health' ||
     req.path === '/api/health' ||
     (req.method === 'GET' && (req.path.startsWith('/api/menu/') || req.path.startsWith('/api/orders/track/'))) ||
     (req.method === 'POST' && req.path === '/api/orders')

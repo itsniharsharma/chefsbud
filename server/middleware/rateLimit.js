@@ -19,6 +19,7 @@ return {count, ttl}
 `
 
 let atomicScriptEnabled = true
+const RATE_LIMIT_USE_REDIS = String(process.env.RATE_LIMIT_USE_REDIS || 'true') === 'true'
 
 function nowMs() {
   return Date.now()
@@ -140,6 +141,11 @@ export function createRateLimiter({
   return async function rateLimitMiddleware(req, res, next) {
     if (typeof skip === 'function' && skip(req) === true) {
       return next()
+    }
+
+    if (!RATE_LIMIT_USE_REDIS) {
+      const key = (typeof keyFn === 'function' ? keyFn(req) : req.ip) || req.ip || 'unknown'
+      return applyLocalRateLimit(key, req, res, next)
     }
 
     const key = (typeof keyFn === 'function' ? keyFn(req) : req.ip) || req.ip || 'unknown'
