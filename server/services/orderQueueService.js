@@ -18,10 +18,24 @@ const PROCESSED_JOB_TTL_SECONDS = Math.max(3600, Number(process.env.ORDER_QUEUE_
 const ENQUEUE_RETRY_MAX_ATTEMPTS = 3
 const ENQUEUE_RETRY_DELAY_MS = 100
 const INFLIGHT_LOCK_TTL_SECONDS = 300
+const QUEUE_DEPTH_CHECK_INTERVAL_MS = Math.max(250, Number(process.env.ORDER_QUEUE_DEPTH_CHECK_INTERVAL_MS || 1000))
+const DYNAMIC_SCALING_ENABLED = String(process.env.ORDER_QUEUE_DYNAMIC_SCALING_ENABLED || 'true') === 'true'
+const SCALE_UP_PENDING_THRESHOLD = Math.max(1, Number(process.env.ORDER_QUEUE_SCALE_UP_PENDING_THRESHOLD || Math.max(BATCH_SIZE * 4, 20)))
+const DEPTH_REFRESH_INTERVAL_MS = Math.max(500, Number(process.env.ORDER_QUEUE_DEPTH_REFRESH_INTERVAL_MS || 2000))
+const SCALE_PARK_SLEEP_MS = Math.max(500, Number(process.env.ORDER_QUEUE_SCALE_PARK_SLEEP_MS || 2500))
+const IDLE_PRIMARY_ONLY = String(process.env.ORDER_QUEUE_IDLE_PRIMARY_ONLY || 'true') === 'true'
+const IDLE_GRACE_MS = Math.max(5_000, Number(process.env.ORDER_QUEUE_IDLE_GRACE_MS || 20_000))
+const IDLE_SECONDARY_SLEEP_MS = Math.max(1_000, Number(process.env.ORDER_QUEUE_IDLE_SECONDARY_SLEEP_MS || 30_000))
+const BATCH_LOG_SAMPLE_RATE = Math.max(1, Number(process.env.ORDER_QUEUE_BATCH_LOG_SAMPLE_RATE || 20))
 
 let queueWorkerRunning = false
 let activeWorkers = 0
 let warnedBrpopUnsupported = false
+let forceRpopFallback = false
+let idleSinceMs = Date.now()
+let batchLogCounter = 0
+let lastQueueDepthCheckAtMs = 0
+let lastDepthRefreshAtMs = 0
 const queueSnapshot = {
   pendingJobs: 0,
   deadLetterJobs: 0,
@@ -42,6 +56,32 @@ function incrementDeadLetterJobs(delta = 1) {
   markQueueEvent()
 }
 
+async function refreshQueueDepth(redis, { force = false } = {}) {
+  const now = Date.now()
+  if (!force && now - lastDepthRefreshAtMs < DEPTH_REFRESH_INTERVAL_MS) {
+    return queueSnapshot.pendingJobs
+  }
+
+  const length = Number(await redis.llen(QUEUE_KEY) || 0)
+  queueSnapshot.pendingJobs = Math.max(0, length)
+  lastDepthRefreshAtMs = now
+  return queueSnapshot.pendingJobs
+}
+
+function shouldParkSecondaryWorker(workerNo) {
+  if (workerNo <= 1) return false
+
+  if (DYNAMIC_SCALING_ENABLED) {
+    return Number(queueSnapshot.pendingJobs || 0) < SCALE_UP_PENDING_THRESHOLD
+  }
+
+  if (IDLE_PRIMARY_ONLY && idleSinceMs > 0 && Date.now() - idleSinceMs >= IDLE_GRACE_MS) {
+    return true
+  }
+
+  return false
+}
+
 
 export async function enqueueOrderJob(job) {
   if (!isRedisConfigured()) {
@@ -59,15 +99,25 @@ export async function enqueueOrderJob(job) {
 
   for (let attempt = 1; attempt <= ENQUEUE_RETRY_MAX_ATTEMPTS; attempt++) {
     try {
-      // Check queue depth before enqueuing
-      const queueLength = await redis.llen(QUEUE_KEY)
-      if (queueLength >= MAX_QUEUE_SIZE) {
-        logger.error('order_queue_enqueue_rejected_queue_full', {
-          jobType: job.jobType,
-          queueLength,
-          maxSize: MAX_QUEUE_SIZE,
-        })
-        return false
+      // Avoid LLEN on every enqueue; refresh depth on an interval and rely on local snapshot in between.
+      const now = Date.now()
+      const shouldRefreshDepth =
+        queueSnapshot.pendingJobs <= 0 ||
+        now - lastQueueDepthCheckAtMs >= QUEUE_DEPTH_CHECK_INTERVAL_MS ||
+        queueSnapshot.pendingJobs >= MAX_QUEUE_SIZE
+
+      if (shouldRefreshDepth) {
+        const queueLength = await refreshQueueDepth(redis, { force: true })
+        lastQueueDepthCheckAtMs = now
+
+        if (queueLength >= MAX_QUEUE_SIZE) {
+          logger.error('order_queue_enqueue_rejected_queue_full', {
+            jobType: job.jobType,
+            queueLength,
+            maxSize: MAX_QUEUE_SIZE,
+          })
+          return false
+        }
       }
 
       const jobData = JSON.stringify({
@@ -115,19 +165,44 @@ export async function startOrderQueueWorker() {
   }
 
   queueWorkerRunning = true
-  logger.info('order_queue_worker_started', { concurrency: CONCURRENCY, mode: 'blocking-brpop' })
+  idleSinceMs = Date.now()
+  logger.info('order_queue_worker_started', {
+    concurrency: CONCURRENCY,
+    mode: 'blocking-brpop',
+    dynamicScaling: DYNAMIC_SCALING_ENABLED,
+    scaleUpPendingThreshold: SCALE_UP_PENDING_THRESHOLD,
+    depthRefreshIntervalMs: DEPTH_REFRESH_INTERVAL_MS,
+    scaleParkSleepMs: SCALE_PARK_SLEEP_MS,
+    idlePrimaryOnly: IDLE_PRIMARY_ONLY,
+    idleGraceMs: IDLE_GRACE_MS,
+    idleSecondarySleepMs: IDLE_SECONDARY_SLEEP_MS,
+  })
 
   const workLoop = async (workerNo) => {
     while (queueWorkerRunning) {
       try {
+        if (shouldParkSecondaryWorker(workerNo)) {
+          await sleep(DYNAMIC_SCALING_ENABLED ? SCALE_PARK_SLEEP_MS : IDLE_SECONDARY_SLEEP_MS)
+          continue
+        }
+
+        if (workerNo === 1) {
+          const redis = getRedisClient()
+          if (redis) {
+            await refreshQueueDepth(redis)
+          }
+        }
+
         // Fetch next batch
         const batch = await fetchJobBatch(BATCH_SIZE, { blocking: true })
         if (!batch || batch.length === 0) {
-          // Some REST clients may return empty immediately for BRPOP-style commands.
-          // Back off to prevent tight idle loops and command amplification.
-          await sleep(BRPOP_TIMEOUT_SECONDS * 1000)
+          if (idleSinceMs <= 0) {
+            idleSinceMs = Date.now()
+          }
           continue
         }
+
+        idleSinceMs = 0
 
         // Process batch with concurrency control
         activeWorkers += 1
@@ -180,8 +255,18 @@ async function blockingPop(redis, key, timeoutSeconds) {
   }
 
   // Upstash REST SDK compatibility path: some versions expose low-level command() only.
-  if (typeof redis?.command === 'function') {
-    return redis.command(['BRPOP', key, String(timeoutSeconds)])
+  if (!forceRpopFallback && typeof redis?.command === 'function') {
+    try {
+      return await redis.command(['BRPOP', key, String(timeoutSeconds)])
+    } catch (error) {
+      forceRpopFallback = true
+      if (!warnedBrpopUnsupported) {
+        warnedBrpopUnsupported = true
+        logger.warn('order_queue_brpop_command_fallback_rpop', {
+          message: error?.message || 'BRPOP command unsupported, switching to paced RPOP fallback.',
+        })
+      }
+    }
   }
 
   // Last-resort compatibility: no BRPOP support, fallback to a paced single RPOP.
@@ -250,10 +335,16 @@ async function fetchJobBatch(limit, { blocking = false } = {}) {
     }
 
     if (jobs.length > 0) {
-      logger.info('order_queue_batch_fetched', {
-        batchSize: jobs.length,
-        queueDepth: (await redis.llen(QUEUE_KEY)) || 0,
-      })
+      incrementPendingJobs(-jobs.length)
+      batchLogCounter += 1
+      const shouldLogBatch = batchLogCounter % BATCH_LOG_SAMPLE_RATE === 0
+      if (shouldLogBatch) {
+        logger.info('order_queue_batch_fetched', {
+          batchSize: jobs.length,
+          sampledEvery: BATCH_LOG_SAMPLE_RATE,
+          approxPendingJobs: queueSnapshot.pendingJobs,
+        })
+      }
     }
 
     return jobs
@@ -535,6 +626,9 @@ export async function getQueueStats() {
     deadLetterJobs: queueSnapshot.deadLetterJobs,
     activeWorkers,
     maxConcurrency: CONCURRENCY,
+    dynamicScalingEnabled: DYNAMIC_SCALING_ENABLED,
+    scaleUpPendingThreshold: SCALE_UP_PENDING_THRESHOLD,
+    scaleParkSleepMs: SCALE_PARK_SLEEP_MS,
     maxQueueSize: MAX_QUEUE_SIZE,
     queueHealthy: queueSnapshot.pendingJobs < MAX_QUEUE_SIZE && queueSnapshot.deadLetterJobs < 100,
     lastQueueEventAt: queueSnapshot.lastQueueEventAt,

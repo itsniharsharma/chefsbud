@@ -1,5 +1,25 @@
 import { withRedis } from '../config/redis.js'
 
+const RATE_LIMIT_ATOMIC_SCRIPT = `
+local key = KEYS[1]
+local windowSec = tonumber(ARGV[1])
+
+local count = redis.call('INCR', key)
+if count == 1 then
+  redis.call('EXPIRE', key, windowSec)
+end
+
+local ttl = redis.call('TTL', key)
+if ttl < 0 then
+  redis.call('EXPIRE', key, windowSec)
+  ttl = windowSec
+end
+
+return {count, ttl}
+`
+
+let atomicScriptEnabled = true
+
 function nowMs() {
   return Date.now()
 }
@@ -128,22 +148,44 @@ export function createRateLimiter({
     const redisResult = await withRedis(
       'rate_limit_increment',
       async (redis) => {
+        if (atomicScriptEnabled && typeof redis?.command === 'function') {
+          try {
+            const raw = await redis.command(['EVAL', RATE_LIMIT_ATOMIC_SCRIPT, '1', redisKey, String(refillWindowSeconds)])
+            const normalized = Array.isArray(raw) ? raw : []
+            const count = Number(normalized[0] || 0)
+            const ttl = Number(normalized[1] || refillWindowSeconds)
+            if (Number.isFinite(count) && count > 0) {
+              return { count, ttl }
+            }
+          } catch {
+            atomicScriptEnabled = false
+          }
+        }
+
         const count = Number(await redis.incr(redisKey))
         if (count === 1) {
           await redis.expire(redisKey, refillWindowSeconds)
         }
-        return { count }
+
+        let ttl = refillWindowSeconds
+        if (count > maxTokens) {
+          const currentTtl = Number(await redis.ttl(redisKey))
+          if (currentTtl > 0) {
+            ttl = currentTtl
+          }
+        }
+
+        return { count, ttl }
       },
       null,
     )
 
     if (redisResult) {
-      const { count } = redisResult
+      const { count, ttl } = redisResult
       const remaining = Math.max(0, maxTokens - count)
       setRateLimitHeaders(res, remaining)
 
       if (count > maxTokens) {
-        const ttl = await withRedis('rate_limit_ttl', (redis) => redis.ttl(redisKey), refillWindowSeconds)
         const retryAfterSeconds = Number(ttl) > 0 ? Number(ttl) : refillWindowSeconds
         res.setHeader('Retry-After', String(retryAfterSeconds))
         return res.status(429).json({ message: 'Too many requests. Please retry shortly.' })

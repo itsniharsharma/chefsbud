@@ -19,6 +19,7 @@ import { requestLatencyMetrics } from './middleware/performanceMetrics.js'
 import { securityHeaders } from './middleware/securityHeaders.js'
 import { createRateLimiter } from './middleware/rateLimit.js'
 import { getDbStatus } from './config/db.js'
+import { getRedisTelemetry } from './config/redis.js'
 import { getInventoryRuntimeConfig } from './config/inventoryRuntime.js'
 import { getQueueStats } from './services/orderQueueService.js'
 
@@ -90,6 +91,7 @@ app.use(express.urlencoded({ extended: false, limit: urlEncodedLimit }))
 app.get('/api/health', async (req, res) => {
   const inventoryConfig = getInventoryRuntimeConfig()
   const queueStats = await getQueueStats()
+  const redisTelemetry = getRedisTelemetry({ top: 15 })
 
   res.json({
     ok: true,
@@ -102,6 +104,7 @@ app.get('/api/health', async (req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     processRole: String(process.env.PROCESS_ROLE || 'all').trim().toLowerCase(),
     db: getDbStatus(),
+    redis: redisTelemetry,
     queue: queueStats,
   })
 })

@@ -10,6 +10,10 @@ import { logger } from '../utils/logger.js'
 
 const queryResultCache = new Map()
 const localRestaurantIndex = new Map()
+const pendingRedisRestaurantInvalidations = new Set()
+let pendingRedisRestaurantInvalidationTimer = null
+const REDIS_QUERY_INVALIDATION_DEBOUNCE_MS = Math.max(20, Number(process.env.REDIS_QUERY_INVALIDATION_DEBOUNCE_MS || 200))
+const REDIS_QUERY_INVALIDATION_BATCH_SIZE = Math.max(5, Number(process.env.REDIS_QUERY_INVALIDATION_BATCH_SIZE || 50))
 
 const CACHE_CONFIGS = {
   active_orders: { ttlSeconds: 15, maxEntries: 1000 },
@@ -127,6 +131,41 @@ async function setRedisCached(key, data, ttlSeconds, restaurantId) {
   }
 }
 
+async function flushRedisRestaurantInvalidations() {
+  if (pendingRedisRestaurantInvalidationTimer) {
+    clearTimeout(pendingRedisRestaurantInvalidationTimer)
+    pendingRedisRestaurantInvalidationTimer = null
+  }
+
+  if (!pendingRedisRestaurantInvalidations.size) {
+    return
+  }
+
+  const restaurantIds = [...pendingRedisRestaurantInvalidations]
+  pendingRedisRestaurantInvalidations.clear()
+
+  for (const restaurantId of restaurantIds) {
+    try {
+      await withRedis('query_cache_invalidate', async (redis) => {
+        const indexKey = redisRestaurantIndexKey(restaurantId)
+        const keys = await redis.smembers(indexKey)
+        const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : []
+
+        if (normalizedKeys.length) {
+          await redis.del(...normalizedKeys)
+        }
+
+        await redis.del(indexKey)
+      }, null)
+    } catch (e) {
+      logger.warn('query_cache_invalidation_failed', {
+        restaurantId,
+        message: e?.message || 'unknown_error',
+      })
+    }
+  }
+}
+
 /**
  * GET CACHED QUERY RESULT
  * 3-tier lookup: request params → local memory → redis → null
@@ -181,24 +220,18 @@ export async function invalidateOrderQueries(restaurantId) {
     deleteLocalCacheKey(key)
   }
 
-  // Invalidate Redis cache
-  try {
-    await withRedis('query_cache_invalidate', async (redis) => {
-      const indexKey = redisRestaurantIndexKey(normalizedRestaurantId)
-      const keys = await redis.smembers(indexKey)
-      const normalizedKeys = Array.isArray(keys) ? keys.filter(Boolean) : []
+  pendingRedisRestaurantInvalidations.add(normalizedRestaurantId)
 
-      if (normalizedKeys.length) {
-        await redis.del(...normalizedKeys)
-      }
+  if (pendingRedisRestaurantInvalidations.size >= REDIS_QUERY_INVALIDATION_BATCH_SIZE) {
+    await flushRedisRestaurantInvalidations()
+    return
+  }
 
-      await redis.del(indexKey)
-    }, null)
-  } catch (e) {
-    logger.warn('query_cache_invalidation_failed', {
-      restaurantId: normalizedRestaurantId,
-      message: e?.message || 'unknown_error',
-    })
+  if (!pendingRedisRestaurantInvalidationTimer) {
+    pendingRedisRestaurantInvalidationTimer = setTimeout(() => {
+      void flushRedisRestaurantInvalidations()
+    }, REDIS_QUERY_INVALIDATION_DEBOUNCE_MS)
+    pendingRedisRestaurantInvalidationTimer.unref?.()
   }
 }
 

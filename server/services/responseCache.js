@@ -10,9 +10,12 @@ const MAX_INFLIGHT_MS = 30000
 const MAX_REDIS_TAG_MEMBERSHIP_ENTRIES = 5000
 const REDIS_TAG_REFRESH_BUFFER_MS = 5000
 const REDIS_INVALIDATION_BATCH_SIZE = Math.max(10, Number(process.env.REDIS_INVALIDATION_BATCH_SIZE || 50))
+const REDIS_INVALIDATION_DEBOUNCE_MS = Math.max(20, Number(process.env.REDIS_INVALIDATION_DEBOUNCE_MS || 150))
 const CACHE_CLEANUP_EVERY_REQUESTS = Math.max(10, Number(process.env.RESPONSE_CACHE_CLEANUP_EVERY || 100))
 const CACHE_NS = 'response-cache'
 let requestCounter = 0
+let pendingRedisInvalidationTimer = null
+const pendingRedisInvalidationTags = new Set()
 
 function nowMs() {
   return Date.now()
@@ -204,6 +207,41 @@ async function invalidateRedisByTags(tags) {
   )
 }
 
+function flushPendingRedisInvalidations() {
+  if (pendingRedisInvalidationTimer) {
+    clearTimeout(pendingRedisInvalidationTimer)
+    pendingRedisInvalidationTimer = null
+  }
+
+  if (!pendingRedisInvalidationTags.size) {
+    return
+  }
+
+  const tags = [...pendingRedisInvalidationTags]
+  pendingRedisInvalidationTags.clear()
+  void invalidateRedisByTags(tags)
+}
+
+function scheduleRedisInvalidation(tags = []) {
+  for (const tag of tags) {
+    pendingRedisInvalidationTags.add(tag)
+  }
+
+  if (pendingRedisInvalidationTags.size >= REDIS_INVALIDATION_BATCH_SIZE * 4) {
+    flushPendingRedisInvalidations()
+    return
+  }
+
+  if (pendingRedisInvalidationTimer) {
+    return
+  }
+
+  pendingRedisInvalidationTimer = setTimeout(() => {
+    flushPendingRedisInvalidations()
+  }, REDIS_INVALIDATION_DEBOUNCE_MS)
+  pendingRedisInvalidationTimer.unref?.()
+}
+
 export function invalidateCacheByTags(tags = [], { skipRedis = false } = {}) {
   const normalizedTags = normalizeTags(tags)
   if (!normalizedTags.length) {
@@ -229,7 +267,7 @@ export function invalidateCacheByTags(tags = [], { skipRedis = false } = {}) {
   }
 
   if (!skipRedis) {
-    void invalidateRedisByTags(normalizedTags)
+    scheduleRedisInvalidation(normalizedTags)
   }
 }
 

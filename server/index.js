@@ -3,7 +3,6 @@ import app from './app.js'
 import { closeDB, connectDB, isMongoStalePrimaryError, refreshMongoTopology } from './config/db.js'
 import config from './config/dataLifecycle.js'
 import { initializeScheduler, shutdownScheduler } from './services/dataLifecycleScheduler.js'
-import { cleanupAllLeaderships } from './services/schedulerLeaderElection.js'
 import { runStartupChecks } from './services/startupChecks.js'
 import { closeSocketServer, initSocketServer } from './realtime/socketServer.js'
 import { performanceMetrics } from './services/performanceMetrics.js'
@@ -39,7 +38,6 @@ async function shutdown(signal, exitCode = 0) {
     stopOrderOutboxWorker()
     stopOrderInventoryWorker()
     stopOrderQueueWorker()
-    await cleanupAllLeaderships()
     performanceMetrics.stop()
     await closeSocketServer()
 
