@@ -1198,6 +1198,18 @@ async function releaseAnalyticsBackfillLock(restaurantId) {
 export async function scheduleCompletedOrderAnalyticsBackfill({ restaurantId } = {}) {
   if (!restaurantId) return false
 
+  const initialDepth = await Order.countDocuments({
+    restaurantId,
+    isArchived: false,
+    orderStatus: 'Completed',
+    analyticsTrackedAt: null,
+  })
+
+  // No pending work means no Redis lock/write is needed at all.
+  if (!initialDepth) {
+    return false
+  }
+
   const lockAcquired = await acquireAnalyticsBackfillLock(restaurantId)
   if (!lockAcquired) {
     return false
@@ -1209,13 +1221,6 @@ export async function scheduleCompletedOrderAnalyticsBackfill({ restaurantId } =
       let batches = 0
       let totalProcessed = 0
       let lastMode = 'baseline'
-
-      const initialDepth = await Order.countDocuments({
-        restaurantId,
-        isArchived: false,
-        orderStatus: 'Completed',
-        analyticsTrackedAt: null,
-      })
 
       logger.info('analytics_backfill_queue_depth', {
         restaurantId: String(restaurantId),
