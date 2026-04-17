@@ -48,13 +48,13 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-white px-4">
-      <form className="card w-full max-w-xl p-6" onSubmit={onSubmit}>
-        <Link to="/" className="mb-4 inline-block text-sm font-semibold text-slate-600 hover:text-[var(--primary)]">
+    <div className="auth-shell flex items-center justify-center px-4 py-8">
+      <form className="auth-card w-full max-w-xl p-6" onSubmit={onSubmit}>
+        <Link to="/" className="mb-4 inline-block text-sm font-semibold text-slate-700 hover:text-[var(--primary)]">
           ← Back to Landing
         </Link>
         <h1 className="text-2xl font-bold text-slate-900">Login to Chef's Bud</h1>
-        <p className="mb-5 mt-1 text-sm text-slate-500">Choose how you want to access your workspace</p>
+        <p className="mb-5 mt-1 text-sm text-slate-700">Choose how you want to access your workspace</p>
         <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2">
           <button
             type="button"
@@ -62,14 +62,10 @@ export default function LoginPage() {
               setMode('manager')
               setError('')
             }}
-            className={`rounded-2xl border p-4 text-left transition ${
-              mode === 'manager'
-                ? 'border-red-300 bg-red-50 shadow-sm'
-                : 'border-slate-200 bg-white hover:border-red-200'
-            }`}
+            className={`auth-mode-button p-4 text-left transition ${mode === 'manager' ? 'active' : ''}`}
           >
-            <p className="text-sm font-semibold text-slate-900">Login As Manager</p>
-            <p className="mt-1 text-xs text-slate-600">Full access to all modules and settings.</p>
+            <p className="auth-mode-button-title text-sm">Login As Manager</p>
+            <p className="auth-mode-button-copy mt-1 text-xs">Full access to all modules and settings.</p>
           </button>
           <button
             type="button"
@@ -77,14 +73,10 @@ export default function LoginPage() {
               setMode('staff')
               setError('')
             }}
-            className={`rounded-2xl border p-4 text-left transition ${
-              mode === 'staff'
-                ? 'border-red-300 bg-red-50 shadow-sm'
-                : 'border-slate-200 bg-white hover:border-red-200'
-            }`}
+            className={`auth-mode-button p-4 text-left transition ${mode === 'staff' ? 'active' : ''}`}
           >
-            <p className="text-sm font-semibold text-slate-900">Login As Staff</p>
-            <p className="mt-1 text-xs text-slate-600">Access only Orders, Menu, Offers and Billing.</p>
+            <p className="auth-mode-button-title text-sm">Login As Staff</p>
+            <p className="auth-mode-button-copy mt-1 text-xs">Access only Orders, Menu, Offers and Billing.</p>
           </button>
         </div>
         {error && <p className="mb-3 text-sm text-[var(--primary)]">{error}</p>}

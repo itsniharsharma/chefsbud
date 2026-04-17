@@ -126,29 +126,25 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_10%_-10%,rgba(229,9,20,0.18),transparent_34%),radial-gradient(circle_at_100%_0%,rgba(2,6,23,0.12),transparent_30%),#f6f8fc] px-4 py-8 md:px-6 md:py-10">
-      <div className="mx-auto w-full max-w-6xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_30px_70px_rgba(15,23,42,0.14)]">
+    <div className="auth-shell px-4 py-8 md:px-6 md:py-10">
+      <div className="auth-frame mx-auto w-full max-w-6xl overflow-hidden">
         <div className="grid grid-cols-1 lg:grid-cols-12">
-          <aside className="relative hidden overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-[#101b3a] p-8 text-white lg:col-span-5 lg:block">
-            <div className="absolute -right-20 -top-16 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(229,9,20,0.45),transparent_68%)]" />
-            <div className="absolute -left-24 bottom-0 h-72 w-72 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.14),transparent_72%)]" />
-            <div className="absolute inset-0 bg-[linear-gradient(125deg,rgba(255,255,255,0.03)_0%,rgba(255,255,255,0.12)_42%,rgba(255,255,255,0.02)_100%)]" />
-
-            <div className="relative z-10">
-              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-red-200">Owner Access</p>
+          <aside className="auth-brand-panel hidden p-8 lg:col-span-5 lg:block">
+            <div className="auth-brand-content">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white">Owner Access</p>
               <h2 className="mt-3 text-4xl font-bold leading-tight">Premium control for premium hospitality teams</h2>
-              <p className="mt-4 text-sm text-slate-200">
+              <p className="mt-4 text-sm text-white">
                 Sign up once, verify your email, and move straight into a single subscription checkout to unlock your dashboard.
               </p>
 
               <div className="mt-8 space-y-3">
-                <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm backdrop-blur">
+                <div className="auth-feature px-4 py-3 text-sm">
                   Fast owner onboarding with email verification
                 </div>
-                <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm backdrop-blur">
+                <div className="auth-feature px-4 py-3 text-sm">
                   One payment today that covers setup plus your first month
                 </div>
-                <div className="rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm backdrop-blur">
+                <div className="auth-feature px-4 py-3 text-sm">
                   Automated monthly billing with access protection and grace handling
                 </div>
               </div>
@@ -156,15 +152,15 @@ export default function RegisterPage() {
           </aside>
 
           <section className="p-5 sm:p-7 lg:col-span-7 lg:p-10">
-            <Link to="/overview" className="mb-4 inline-block text-sm font-semibold text-slate-600 hover:text-[var(--primary)]">
+            <Link to="/overview" className="mb-4 inline-block text-sm font-semibold text-slate-700 hover:text-[var(--primary)]">
               ← Back to Overview
             </Link>
 
-            <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-1">
+            <div className="auth-tab-wrap mb-5 p-1">
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
-                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${tab === 'signup' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  className={`auth-tab-button px-3 py-2 text-sm font-semibold transition ${tab === 'signup' ? 'active' : 'hover:text-slate-900'}`}
                   onClick={() => {
                     setTab('signup')
                     setError('')
@@ -175,7 +171,7 @@ export default function RegisterPage() {
                 </button>
                 <button
                   type="button"
-                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${tab === 'login' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  className={`auth-tab-button px-3 py-2 text-sm font-semibold transition ${tab === 'login' ? 'active' : 'hover:text-slate-900'}`}
                   onClick={() => {
                     setTab('login')
                     setLoginError('')
@@ -189,24 +185,24 @@ export default function RegisterPage() {
             {tab === 'login' ? (
               <>
                 <h1 className="text-3xl font-bold text-slate-900 md:text-4xl">Welcome back</h1>
-                <p className="mb-5 mt-2 text-sm text-slate-500">Choose how you want to access your workspace.</p>
+                <p className="mb-5 mt-2 text-sm text-slate-700">Choose how you want to access your workspace.</p>
 
-                <div className="mb-5 grid grid-cols-2 gap-3">
+                <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={() => { setLoginMode('manager'); setLoginError('') }}
-                    className={`rounded-2xl border p-4 text-left transition ${loginMode === 'manager' ? 'border-red-300 bg-red-50 shadow-sm' : 'border-slate-200 bg-white hover:border-red-200'}`}
+                    className={`auth-mode-button p-4 text-left transition ${loginMode === 'manager' ? 'active' : ''}`}
                   >
-                    <p className="text-sm font-semibold text-slate-900">Login As Manager</p>
-                    <p className="mt-1 text-xs text-slate-600">Full access to all modules and settings.</p>
+                    <p className="auth-mode-button-title text-sm">Login As Manager</p>
+                    <p className="auth-mode-button-copy mt-1 text-xs">Full access to all modules and settings.</p>
                   </button>
                   <button
                     type="button"
                     onClick={() => { setLoginMode('staff'); setLoginError('') }}
-                    className={`rounded-2xl border p-4 text-left transition ${loginMode === 'staff' ? 'border-red-300 bg-red-50 shadow-sm' : 'border-slate-200 bg-white hover:border-red-200'}`}
+                    className={`auth-mode-button p-4 text-left transition ${loginMode === 'staff' ? 'active' : ''}`}
                   >
-                    <p className="text-sm font-semibold text-slate-900">Login As Staff</p>
-                    <p className="mt-1 text-xs text-slate-600">Access Orders, Menu, Offers and Billing.</p>
+                    <p className="auth-mode-button-title text-sm">Login As Staff</p>
+                    <p className="auth-mode-button-copy mt-1 text-xs">Access Orders, Menu, Offers and Billing.</p>
                   </button>
                 </div>
 
@@ -245,7 +241,7 @@ export default function RegisterPage() {
                   {step === 'details' ? 'Create owner account' : 'Verify your email'}
                 </h1>
 
-                <p className="mb-5 mt-2 text-sm text-slate-500">
+                <p className="mb-5 mt-2 text-sm text-slate-700">
                   {step === 'details'
                     ? 'Set up your profile and restaurant details to begin.'
                     : 'Enter the 6-digit code sent to your email to continue.'}
