@@ -37,7 +37,7 @@ async function shutdown(signal, exitCode = 0) {
     await shutdownScheduler()
     stopOrderOutboxWorker()
     stopOrderInventoryWorker()
-    stopOrderQueueWorker()
+    await stopOrderQueueWorker()
     performanceMetrics.stop()
     await closeSocketServer()
 
@@ -119,8 +119,8 @@ async function start() {
       startOrderInventoryWorker()
       logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
     } else {
-      startOrderQueueWorker()
-      logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false })
+      const redisQueueStarted = await startOrderQueueWorker()
+      logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false, started: redisQueueStarted })
     }
     logger.info('Jobs process started', { processRole: PROCESS_ROLE, useLegacyWorkers: USE_LEGACY_WORKERS })
     return
@@ -146,8 +146,8 @@ async function start() {
     startOrderInventoryWorker()
     logger.info('legacy_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: true })
   } else {
-    startOrderQueueWorker()
-    logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false })
+    const redisQueueStarted = await startOrderQueueWorker()
+    logger.info('redis_queue_workers_enabled', { processRole: PROCESS_ROLE, useLegacyWorkers: false, started: redisQueueStarted })
   }
 
   httpServer.keepAliveTimeout = Number(process.env.KEEP_ALIVE_TIMEOUT_MS || 65000)

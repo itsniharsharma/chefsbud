@@ -4,14 +4,41 @@ import { logger } from '../utils/logger.js'
 
 const redisUrl = String(process.env.UPSTASH_REDIS_REST_URL || '').trim()
 const redisToken = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim()
-const redisSocketUrl = String(process.env.REDIS_SOCKET_URL || process.env.REDIS_URL || '').trim()
+const configuredRedisSocketUrl = String(process.env.REDIS_SOCKET_URL || process.env.REDIS_URL || '').trim()
 
 let redisClient = null
 let blockingRedisClient = null
 let blockingRedisConnectPromise = null
 let warnedUnavailable = false
 let warnedBlockingUnavailable = false
+let warnedSocketUrlNormalized = false
 const redisOpStats = new Map()
+
+function normalizeRedisSocketUrl(url) {
+  const normalized = String(url || '').trim()
+  if (!normalized) return ''
+
+  try {
+    const parsed = new URL(normalized)
+    const host = String(parsed.hostname || '').toLowerCase()
+    if (parsed.protocol === 'redis:' && host.endsWith('.upstash.io')) {
+      parsed.protocol = 'rediss:'
+      if (!warnedSocketUrlNormalized) {
+        warnedSocketUrlNormalized = true
+        logger.warn('redis_socket_url_normalized_to_tls', {
+          message: 'Upstash socket Redis URLs should use rediss://. Normalized redis:// to rediss:// for this process.',
+        })
+      }
+      return parsed.toString()
+    }
+  } catch {
+    return normalized
+  }
+
+  return normalized
+}
+
+const redisSocketUrl = normalizeRedisSocketUrl(configuredRedisSocketUrl)
 
 function recordRedisOp(operationName, field) {
   const op = String(operationName || 'unknown')
@@ -87,6 +114,25 @@ export async function getBlockingRedisClient() {
   }
 
   return blockingRedisClient
+}
+
+export async function closeBlockingRedisClient() {
+  if (!blockingRedisClient) {
+    return
+  }
+
+  try {
+    if (blockingRedisClient.isOpen) {
+      await blockingRedisClient.quit()
+    }
+  } catch (error) {
+    logger.warn('redis_blocking_client_close_failed', {
+      message: error?.message || 'Blocking Redis client close failed',
+    })
+  } finally {
+    blockingRedisClient = null
+    blockingRedisConnectPromise = null
+  }
 }
 
 export async function withRedis(operationName, operation, fallbackValue = null) {

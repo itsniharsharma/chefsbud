@@ -1,15 +1,22 @@
 import { randomUUID } from 'node:crypto'
-import { getBlockingRedisClient, getRedisClient, isRedisConfigured } from '../config/redis.js'
+import {
+  closeBlockingRedisClient,
+  getBlockingRedisClient,
+  getRedisClient,
+  isBlockingRedisConfigured,
+  isRedisConfigured,
+} from '../config/redis.js'
 import { logger } from '../utils/logger.js'
 import Order from '../models/Order.js'
 import { processOrderStatusTransition } from './orderStatusProcessingService.js'
 import { reserveStockForOrder } from './inventoryV2Service.js'
 
 const QUEUE_KEY = 'order:jobs:pending'
+const PROCESSING_KEY = 'order:jobs:processing'
 const DEAD_LETTER_KEY = 'order:jobs:deadletter'
 const BATCH_SIZE = Math.max(1, Number(process.env.ORDER_QUEUE_BATCH_SIZE || 10))
 const CONCURRENCY = Math.max(1, Math.min(10, Number(process.env.ORDER_QUEUE_CONCURRENCY || 5)))
-const BRPOP_TIMEOUT_SECONDS = Math.max(1, Number(process.env.ORDER_QUEUE_BLOCK_TIMEOUT_SECONDS || 5))
+const BRPOP_TIMEOUT_SECONDS = Math.max(0, Number(process.env.ORDER_QUEUE_BLOCK_TIMEOUT_SECONDS || 0))
 const MAX_RETRIES = Math.max(1, Number(process.env.ORDER_QUEUE_MAX_RETRIES || 3))
 const PROCESSED_JOBS_KEY = 'order:jobs:processed'
 const INFLIGHT_JOBS_KEY = 'order:jobs:inflight'
@@ -19,25 +26,19 @@ const ENQUEUE_RETRY_MAX_ATTEMPTS = 3
 const ENQUEUE_RETRY_DELAY_MS = 100
 const INFLIGHT_LOCK_TTL_SECONDS = 300
 const QUEUE_DEPTH_CHECK_INTERVAL_MS = Math.max(250, Number(process.env.ORDER_QUEUE_DEPTH_CHECK_INTERVAL_MS || 1000))
-const DYNAMIC_SCALING_ENABLED = String(process.env.ORDER_QUEUE_DYNAMIC_SCALING_ENABLED || 'true') === 'true'
-const SCALE_UP_PENDING_THRESHOLD = Math.max(1, Number(process.env.ORDER_QUEUE_SCALE_UP_PENDING_THRESHOLD || Math.max(BATCH_SIZE * 4, 20)))
 const DEPTH_REFRESH_INTERVAL_MS = Math.max(500, Number(process.env.ORDER_QUEUE_DEPTH_REFRESH_INTERVAL_MS || 2000))
-const SCALE_PARK_SLEEP_MS = Math.max(500, Number(process.env.ORDER_QUEUE_SCALE_PARK_SLEEP_MS || 2500))
-const IDLE_PRIMARY_ONLY = String(process.env.ORDER_QUEUE_IDLE_PRIMARY_ONLY || 'true') === 'true'
-const IDLE_GRACE_MS = Math.max(5_000, Number(process.env.ORDER_QUEUE_IDLE_GRACE_MS || 20_000))
-const IDLE_SECONDARY_SLEEP_MS = Math.max(1_000, Number(process.env.ORDER_QUEUE_IDLE_SECONDARY_SLEEP_MS || 30_000))
 const BATCH_LOG_SAMPLE_RATE = Math.max(1, Number(process.env.ORDER_QUEUE_BATCH_LOG_SAMPLE_RATE || 20))
+const RECOVER_PROCESSING_ON_START = String(process.env.ORDER_QUEUE_RECOVER_PROCESSING_ON_START || 'true') !== 'false'
 
 let queueWorkerRunning = false
 let activeWorkers = 0
-let warnedBrpopUnsupported = false
-let forceRpopFallback = false
 let idleSinceMs = Date.now()
 let batchLogCounter = 0
 let lastQueueDepthCheckAtMs = 0
 let lastDepthRefreshAtMs = 0
 const queueSnapshot = {
   pendingJobs: 0,
+  processingJobs: 0,
   deadLetterJobs: 0,
   lastQueueEventAt: null,
 }
@@ -56,6 +57,11 @@ function incrementDeadLetterJobs(delta = 1) {
   markQueueEvent()
 }
 
+function incrementProcessingJobs(delta = 1) {
+  queueSnapshot.processingJobs = Math.max(0, queueSnapshot.processingJobs + Number(delta || 0))
+  markQueueEvent()
+}
+
 async function refreshQueueDepth(redis, { force = false } = {}) {
   const now = Date.now()
   if (!force && now - lastDepthRefreshAtMs < DEPTH_REFRESH_INTERVAL_MS) {
@@ -67,21 +73,6 @@ async function refreshQueueDepth(redis, { force = false } = {}) {
   lastDepthRefreshAtMs = now
   return queueSnapshot.pendingJobs
 }
-
-function shouldParkSecondaryWorker(workerNo) {
-  if (workerNo <= 1) return false
-
-  if (DYNAMIC_SCALING_ENABLED) {
-    return Number(queueSnapshot.pendingJobs || 0) < SCALE_UP_PENDING_THRESHOLD
-  }
-
-  if (IDLE_PRIMARY_ONLY && idleSinceMs > 0 && Date.now() - idleSinceMs >= IDLE_GRACE_MS) {
-    return true
-  }
-
-  return false
-}
-
 
 export async function enqueueOrderJob(job) {
   if (!isRedisConfigured()) {
@@ -151,17 +142,63 @@ export async function enqueueOrderJob(job) {
   return false
 }
 
+async function recoverProcessingJobsOnStart() {
+  if (!RECOVER_PROCESSING_ON_START) {
+    return
+  }
+
+  const redis = getRedisClient()
+  if (!redis) {
+    return
+  }
+
+  let recovered = 0
+
+  while (true) {
+    const rawPayload = await redis.rpop(PROCESSING_KEY)
+    if (!rawPayload) {
+      break
+    }
+
+    await redis.lpush(QUEUE_KEY, rawPayload)
+    recovered += 1
+  }
+
+  if (recovered > 0) {
+    incrementPendingJobs(recovered)
+    queueSnapshot.processingJobs = 0
+    logger.warn('order_queue_processing_jobs_recovered', { recovered })
+  }
+}
+
 /**
  * Start queue worker (blocking BRPOP, not polling)
  */
 export async function startOrderQueueWorker() {
   if (queueWorkerRunning) {
-    return
+    return true
   }
 
   if (!isRedisConfigured()) {
     logger.warn('order_queue_worker_not_started_redis_not_configured')
-    return
+    return false
+  }
+
+  if (!isBlockingRedisConfigured()) {
+    logger.warn('order_queue_worker_not_started_blocking_redis_not_configured', {
+      message: 'Set REDIS_SOCKET_URL or REDIS_URL to enable native BRPOP without idle REST polling.',
+    })
+    return false
+  }
+
+  try {
+    await getBlockingRedisClient()
+    await recoverProcessingJobsOnStart()
+  } catch (error) {
+    logger.error('order_queue_worker_not_started_blocking_redis_unavailable', {
+      message: error?.message || 'Blocking Redis connection failed',
+    })
+    return false
   }
 
   queueWorkerRunning = true
@@ -169,31 +206,13 @@ export async function startOrderQueueWorker() {
   logger.info('order_queue_worker_started', {
     concurrency: CONCURRENCY,
     mode: 'blocking-brpop',
-    dynamicScaling: DYNAMIC_SCALING_ENABLED,
-    scaleUpPendingThreshold: SCALE_UP_PENDING_THRESHOLD,
-    depthRefreshIntervalMs: DEPTH_REFRESH_INTERVAL_MS,
-    scaleParkSleepMs: SCALE_PARK_SLEEP_MS,
-    idlePrimaryOnly: IDLE_PRIMARY_ONLY,
-    idleGraceMs: IDLE_GRACE_MS,
-    idleSecondarySleepMs: IDLE_SECONDARY_SLEEP_MS,
+    batchSize: BATCH_SIZE,
+    blockTimeoutSeconds: BRPOP_TIMEOUT_SECONDS,
   })
 
-  const workLoop = async (workerNo) => {
+  const workLoop = async () => {
     while (queueWorkerRunning) {
       try {
-        if (shouldParkSecondaryWorker(workerNo)) {
-          await sleep(DYNAMIC_SCALING_ENABLED ? SCALE_PARK_SLEEP_MS : IDLE_SECONDARY_SLEEP_MS)
-          continue
-        }
-
-        if (workerNo === 1) {
-          const redis = getRedisClient()
-          if (redis) {
-            await refreshQueueDepth(redis)
-          }
-        }
-
-        // Fetch next batch
         const batch = await fetchJobBatch(BATCH_SIZE, { blocking: true })
         if (!batch || batch.length === 0) {
           if (idleSinceMs <= 0) {
@@ -212,19 +231,23 @@ export async function startOrderQueueWorker() {
           activeWorkers -= 1
         }
       } catch (error) {
-        logger.error('order_queue_work_loop_error', { error: error?.message, workerNo })
+        if (!queueWorkerRunning) {
+          break
+        }
+        logger.error('order_queue_work_loop_error', { error: error?.message })
         await sleep(1000)
       }
     }
   }
 
-  for (let i = 0; i < CONCURRENCY; i += 1) {
-    void workLoop(i + 1)
-  }
+  void workLoop()
+
+  return true
 }
 
 export async function stopOrderQueueWorker() {
   queueWorkerRunning = false
+  await closeBlockingRedisClient()
   logger.info('order_queue_worker_stopped')
 }
 
@@ -244,46 +267,18 @@ function extractBrpopPayload(result) {
   return typeof result === 'string' ? result : null
 }
 
-async function blockingPop(redis, key, timeoutSeconds) {
+async function blockingPop(key, timeoutSeconds) {
   const blockingRedis = await getBlockingRedisClient()
-  if (blockingRedis && typeof blockingRedis.brPop === 'function') {
-    return blockingRedis.brPop(key, timeoutSeconds)
+  if (blockingRedis && typeof blockingRedis.sendCommand === 'function') {
+    return blockingRedis.sendCommand(['BRPOPLPUSH', key, PROCESSING_KEY, String(timeoutSeconds)])
   }
 
-  if (blockingRedis && typeof blockingRedis.brpop === 'function') {
-    return blockingRedis.brpop(key, timeoutSeconds)
-  }
-
-  // Upstash REST SDK compatibility path: some versions expose low-level command() only.
-  if (!forceRpopFallback && typeof redis?.command === 'function') {
-    try {
-      return await redis.command(['BRPOP', key, String(timeoutSeconds)])
-    } catch (error) {
-      forceRpopFallback = true
-      if (!warnedBrpopUnsupported) {
-        warnedBrpopUnsupported = true
-        logger.warn('order_queue_brpop_command_fallback_rpop', {
-          message: error?.message || 'BRPOP command unsupported, switching to paced RPOP fallback.',
-        })
-      }
-    }
-  }
-
-  // Last-resort compatibility: no BRPOP support, fallback to a paced single RPOP.
-  if (!warnedBrpopUnsupported) {
-    warnedBrpopUnsupported = true
-    logger.warn('order_queue_brpop_not_supported_fallback_rpop', {
-      note: 'Using compatibility fallback; upgrade redis SDK for native BRPOP support.',
-    })
-  }
-
-  await sleep(Math.max(1, timeoutSeconds) * 1000)
-  const payload = await redis.rpop(key)
-  return payload ? [key, payload] : null
+  throw new Error('blocking_redis_client_does_not_support_brpoplpush')
 }
 
 async function parseAndCollectJob(redis, rawPayload, jobs) {
   if (!rawPayload) return
+  incrementProcessingJobs(1)
 
   // JSON parse safety - catch and DLQ corrupted jobs
   let job = null
@@ -294,6 +289,8 @@ async function parseAndCollectJob(redis, rawPayload, jobs) {
       error: parseError?.message,
       rawData: String(rawPayload).substring(0, 100),
     })
+    await redis.lrem(PROCESSING_KEY, 1, rawPayload)
+    incrementProcessingJobs(-1)
     await redis.lpush(DEAD_LETTER_KEY, JSON.stringify({
       rawData: String(rawPayload),
       parseError: parseError?.message,
@@ -305,8 +302,16 @@ async function parseAndCollectJob(redis, rawPayload, jobs) {
   }
 
   if (job) {
-    jobs.push(job)
+    jobs.push({ job, rawPayload })
   }
+}
+
+async function movePendingToProcessing(redis) {
+  if (typeof redis?.command === 'function') {
+    return redis.command(['RPOPLPUSH', QUEUE_KEY, PROCESSING_KEY])
+  }
+
+  throw new Error('redis_client_does_not_support_rpoplpush')
 }
 
 async function fetchJobBatch(limit, { blocking = false } = {}) {
@@ -319,7 +324,7 @@ async function fetchJobBatch(limit, { blocking = false } = {}) {
     const jobs = []
 
     if (blocking) {
-      const firstResult = await blockingPop(redis, QUEUE_KEY, BRPOP_TIMEOUT_SECONDS)
+      const firstResult = await blockingPop(QUEUE_KEY, BRPOP_TIMEOUT_SECONDS)
       const firstPayload = extractBrpopPayload(firstResult)
       if (!firstPayload) {
         return []
@@ -329,7 +334,7 @@ async function fetchJobBatch(limit, { blocking = false } = {}) {
 
     const alreadyFetched = jobs.length
     for (let i = alreadyFetched; i < limit; i++) {
-      const jobData = await redis.rpop(QUEUE_KEY)
+      const jobData = await movePendingToProcessing(redis)
       if (!jobData) break
       await parseAndCollectJob(redis, jobData, jobs)
     }
@@ -356,7 +361,7 @@ async function fetchJobBatch(limit, { blocking = false } = {}) {
 
 async function processBatchConcurrent(batch) {
   const results = await Promise.allSettled(
-    batch.map((job) => processJob(job))
+    batch.map((entry) => processJobEntry(entry))
   )
 
   const failed = results.filter((r) => r.status === 'rejected')
@@ -365,6 +370,29 @@ async function processBatchConcurrent(batch) {
       totalJobs: batch.length,
       failedJobs: failed.length,
     })
+  }
+}
+
+async function acknowledgeProcessingPayload(rawPayload) {
+  if (!rawPayload) {
+    return
+  }
+
+  try {
+    const redis = getRedisClient()
+    if (!redis) return
+    await redis.lrem(PROCESSING_KEY, 1, rawPayload)
+    incrementProcessingJobs(-1)
+  } catch (error) {
+    logger.error('order_queue_ack_processing_failed', { error: error?.message })
+  }
+}
+
+async function processJobEntry(entry) {
+  try {
+    await processJob(entry?.job)
+  } finally {
+    await acknowledgeProcessingPayload(entry?.rawPayload)
   }
 }
 
@@ -626,10 +654,8 @@ export async function getQueueStats() {
     deadLetterJobs: queueSnapshot.deadLetterJobs,
     activeWorkers,
     maxConcurrency: CONCURRENCY,
-    dynamicScalingEnabled: DYNAMIC_SCALING_ENABLED,
-    scaleUpPendingThreshold: SCALE_UP_PENDING_THRESHOLD,
-    scaleParkSleepMs: SCALE_PARK_SLEEP_MS,
     maxQueueSize: MAX_QUEUE_SIZE,
+    processingJobs: queueSnapshot.processingJobs,
     queueHealthy: queueSnapshot.pendingJobs < MAX_QUEUE_SIZE && queueSnapshot.deadLetterJobs < 100,
     lastQueueEventAt: queueSnapshot.lastQueueEventAt,
   }
