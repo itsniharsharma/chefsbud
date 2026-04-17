@@ -34,23 +34,80 @@ const appRevision =
 const jsonLimit = process.env.API_JSON_LIMIT || '1mb'
 const urlEncodedLimit = process.env.API_URLENCODED_LIMIT || '256kb'
 
+const RATE_LIMITED_API_PREFIXES = [
+  '/api/auth',
+  '/api/restaurants',
+  '/api/menu',
+  '/api/tables',
+  '/api/orders',
+  '/api/offers',
+  '/api/analytics',
+  '/api/payments',
+  '/api/inventory',
+  '/api/demo',
+  '/api/data-lifecycle',
+]
+
+const PROBE_USER_AGENT_PATTERNS = [
+  /kube-probe/i,
+  /googlehc/i,
+  /healthcheck/i,
+  /uptime/i,
+  /pingdom/i,
+  /statuscake/i,
+  /newrelic/i,
+  /datadog/i,
+  /prometheus/i,
+]
+
+function isKnownRateLimitedApiPath(pathname) {
+  const normalizedPath = String(pathname || '').trim()
+  if (!normalizedPath.startsWith('/api/')) return false
+
+  return RATE_LIMITED_API_PREFIXES.some(
+    (prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`),
+  )
+}
+
+function shouldBypassGlobalRateLimiter(req) {
+  const method = String(req.method || '').toUpperCase()
+  const path = String(req.path || '').trim()
+  const userAgent = String(req.headers['user-agent'] || '').trim()
+
+  if (
+    method === 'OPTIONS' ||
+    method === 'HEAD' ||
+    path === '/' ||
+    path === '/favicon.ico' ||
+    path === '/robots.txt' ||
+    path === '/manifest.json' ||
+    path.startsWith('/socket.io') ||
+    path.startsWith('/.well-known/') ||
+    path === '/health' ||
+    path === '/api/health' ||
+    path === '/api' ||
+    !isKnownRateLimitedApiPath(path)
+  ) {
+    return true
+  }
+
+  if (PROBE_USER_AGENT_PATTERNS.some((pattern) => pattern.test(userAgent))) {
+    return true
+  }
+
+  return (
+    (method === 'GET' && (path.startsWith('/api/menu/') || path.startsWith('/api/orders/track/'))) ||
+    (method === 'POST' && path === '/api/orders')
+  )
+}
+
 const globalLimiter = createRateLimiter({
   id: 'global',
   capacity: Number(process.env.RATE_LIMIT_GLOBAL_CAPACITY || 240),
   windowMs: Number(process.env.RATE_LIMIT_GLOBAL_WINDOW_MS || 60_000),
   keyFn: (req) => req.ip,
-  skip: (req) =>
-    req.method === 'OPTIONS' ||
-    req.method === 'HEAD' ||
-    req.path === '/' ||
-    req.path === '/favicon.ico' ||
-    req.path === '/robots.txt' ||
-    req.path === '/manifest.json' ||
-    req.path.startsWith('/socket.io') ||
-    req.path === '/health' ||
-    req.path === '/api/health' ||
-    (req.method === 'GET' && (req.path.startsWith('/api/menu/') || req.path.startsWith('/api/orders/track/'))) ||
-    (req.method === 'POST' && req.path === '/api/orders')
+  useRedis: String(process.env.RATE_LIMIT_GLOBAL_USE_REDIS || 'false') === 'true',
+  skip: shouldBypassGlobalRateLimiter,
 })
 
 const originConfig = (process.env.CORS_ORIGIN || 'http://localhost:5173')

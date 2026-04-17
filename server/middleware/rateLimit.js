@@ -73,6 +73,7 @@ export function createRateLimiter({
   keyFn,
   id = 'rate-limit',
   skip,
+  useRedis = RATE_LIMIT_USE_REDIS,
 }) {
   const maxTokens = Math.max(1, Number(capacity) || 60)
   const refillWindowMs = Math.max(1000, Number(windowMs) || 60_000)
@@ -143,7 +144,7 @@ export function createRateLimiter({
       return next()
     }
 
-    if (!RATE_LIMIT_USE_REDIS) {
+    if (!useRedis) {
       const key = (typeof keyFn === 'function' ? keyFn(req) : req.ip) || req.ip || 'unknown'
       return applyLocalRateLimit(key, req, res, next)
     }
