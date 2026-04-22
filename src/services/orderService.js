@@ -16,11 +16,8 @@ export const orderService = {
   shiftTable(payload) {
     return api.patch('/orders/shift-table', payload).then((response) => response.data)
   },
-  markKotPrinted(orderId, payload = {}) {
-    return api.patch(`/orders/${orderId}/kot-printed`, payload).then((response) => response.data)
-  },
-  markBillPrinted(orderId, payload = {}) {
-    return api.patch(`/orders/${orderId}/bill-printed`, payload).then((response) => response.data)
+  markPrintBundle(orderId, payload = {}) {
+    return api.patch(`/orders/${orderId}/print-bundle`, payload).then((response) => response.data)
   },
   delete(orderId) {
     return api.delete(`/orders/${orderId}`).then((response) => response.data)

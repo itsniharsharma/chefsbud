@@ -250,12 +250,12 @@ export default function BillPrintModal({
   }
 
   return (
-    <Modal open={open} title="Print Bill" onClose={printing ? undefined : onClose}>
+    <Modal open={open} title="Print Bill + KOT" onClose={printing ? undefined : onClose}>
       {step === 'choice' ? (
         <div className="space-y-4">
           <p className="text-sm text-slate-600">
-            Order <span className="font-semibold text-slate-900">{getOrderDisplayNumber(order)}</span> is ready for billing.
-            Print the bill directly or add bill-only extra items first.
+            Order <span className="font-semibold text-slate-900">{getOrderDisplayNumber(order)}</span> is ready to print.
+            Print Bill + KOT directly or add bill-only extra items first.
           </p>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
             <div className="flex items-center justify-between gap-3">
@@ -307,7 +307,7 @@ export default function BillPrintModal({
               }
               disabled={printing}
             >
-              {printing ? 'Printing...' : 'Simply Print'}
+              {printing ? 'Printing...' : 'Simply Print Both'}
             </Button>
           </div>
         </div>

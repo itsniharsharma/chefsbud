@@ -6,6 +6,7 @@ import {
 	getOrders,
 	markOrderBillPrinted,
 	markOrderKotPrinted,
+	markOrderPrintBundle,
 	getPublicTableOrders,
 	getPublicOrderStatus,
 	ratePublicOrder,
@@ -160,6 +161,18 @@ router.patch(
 	],
 	validateRequest,
 	markOrderBillPrinted,
+)
+router.patch(
+	'/:orderId/print-bundle',
+	requireAuth,
+	requireActiveBilling,
+	[
+		body('billAdjustments').optional().isArray({ max: 50 }),
+		body('reprintPasskey').optional().isString().isLength({ min: 6, max: 80 }),
+		body('reprintReason').optional().isString().trim().isLength({ min: 3, max: 240 }),
+	],
+	validateRequest,
+	markOrderPrintBundle,
 )
 router.delete('/:orderId', requireAuth, requireActiveBilling, deleteOrder)
 

@@ -11,7 +11,7 @@ import { playOrderAlertSound } from '../services/orderAlertAudio'
 import { useAuth } from '../hooks/useAuth'
 import { useOrdersBoardQuery, useTablesQuery, useMenuQuery } from '../hooks/useDashboardQueries'
 import { queryKeys } from '../lib/queryKeys'
-import { buildBillHtml, buildKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
+import { buildCombinedBillKotHtml, closePrintWindow, openPrintWindow, printIntoWindow } from '../utils/orderPrint'
 import { applyBillDiscountToOrder, buildBillPrintPayload, buildReprintOrderForBill } from '../utils/billPrintFlow'
 
 export default function OrdersPage() {
@@ -22,12 +22,12 @@ export default function OrdersPage() {
   const [shiftFloorNumber, setShiftFloorNumber] = useState('')
   const [shiftTableNumber, setShiftTableNumber] = useState('')
   const [shiftingTableKey, setShiftingTableKey] = useState('')
-  const [printingBillOrderId, setPrintingBillOrderId] = useState('')
-  const [printingKotOrderId, setPrintingKotOrderId] = useState('')
+  const [printingCombinedOrderId, setPrintingCombinedOrderId] = useState('')
   const [statusActionBusy, setStatusActionBusy] = useState(false)
   const [manualRefreshPending, setManualRefreshPending] = useState(false)
   const [billTargetOrder, setBillTargetOrder] = useState(null)
   const [reprintTargetOrder, setReprintTargetOrder] = useState(null)
+  const [pendingCombinedPrint, setPendingCombinedPrint] = useState(null)
   const statusMutationLockRef = useRef(false)
   const queryClient = useQueryClient()
 
@@ -60,23 +60,6 @@ export default function OrdersPage() {
         active.splice(activeIndex, 1)
       } else {
         active[activeIndex] = { ...active[activeIndex], orderStatus: nextStatus }
-      }
-    }
-
-    return { ...boardData, activeOrders: active }
-  }
-
-  const applyKotPrintedUpdateToBoard = (boardData, orderId) => {
-    if (!boardData) return boardData
-
-    const active = (boardData.activeOrders || []).map((order) => ({ ...order }))
-    const activeIndex = active.findIndex((order) => String(order._id || order.id) === String(orderId))
-
-    if (activeIndex >= 0) {
-      active[activeIndex] = {
-        ...active[activeIndex],
-        kotPrinted: true,
-        kotPrintedAt: new Date().toISOString(),
       }
     }
 
@@ -161,32 +144,8 @@ export default function OrdersPage() {
     },
   })
 
-  const markKotPrintedMutation = useMutation({
-    mutationFn: ({ id, payload }) => orderService.markKotPrinted(id, payload),
-    onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: boardQueryKey })
-      const previousBoards = queryClient.getQueriesData({ queryKey: boardQueryKey })
-
-      queryClient.setQueriesData({ queryKey: boardQueryKey }, (boardData) =>
-        applyKotPrintedUpdateToBoard(boardData, id),
-      )
-
-      return { previousBoards }
-    },
-    onSuccess: () => {
-      setError('')
-      refreshBoard()
-    },
-    onError: (requestError, _variables, context) => {
-      if (context?.previousBoards) {
-        restorePreviousBoards(context.previousBoards)
-      }
-      setError(requestError?.response?.data?.message || 'Failed to update KOT status')
-    },
-  })
-
-  const markBillPrintedMutation = useMutation({
-    mutationFn: ({ id, payload }) => orderService.markBillPrinted(id, payload),
+  const markPrintBundleMutation = useMutation({
+    mutationFn: ({ id, payload }) => orderService.markPrintBundle(id, payload),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: boardQueryKey })
       const previousBoards = queryClient.getQueriesData({ queryKey: boardQueryKey })
@@ -196,6 +155,8 @@ export default function OrdersPage() {
           _id: id,
           billPrinted: true,
           billPrintedAt: new Date().toISOString(),
+          kotPrinted: true,
+          kotPrintedAt: new Date().toISOString(),
         }),
       )
 
@@ -212,7 +173,7 @@ export default function OrdersPage() {
       if (context?.previousBoards) {
         restorePreviousBoards(context.previousBoards)
       }
-      setError(requestError?.response?.data?.message || 'Failed to update bill print status')
+      setError(requestError?.response?.data?.message || 'Failed to update print status')
     },
   })
 
@@ -294,79 +255,74 @@ export default function OrdersPage() {
     await refreshBoard()
   }
 
-  const printBillForOrder = async (order, options = {}) => {
+  const printCombinedForOrder = async (order, options = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
 
     const confirmed = Boolean(options?.confirmed)
-    const payload = buildBillPrintPayload(options)
+    const billPayload = buildBillPrintPayload(options)
+    const kotPayload = options?.reprintPasskey
+      ? {
+          reprintPasskey: String(options.reprintPasskey || ''),
+          reprintReason: String(options.reprintReason || ''),
+        }
+      : {}
 
     if (!confirmed) {
       setBillTargetOrder(order)
       return
     }
 
-    let printWindow = null
-    setPrintingBillOrderId(orderId)
-    setError('')
-
-    try {
-      printWindow = openPrintWindow({
-        title: 'bill',
-        features: 'width=860,height=700',
+    if (order?.kotPrinted && !kotPayload.reprintPasskey) {
+      setPendingCombinedPrint({
+        order,
+        billPayload,
       })
-
-      let orderForPrint
-      if (order?.billPrinted) {
-        orderForPrint = buildReprintOrderForBill({
-          order,
-          billAdjustments: payload.billAdjustments,
-          billDiscountPercent: payload.billDiscountPercent,
-        })
-      } else {
-        const savedOrder = await markBillPrintedMutation.mutateAsync({ id: orderId, payload })
-        orderForPrint = applyBillDiscountToOrder({
-          order: savedOrder,
-          billDiscountPercent: payload.billDiscountPercent,
-        })
-      }
-
-      printIntoWindow(printWindow, buildBillHtml({ order: orderForPrint, restaurant }))
-      setBillTargetOrder(null)
-    } catch (requestError) {
-      closePrintWindow(printWindow)
-      setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill')
-    } finally {
-      setPrintingBillOrderId('')
-    }
-  }
-
-  const printKotForOrder = async (order, payload = {}) => {
-    const orderId = String(order?._id || order?.id || '')
-    if (!orderId || !restaurant?._id) return
-
-    if (order?.kotPrinted && !payload?.reprintPasskey) {
       setReprintTargetOrder(order)
       return
     }
 
     let printWindow = null
-    setPrintingKotOrderId(orderId)
+    setPrintingCombinedOrderId(orderId)
     setError('')
 
     try {
       printWindow = openPrintWindow({
-        title: 'KOT',
-        features: 'width=380,height=640',
+        title: 'Bill + KOT',
+        features: 'width=900,height=800',
       })
-      await markKotPrintedMutation.mutateAsync({ id: orderId, payload })
-      printIntoWindow(printWindow, buildKotHtml({ order }))
+
+      let orderForPrint
+      const bundlePayload = order?.billPrinted
+        ? kotPayload
+        : { ...billPayload, ...kotPayload }
+
+      if (order?.billPrinted) {
+        orderForPrint = buildReprintOrderForBill({
+          order,
+          billAdjustments: billPayload.billAdjustments,
+          billDiscountPercent: billPayload.billDiscountPercent,
+        })
+      } else {
+        const savedOrder = await markPrintBundleMutation.mutateAsync({ id: orderId, payload: bundlePayload })
+        orderForPrint = applyBillDiscountToOrder({
+          order: savedOrder,
+          billDiscountPercent: billPayload.billDiscountPercent,
+        })
+      }
+
+      if (order?.billPrinted) {
+        await markPrintBundleMutation.mutateAsync({ id: orderId, payload: bundlePayload })
+      }
+      printIntoWindow(printWindow, buildCombinedBillKotHtml({ order: orderForPrint, restaurant }))
+      setBillTargetOrder(null)
       setReprintTargetOrder(null)
+      setPendingCombinedPrint(null)
     } catch (requestError) {
       closePrintWindow(printWindow)
-      setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print KOT')
+      setError(requestError?.message || requestError?.response?.data?.message || 'Unable to print bill and KOT')
     } finally {
-      setPrintingKotOrderId('')
+      setPrintingCombinedOrderId('')
     }
   }
 
@@ -426,18 +382,25 @@ export default function OrdersPage() {
         open={Boolean(billTargetOrder)}
         order={billTargetOrder}
         restaurantId={restaurant?._id}
-        printing={Boolean(printingBillOrderId)}
+        printing={Boolean(printingCombinedOrderId)}
         onClose={() => setBillTargetOrder(null)}
-        onSimplePrint={(payload) => printBillForOrder(billTargetOrder, { confirmed: true, ...(payload || {}) })}
-        onPrintWithAdjustments={(payload) => printBillForOrder(billTargetOrder, { confirmed: true, ...payload })}
+        onSimplePrint={(payload) => printCombinedForOrder(billTargetOrder, { confirmed: true, ...(payload || {}) })}
+        onPrintWithAdjustments={(payload) => printCombinedForOrder(billTargetOrder, { confirmed: true, ...payload })}
       />
       <KotReprintModal
         open={Boolean(reprintTargetOrder)}
         order={reprintTargetOrder}
         hasPasskey={Boolean(restaurant?.hasKotReprintPasskey)}
-        loading={Boolean(printingKotOrderId)}
+        loading={Boolean(printingCombinedOrderId)}
         onClose={() => setReprintTargetOrder(null)}
-        onConfirm={(payload) => printKotForOrder(reprintTargetOrder, payload)}
+        onConfirm={(payload) => {
+          if (!pendingCombinedPrint?.order) return
+          printCombinedForOrder(pendingCombinedPrint.order, {
+            confirmed: true,
+            ...pendingCombinedPrint.billPayload,
+            ...(payload || {}),
+          })
+        }}
       />
       {error && <p className="text-sm text-[var(--primary)]">{error}</p>}
       <div className="h-[calc(100vh-150px)] min-h-[780px]">
@@ -460,10 +423,8 @@ export default function OrdersPage() {
                     onStatusChange={onStatusChange}
                     onShiftTable={onOpenShiftTable}
                     shiftingTableKey={shiftingTableKey}
-                    onPrintBill={printBillForOrder}
-                    onPrintKot={printKotForOrder}
-                    printingBillOrderId={printingBillOrderId}
-                    printingKotOrderId={printingKotOrderId}
+                    onPrintCombined={printCombinedForOrder}
+                    printingCombinedOrderId={printingCombinedOrderId}
                     statusActionDisabled={statusActionBusy || updateStatusMutation.isPending}
                   />
                 ))}

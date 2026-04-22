@@ -70,9 +70,7 @@ function normalizePercent(value) {
   return round2(parsed)
 }
 
-export function buildBillHtml({ order, restaurant, restaurantName }) {
-  const fallbackRestaurantName = String(restaurant?.name || restaurantName || "Chef's Bud")
-  const restaurantGstin = String(restaurant?.gstin || '').trim()
+function buildBillView(order, restaurant) {
   const baseSubtotal = Number(order.totalAmount ?? order.subtotalAmount ?? 0)
   const adjustmentSubtotal = Number(order.billAdjustmentSubtotal || 0)
   const grossBeforeDiscount = round2(baseSubtotal + adjustmentSubtotal)
@@ -94,14 +92,36 @@ export function buildBillHtml({ order, restaurant, restaurantName }) {
   const finalTotal = round2(
     order.billFinalTotalAmount ?? (billTaxableAmount + billServiceChargeAmount + billGstAmount),
   )
-  const hasAdjustments = Array.isArray(order.billAdjustments) && order.billAdjustments.length > 0
+
+  return {
+    baseSubtotal,
+    adjustmentSubtotal,
+    grossBeforeDiscount,
+    billDiscountPercent,
+    billDiscountAmount,
+    billTaxableAmount,
+    billServiceChargePercent,
+    billServiceChargeAmount,
+    billGstPercent,
+    billGstAmount,
+    finalTotal,
+    hasAdjustments: Array.isArray(order.billAdjustments) && order.billAdjustments.length > 0,
+  }
+}
+
+export function buildCombinedBillKotHtml({ order, restaurant, restaurantName }) {
+  const fallbackRestaurantName = String(restaurant?.name || restaurantName || "Chef's Bud")
+  const restaurantGstin = String(restaurant?.gstin || '').trim()
   const orderDisplayNumber = getOrderDisplayNumber(order)
+  const createdAt = order.createdAt ? new Date(order.createdAt).toLocaleString() : '-'
+  const note = order.customerNote ? escapeHtml(String(order.customerNote)) : ''
+  const bill = buildBillView(order, restaurant)
 
   return `<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Bill ${escapeHtml(orderDisplayNumber)}</title>
+    <title>Bill + KOT ${escapeHtml(orderDisplayNumber)}</title>
     <style>
       :root {
         color-scheme: light;
@@ -121,6 +141,33 @@ export function buildBillHtml({ order, restaurant, restaurantName }) {
 
       body {
         display: inline-block;
+      }
+
+      .bundle-root {
+        display: inline-block;
+      }
+
+      hr {
+        margin: 8px 0;
+        border: 0;
+        border-top: 1px solid #cbd5e1;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        page-break-inside: avoid;
+      }
+
+      th,
+      td {
+        padding: 3px 0;
+      }
+
+      .avoid-break {
+        page-break-inside: avoid;
+        break-inside: avoid;
       }
 
       .bill-container {
@@ -153,24 +200,6 @@ export function buildBillHtml({ order, restaurant, restaurantName }) {
         line-height: 1.45;
       }
 
-      hr {
-        margin: 8px 0;
-        border: 0;
-        border-top: 1px solid #cbd5e1;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        page-break-inside: avoid;
-      }
-
-      th,
-      td {
-        padding: 3px 0;
-      }
-
       .totals {
         font-size: 13px;
         line-height: 1.5;
@@ -201,9 +230,35 @@ export function buildBillHtml({ order, restaurant, restaurantName }) {
         color: #334155;
       }
 
-      .avoid-break {
-        page-break-inside: avoid;
-        break-inside: avoid;
+      .tear-line {
+        width: 56mm;
+        border-top: 2px dashed #94a3b8;
+        margin: 6mm 0 2mm;
+      }
+
+      .tear-label {
+        width: 56mm;
+        margin: 0 0 6mm;
+        text-align: center;
+        color: #64748b;
+        font-size: 10px;
+        letter-spacing: 0.2px;
+      }
+
+      .kot-container {
+        box-sizing: border-box;
+        display: inline-block;
+        width: 190mm;
+        max-width: 100%;
+        margin: 0;
+        padding: 8mm;
+        min-height: 0;
+        height: auto;
+      }
+
+      .kot-title {
+        margin: 0 0 6px 0;
+        font-size: 20px;
       }
 
       @page {
@@ -231,153 +286,6 @@ export function buildBillHtml({ order, restaurant, restaurantName }) {
           height: auto !important;
         }
 
-        .avoid-break {
-          page-break-inside: avoid !important;
-          break-inside: avoid !important;
-        }
-
-        hr {
-          margin: 6px 0;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <main class="bill-container">
-    <h2 class="bill-title">${escapeHtml(fallbackRestaurantName)}</h2>
-    <div class="bill-subtitle">${restaurantGstin ? `GSTIN: ${escapeHtml(restaurantGstin)}` : 'GSTIN: NA'}</div>
-    <div class="meta avoid-break">
-      <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
-      <div><strong>Time:</strong> ${escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleString() : '-')}</div>
-      <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">
-        <span class="badge">TAX INVOICE</span>
-      </div>
-    </div>
-    <hr />
-    <table class="avoid-break">
-      <thead>
-        <tr>
-          <th style="text-align:left;padding:4px 0;">Item</th>
-          <th style="text-align:center;padding:4px 0;">Qty</th>
-          <th style="text-align:right;padding:4px 0;">Price</th>
-          <th style="text-align:right;padding:4px 0;">Subtotal</th>
-        </tr>
-      </thead>
-      <tbody>${buildBillRows(order.items || [])}</tbody>
-    </table>
-    ${hasAdjustments ? `
-    <hr />
-    <div style="font-size:12px;font-weight:700;margin-bottom:4px;" class="avoid-break">Bill Adjustments</div>
-    <table class="avoid-break">
-      <thead>
-        <tr>
-          <th style="text-align:left;padding:4px 0;">Item</th>
-          <th style="text-align:center;padding:4px 0;">Qty</th>
-          <th style="text-align:right;padding:4px 0;">Price</th>
-          <th style="text-align:right;padding:4px 0;">Subtotal</th>
-        </tr>
-      </thead>
-      <tbody>${buildAdjustmentRows(order)}</tbody>
-    </table>` : ''}
-    <hr />
-    <div class="totals avoid-break">
-      <div class="total-line"><span>Base amount</span><strong>${escapeHtml(formatCurrencyINR(baseSubtotal))}</strong></div>
-      <div class="total-line"><span>Extra items</span><strong>+${escapeHtml(formatCurrencyINR(adjustmentSubtotal))}</strong></div>
-      <div class="total-line"><span>Gross amount</span><strong>${escapeHtml(formatCurrencyINR(grossBeforeDiscount))}</strong></div>
-      <div class="total-line"><span>Discount (${escapeHtml(String(billDiscountPercent))}%)</span><strong>-${escapeHtml(formatCurrencyINR(billDiscountAmount))}</strong></div>
-      <div class="total-line"><span>Taxable amount</span><strong>${escapeHtml(formatCurrencyINR(billTaxableAmount))}</strong></div>
-      <div class="total-line"><span>Service charge (${escapeHtml(String(billServiceChargePercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(billServiceChargeAmount))}</strong></div>
-      <div class="total-line"><span>GST (${escapeHtml(String(billGstPercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(billGstAmount))}</strong></div>
-      <hr />
-      <div class="total-line totals-strong"><span>Grand Total</span><span>${escapeHtml(formatCurrencyINR(finalTotal))}</span></div>
-    </div>
-    </main>
-  </body>
-</html>`
-}
-
-export function buildKotHtml({ order }) {
-  const orderDisplayNumber = getOrderDisplayNumber(order)
-  const createdAt = order.createdAt ? new Date(order.createdAt).toLocaleString() : '-'
-  const note = order.customerNote ? escapeHtml(String(order.customerNote)) : ''
-
-  return `<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>KOT - ${escapeHtml(orderDisplayNumber)}</title>
-    <style>
-      html,
-      body {
-        margin: 0;
-        padding: 0;
-        width: auto;
-        height: auto;
-        min-height: 0;
-        background: #fff;
-        color: #0f172a;
-        font-family: Arial, sans-serif;
-      }
-
-      body {
-        display: inline-block;
-      }
-
-      .kot-container {
-        box-sizing: border-box;
-        display: inline-block;
-        width: 80mm;
-        max-width: 100%;
-        margin: 0;
-        padding: 6mm;
-        min-height: 0;
-        height: auto;
-      }
-
-      .kot-title {
-        margin: 0 0 6px 0;
-        font-size: 20px;
-      }
-
-      .meta {
-        font-size: 12px;
-        line-height: 1.45;
-      }
-
-      hr {
-        margin: 8px 0;
-        border: 0;
-        border-top: 1px solid #cbd5e1;
-      }
-
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        page-break-inside: avoid;
-      }
-
-      .avoid-break {
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-
-      @page {
-        size: auto;
-        margin: 5mm;
-      }
-
-      @media print {
-        html,
-        body {
-          margin: 0 !important;
-          padding: 0 !important;
-          width: auto !important;
-          height: auto !important;
-          min-height: 0 !important;
-          overflow: visible !important;
-        }
-
         .kot-container {
           width: auto !important;
           max-width: 100% !important;
@@ -390,22 +298,75 @@ export function buildKotHtml({ order }) {
     </style>
   </head>
   <body>
-    <main class="kot-container">
-    <h2 class="kot-title">KITCHEN ORDER TICKET</h2>
-    <div class="meta avoid-break">
-      <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
-      <div><strong>Table:</strong> ${order.tableNumber} | <strong>Floor:</strong> ${order.floorNumber || 1}</div>
-      <div><strong>Time:</strong> ${createdAt}</div>
-      <div><strong>Status:</strong> ${order.orderStatus}</div>
-    </div>
-    <hr />
-    <table class="avoid-break">
-      <tbody>
-        ${buildKotRows(order)}
-      </tbody>
-    </table>
-    ${note ? `<hr /><div style="font-size:12px;" class="avoid-break"><strong>Note:</strong> ${note}</div>` : ''}
+    <section class="bundle-root">
+    <main class="bill-container">
+      <h2 class="bill-title">${escapeHtml(fallbackRestaurantName)}</h2>
+      <div class="bill-subtitle">${restaurantGstin ? `GSTIN: ${escapeHtml(restaurantGstin)}` : 'GSTIN: NA'}</div>
+      <div class="meta avoid-break">
+        <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
+        <div><strong>Time:</strong> ${escapeHtml(createdAt)}</div>
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">
+          <span class="badge">TAX INVOICE</span>
+        </div>
+      </div>
+      <hr />
+      <table class="avoid-break">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:4px 0;">Item</th>
+            <th style="text-align:center;padding:4px 0;">Qty</th>
+            <th style="text-align:right;padding:4px 0;">Price</th>
+            <th style="text-align:right;padding:4px 0;">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>${buildBillRows(order.items || [])}</tbody>
+      </table>
+      ${bill.hasAdjustments ? `
+      <hr />
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px;" class="avoid-break">Bill Adjustments</div>
+      <table class="avoid-break">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:4px 0;">Item</th>
+            <th style="text-align:center;padding:4px 0;">Qty</th>
+            <th style="text-align:right;padding:4px 0;">Price</th>
+            <th style="text-align:right;padding:4px 0;">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>${buildAdjustmentRows(order)}</tbody>
+      </table>` : ''}
+      <hr />
+      <div class="totals avoid-break">
+        <div class="total-line"><span>Base amount</span><strong>${escapeHtml(formatCurrencyINR(bill.baseSubtotal))}</strong></div>
+        <div class="total-line"><span>Extra items</span><strong>+${escapeHtml(formatCurrencyINR(bill.adjustmentSubtotal))}</strong></div>
+        <div class="total-line"><span>Gross amount</span><strong>${escapeHtml(formatCurrencyINR(bill.grossBeforeDiscount))}</strong></div>
+        <div class="total-line"><span>Discount (${escapeHtml(String(bill.billDiscountPercent))}%)</span><strong>-${escapeHtml(formatCurrencyINR(bill.billDiscountAmount))}</strong></div>
+        <div class="total-line"><span>Taxable amount</span><strong>${escapeHtml(formatCurrencyINR(bill.billTaxableAmount))}</strong></div>
+        <div class="total-line"><span>Service charge (${escapeHtml(String(bill.billServiceChargePercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(bill.billServiceChargeAmount))}</strong></div>
+        <div class="total-line"><span>GST (${escapeHtml(String(bill.billGstPercent))}%)</span><strong>+${escapeHtml(formatCurrencyINR(bill.billGstAmount))}</strong></div>
+        <hr />
+        <div class="total-line totals-strong"><span>Grand Total</span><span>${escapeHtml(formatCurrencyINR(bill.finalTotal))}</span></div>
+      </div>
     </main>
+
+    <div class="tear-line"></div>
+    <p class="tear-label">Tear here</p>
+
+    <main class="kot-container">
+      <h2 class="kot-title">KOT</h2>
+      <div class="meta avoid-break">
+        <div><strong>Order:</strong> ${escapeHtml(orderDisplayNumber)}</div>
+        <div><strong>Table:</strong> ${order.tableNumber} | <strong>Floor:</strong> ${order.floorNumber || 1}</div>
+        <div><strong>Time:</strong> ${createdAt}</div>
+        <div><strong>Status:</strong> ${order.orderStatus}</div>
+      </div>
+      <hr />
+      <table class="avoid-break">
+        <tbody>${buildKotRows(order)}</tbody>
+      </table>
+      ${note ? `<hr /><div style="font-size:12px;" class="avoid-break"><strong>Note:</strong> ${note}</div>` : ''}
+    </main>
+    </section>
   </body>
 </html>`
 }

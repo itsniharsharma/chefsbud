@@ -1320,6 +1320,139 @@ export async function markOrderKotPrinted(req, res, next) {
   }
 }
 
+export async function markOrderPrintBundle(req, res, next) {
+  try {
+    const restaurant = await resolveRequestRestaurant(req)
+    if (!restaurant) {
+      return respondRestaurantNotFound(res)
+    }
+
+    const existingOrder = await Order.findOne({ _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false })
+      .select('_id floorNumber tableNumber totalAmount billPrinted billPrintedAt billAdjustments billAdjustmentSubtotal billFinalTotalAmount kotPrinted kotPrintCount')
+      .lean()
+
+    if (!existingOrder) {
+      return res.status(404).json({ message: 'Order not found' })
+    }
+
+    const rawBillAdjustments = Array.isArray(req.body?.billAdjustments) ? req.body.billAdjustments : null
+    if (existingOrder.billPrinted && rawBillAdjustments !== null) {
+      return res.status(400).json({ message: 'Bill adjustments can only be added before the first bill print.' })
+    }
+
+    let billAdjustments = null
+    let billAdjustmentSubtotal = null
+    if (rawBillAdjustments !== null) {
+      const built = await buildValidatedBillAdjustments({
+        restaurantId: restaurant._id,
+        adjustments: rawBillAdjustments,
+      })
+      billAdjustments = built.billAdjustments
+      billAdjustmentSubtotal = built.adjustmentSubtotal
+    }
+
+    const isKotReprint = Boolean(existingOrder.kotPrinted)
+    const reprintPasskey = String(req.body?.reprintPasskey || '')
+    const reprintReason = String(req.body?.reprintReason || '').trim()
+
+    if (isKotReprint) {
+      const secureRestaurant = await Restaurant.findById(restaurant._id)
+        .select('kotReprintConfig.passkeyHash')
+        .lean()
+      const reprintConfigHash = String(secureRestaurant?.kotReprintConfig?.passkeyHash || '')
+
+      if (!reprintConfigHash) {
+        return res.status(403).json({ message: 'Manager must configure a KOT reprint passkey in Settings before reprinting.' })
+      }
+
+      if (!reprintReason || reprintReason.length < 3 || reprintReason.length > 240) {
+        return res.status(400).json({ message: 'A reprint reason between 3 and 240 characters is required.' })
+      }
+
+      const validPasskey = await bcrypt.compare(reprintPasskey, reprintConfigHash)
+      if (!validPasskey) {
+        return res.status(403).json({ message: 'Invalid KOT reprint passkey.' })
+      }
+    }
+
+    const printedAt = new Date()
+    const actorName = req.user?.role === 'staff'
+      ? req.user?.staffDisplayName || req.user?.staffUsername || 'Staff'
+      : req.user?.name || 'Manager'
+
+    const update = {
+      billPrinted: true,
+      billPrintedAt: existingOrder.billPrintedAt || printedAt,
+      kotPrinted: true,
+      kotPrintedAt: printedAt,
+      kotPrintCount: Math.max(1, Number(existingOrder.kotPrintCount || 0) + 1),
+    }
+
+    if (billAdjustments !== null && billAdjustmentSubtotal !== null) {
+      update.billAdjustments = billAdjustments
+      update.billAdjustmentSubtotal = billAdjustmentSubtotal
+      update.billFinalTotalAmount = round2(Number(existingOrder.totalAmount || 0) + Number(billAdjustmentSubtotal || 0))
+    }
+
+    if (isKotReprint) {
+      update.lastKotReprintReason = reprintReason
+      update.lastKotReprintBy = actorName
+      update.lastKotReprintAt = printedAt
+    }
+
+    const order = await Order.findOneAndUpdate(
+      { _id: req.params.orderId, restaurantId: restaurant._id, isArchived: false },
+      { $set: update },
+      { returnDocument: 'after', runValidators: true },
+    ).lean()
+
+    if (isKotReprint) {
+      sendKotReprintAuditEmail({
+        to: req.user?.email,
+        restaurantName: restaurant.name,
+        orderId: String(order._id),
+        tableNumber: order.tableNumber,
+        floorNumber: order.floorNumber,
+        actorName,
+        actorRole: req.user?.role === 'staff' ? 'staff' : 'manager',
+        reason: reprintReason,
+        reprintedAt: printedAt,
+      }).catch((error) => {
+        logger.warn('kot_reprint_email_failed', {
+          orderId: String(order._id),
+          restaurantId: String(restaurant._id),
+          message: error?.message || 'failed_to_send_kot_reprint_email',
+        })
+      })
+    }
+
+    invalidateCacheByTags(
+      buildOrderCacheTags({
+        restaurant,
+        tableNumber: order.tableNumber,
+        orderId: order._id,
+      }),
+      { skipRedis: true },
+    )
+    publishOrderChange({
+      restaurantId: restaurant._id,
+      type: 'bill-printed',
+      orderId: order._id,
+      extra: { billPrinted: true, billPrintedAt: order.billPrintedAt },
+    })
+    publishOrderChange({
+      restaurantId: restaurant._id,
+      type: 'kot-printed',
+      orderId: order._id,
+      extra: { kotPrinted: true, kotPrintedAt: order.kotPrintedAt },
+    })
+
+    return res.json(order)
+  } catch (error) {
+    next(error)
+  }
+}
+
 export async function markOrderBillPrinted(req, res, next) {
   try {
     const restaurant = await resolveRequestRestaurant(req)
