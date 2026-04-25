@@ -23,6 +23,12 @@ function serializeSessionRestaurant(restaurant) {
   }
 }
 
+function invalidateOwnerRestaurantCache(ownerId) {
+  const cacheKey = String(ownerId || '').trim()
+  if (!cacheKey) return
+  ownerRestaurantCache.delete(cacheKey)
+}
+
 const OTP_EXPIRY_MINUTES = Number(process.env.EMAIL_OTP_EXPIRY_MINUTES || 10)
 const OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.EMAIL_OTP_RESEND_COOLDOWN_SECONDS || 60)
 const OTP_MAX_ATTEMPTS = Number(process.env.EMAIL_OTP_MAX_ATTEMPTS || 5)
@@ -329,6 +335,8 @@ export async function verifyRegistration(req, res, next) {
       ownerId: user._id,
     })
 
+    invalidateOwnerRestaurantCache(user._id)
+
     await PendingRegistration.deleteOne({ _id: pending._id })
 
     const token = signToken({
@@ -504,12 +512,13 @@ export async function me(req, res, next) {
       })
     }
 
+    const serializedRequestRestaurant = serializeSessionRestaurant(req.restaurant)
     const [currentUser, restaurant] = await Promise.all([
       User.findById(req.user._id)
         .select('_id name email emailVerified role billing tokenVersion')
         .lean(),
-      serializeSessionRestaurant(req.restaurant)
-        ? Promise.resolve(serializeSessionRestaurant(req.restaurant))
+      serializedRequestRestaurant
+        ? Promise.resolve(serializedRequestRestaurant)
         : getOwnerRestaurant(req.user._id),
     ])
 
@@ -533,6 +542,7 @@ export async function logout(req, res, next) {
     }
 
     await User.updateOne({ _id: req.user._id }, { $inc: { tokenVersion: 1 } })
+    invalidateOwnerRestaurantCache(req.user._id)
     return res.json({ message: 'Logged out' })
   } catch (error) {
     next(error)
