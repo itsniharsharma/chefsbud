@@ -179,6 +179,7 @@ export default function RecentOrdersPage() {
   const printCombinedForOrder = async (order, options = {}) => {
     const orderId = String(order?._id || order?.id || '')
     if (!orderId || !restaurant?._id) return
+    if (printingCombinedOrderId && printingCombinedOrderId === orderId) return
 
     const confirmed = Boolean(options?.confirmed)
     const billPayload = buildBillPrintPayload(options)
@@ -265,7 +266,10 @@ export default function RecentOrdersPage() {
         order={billTargetOrder}
         restaurantId={restaurant?._id}
         printing={Boolean(printingCombinedOrderId)}
-        onClose={() => setBillTargetOrder(null)}
+        onClose={() => {
+          setBillTargetOrder(null)
+          setPendingCombinedPrint(null)
+        }}
         onSimplePrint={(payload) => printCombinedForOrder(billTargetOrder, { confirmed: true, ...(payload || {}) })}
         onPrintWithAdjustments={(payload) => printCombinedForOrder(billTargetOrder, { confirmed: true, ...payload })}
       />
@@ -274,7 +278,10 @@ export default function RecentOrdersPage() {
         order={reprintTargetOrder}
         hasPasskey={Boolean(restaurant?.hasKotReprintPasskey)}
         loading={Boolean(printingCombinedOrderId)}
-        onClose={() => setReprintTargetOrder(null)}
+        onClose={() => {
+          setReprintTargetOrder(null)
+          setPendingCombinedPrint(null)
+        }}
         onConfirm={(payload) => {
           if (!pendingCombinedPrint?.order) return
           printCombinedForOrder(pendingCombinedPrint.order, {

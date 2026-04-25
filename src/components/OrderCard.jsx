@@ -36,7 +36,9 @@ function OrderCard({
         .join(', ')
     : ''
 
-  const createdTime = order.createdAt ? new Date(order.createdAt).toLocaleTimeString() : '-'
+  const createdDate = order.createdAt ? new Date(order.createdAt) : null
+  const createdTime = createdDate && Number.isFinite(createdDate.getTime()) ? createdDate.toLocaleTimeString() : '-'
+  const showShiftTableAction = showStatusActions && typeof onShiftTable === 'function'
 
   return (
     <div className="card p-4">
@@ -53,15 +55,17 @@ function OrderCard({
         <span>Status: {label}</span>
       </div>
       <div className="mt-3">
-        <Button
-          type="button"
-          variant="secondary"
-          className="mr-2 border border-slate-300 bg-slate-50 text-slate-700 hover:-translate-y-0.5 hover:border-slate-400 hover:bg-slate-100 hover:shadow-md"
-          onClick={() => onShiftTable?.(order)}
-          disabled={isShifting}
-        >
-          {isShifting ? 'Shifting...' : 'Shift Table'}
-        </Button>
+        {showShiftTableAction ? (
+          <Button
+            type="button"
+            variant="secondary"
+            className="mr-2 border border-slate-300 bg-slate-50 text-slate-700 hover:-translate-y-0.5 hover:border-slate-400 hover:bg-slate-100 hover:shadow-md"
+            onClick={() => onShiftTable(order)}
+            disabled={isShifting}
+          >
+            {isShifting ? 'Shifting...' : 'Shift Table'}
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="custom"
