@@ -18,6 +18,7 @@ import {
   releaseWebhookLock,
 } from '../services/webhookIdempotencyService.js'
 import { logger } from '../utils/logger.js'
+import { syncRestaurantFeatureEntitlementsForOwner } from '../services/planFeatureEntitlementService.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1299900
 const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
@@ -557,6 +558,17 @@ export async function createHybridSubscription(req, res, next) {
       razorpaySubscriptionId: subscription.id,
     }
     await user.save()
+    void syncRestaurantFeatureEntitlementsForOwner({
+      ownerId: user._id,
+      planCode: selectedPlan.code,
+      source: 'subscription_create_pending',
+    }).catch((error) => {
+      logger.warn('restaurant_feature_entitlement_sync_failed', {
+        userId: String(user._id || ''),
+        planCode: selectedPlan.code,
+        message: error?.message || 'restaurant feature entitlement sync failed',
+      })
+    })
 
     return res.status(201).json({
       ...buildCheckoutResponse({
@@ -617,6 +629,17 @@ export async function verifyHybridSubscription(req, res, next) {
     }
 
     await user.save()
+    void syncRestaurantFeatureEntitlementsForOwner({
+      ownerId: user._id,
+      planCode: selectedPlanCode,
+      source: 'subscription_verify_active',
+    }).catch((error) => {
+      logger.warn('restaurant_feature_entitlement_sync_failed', {
+        userId: String(user._id || ''),
+        planCode: selectedPlanCode,
+        message: error?.message || 'restaurant feature entitlement sync failed',
+      })
+    })
 
     void enqueueBillingStatusEmailJob({
       to: user.email,

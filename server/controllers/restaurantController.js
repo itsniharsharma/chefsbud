@@ -18,6 +18,7 @@ import {
   purgeInventoryLifecycleData,
 } from '../services/moduleDataCleanupService.js'
 import { logger } from '../utils/logger.js'
+import { getFeatureEntitlementForPlanCode } from '../services/planFeatureEntitlementService.js'
 
 function serializeRestaurantForOwner(restaurant) {
   if (!restaurant) return null
@@ -104,23 +105,32 @@ export async function updateMyRestaurant(req, res, next) {
       }
     }
 
-    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'inventoryEnabled')) {
-      if (typeof req.body.inventoryEnabled !== 'boolean') {
-        return res.status(400).json({ message: 'inventoryEnabled must be a boolean' })
-      }
+    const entitlementByPlan = getFeatureEntitlementForPlanCode(req.user?.billing?.planCode)
+    if (entitlementByPlan) {
       restaurant.featureConfig = {
         ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
-        inventoryEnabled: req.body.inventoryEnabled,
+        inventoryEnabled: entitlementByPlan.inventoryEnabled,
+        analyticsEnabled: entitlementByPlan.analyticsEnabled,
       }
-    }
+    } else {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'inventoryEnabled')) {
+        if (typeof req.body.inventoryEnabled !== 'boolean') {
+          return res.status(400).json({ message: 'inventoryEnabled must be a boolean' })
+        }
+        restaurant.featureConfig = {
+          ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
+          inventoryEnabled: req.body.inventoryEnabled,
+        }
+      }
 
-    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'analyticsEnabled')) {
-      if (typeof req.body.analyticsEnabled !== 'boolean') {
-        return res.status(400).json({ message: 'analyticsEnabled must be a boolean' })
-      }
-      restaurant.featureConfig = {
-        ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
-        analyticsEnabled: req.body.analyticsEnabled,
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'analyticsEnabled')) {
+        if (typeof req.body.analyticsEnabled !== 'boolean') {
+          return res.status(400).json({ message: 'analyticsEnabled must be a boolean' })
+        }
+        restaurant.featureConfig = {
+          ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
+          analyticsEnabled: req.body.analyticsEnabled,
+        }
       }
     }
 

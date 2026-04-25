@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { restaurantService } from '../services/restaurantService'
 
 export default function SettingsPage() {
-  const { restaurant, setRestaurant } = useAuth()
+  const { user, restaurant, setRestaurant } = useAuth()
   const [form, setForm] = useState({
     restaurantName: '',
     gstin: '',
@@ -25,19 +25,29 @@ export default function SettingsPage() {
     passkey: '',
     displayName: '',
   })
+  const planCode = String(user?.billing?.planCode || '').trim().toLowerCase()
+  const isCorePlan = planCode === 'core'
+  const isProPlan = planCode === 'pro'
+  const isModuleEntitlementLocked = isCorePlan || isProPlan
 
   useEffect(() => {
     if (!restaurant) return
+    const entitlementDefaults = isCorePlan
+      ? { inventoryEnabled: false, analyticsEnabled: false }
+      : isProPlan
+        ? { inventoryEnabled: true, analyticsEnabled: true }
+        : null
+
     setForm({
       restaurantName: restaurant.name || '',
       gstin: restaurant.gstin || '',
       address: restaurant.address || '',
       phone: restaurant.phone || '',
       lowStockThresholdPercent: String(restaurant.inventoryAlertConfig?.lowStockThresholdPercent ?? 10),
-      inventoryEnabled: restaurant.featureConfig?.inventoryEnabled !== false,
-      analyticsEnabled: restaurant.featureConfig?.analyticsEnabled !== false,
+      inventoryEnabled: entitlementDefaults ? entitlementDefaults.inventoryEnabled : restaurant.featureConfig?.inventoryEnabled !== false,
+      analyticsEnabled: entitlementDefaults ? entitlementDefaults.analyticsEnabled : restaurant.featureConfig?.analyticsEnabled !== false,
     })
-  }, [restaurant])
+  }, [isCorePlan, isProPlan, restaurant])
 
   useEffect(() => {
     restaurantService
@@ -146,23 +156,37 @@ export default function SettingsPage() {
         <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
           <span>
             <span className="block text-sm font-medium text-slate-800">Enable Inventory</span>
-            <span className="block text-xs text-slate-500">Disable to bypass stock, recipes, and inventory processing.</span>
+            <span className="block text-xs text-slate-500">
+              {isCorePlan
+                ? 'Included only in the Scale Plan. Disabled for your current plan.'
+                : isProPlan
+                  ? 'Enabled by your Scale Plan entitlement.'
+                  : 'Disable to bypass stock, recipes, and inventory processing.'}
+            </span>
           </span>
           <input
             type="checkbox"
             checked={Boolean(form.inventoryEnabled)}
             onChange={(e) => setForm((prev) => ({ ...prev, inventoryEnabled: e.target.checked }))}
+            disabled={isModuleEntitlementLocked}
           />
         </label>
         <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
           <span>
             <span className="block text-sm font-medium text-slate-800">Enable Analytics</span>
-            <span className="block text-xs text-slate-500">Disable to stop analytics tracking, dashboards, and heavy reporting.</span>
+            <span className="block text-xs text-slate-500">
+              {isCorePlan
+                ? 'Included only in the Scale Plan. Disabled for your current plan.'
+                : isProPlan
+                  ? 'Enabled by your Scale Plan entitlement.'
+                  : 'Disable to stop analytics tracking, dashboards, and heavy reporting.'}
+            </span>
           </span>
           <input
             type="checkbox"
             checked={Boolean(form.analyticsEnabled)}
             onChange={(e) => setForm((prev) => ({ ...prev, analyticsEnabled: e.target.checked }))}
+            disabled={isModuleEntitlementLocked}
           />
         </label>
         <Button type="submit">Save Changes</Button>
