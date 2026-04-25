@@ -52,7 +52,17 @@ router.post(
   verifyOrder,
 )
 
-router.post('/subscription/hybrid', requireAuth, requireOwner, paymentLimiter, createHybridSubscription)
+router.post(
+  '/subscription/hybrid',
+  requireAuth,
+  requireOwner,
+  paymentLimiter,
+  [
+    body('planCode').optional().isIn(['core', 'pro']).withMessage('planCode must be core or pro'),
+    body('billingCycle').optional().isIn(['monthly', 'yearly']).withMessage('billingCycle must be monthly or yearly'),
+  ],
+  createHybridSubscription,
+)
 
 router.post(
   '/subscription/hybrid/verify',
@@ -63,6 +73,8 @@ router.post(
     body('razorpay_payment_id').notEmpty().withMessage('razorpay_payment_id is required'),
     body('razorpay_subscription_id').notEmpty().withMessage('razorpay_subscription_id is required'),
     body('razorpay_signature').notEmpty().withMessage('razorpay_signature is required'),
+    body('planCode').optional().isIn(['core', 'pro']).withMessage('planCode must be core or pro'),
+    body('billingCycle').optional().isIn(['monthly', 'yearly']).withMessage('billingCycle must be monthly or yearly'),
   ],
   verifyHybridSubscription,
 )

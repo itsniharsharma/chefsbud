@@ -20,7 +20,6 @@ import {
 import { logger } from '../utils/logger.js'
 
 const HYBRID_SETUP_AMOUNT_PAISE = 1299900
-const HYBRID_MONTHLY_AMOUNT_PAISE = 89900
 const BILLING_GRACE_DAYS = Number(process.env.BILLING_GRACE_DAYS || 7)
 const HYBRID_TOTAL_COUNT = Number(process.env.RAZORPAY_HYBRID_TOTAL_COUNT || 60)
 const CUSTOMER_CACHE_MAX_ENTRIES = Number(process.env.RAZORPAY_CUSTOMER_CACHE_MAX || 500)
@@ -28,6 +27,109 @@ const CUSTOMER_LOOKUP_PAGE_SIZE = Math.max(1, Math.min(Number(process.env.RAZORP
 const CUSTOMER_LOOKUP_MAX_PAGES = Math.max(1, Math.min(Number(process.env.RAZORPAY_CUSTOMER_LOOKUP_MAX_PAGES || 3), 50))
 const SUBSCRIPTION_REUSE_STALE_MS = Math.max(5 * 60 * 1000, Number(process.env.RAZORPAY_SUBSCRIPTION_REUSE_STALE_MS || 45 * 60 * 1000))
 const customerIdByEmailCache = new Map()
+const BILLING_PLAN_CODE_CORE = 'core'
+const BILLING_PLAN_CODE_PRO = 'pro'
+const BILLING_CYCLE_MONTHLY = 'monthly'
+const BILLING_CYCLE_YEARLY = 'yearly'
+
+function getBillingPlanCatalog() {
+  return {
+    [BILLING_PLAN_CODE_CORE]: {
+      code: BILLING_PLAN_CODE_CORE,
+      name: 'Growth Plan',
+      setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+      monthlyAmountPaise: 69900,
+      featureHighlights: [
+        'Owner dashboard with menu, orders, tables, and billing controls',
+        'QR-based customer ordering with real-time order visibility',
+        'AI-assisted menu setup with offer controls',
+      ],
+      billingCycles: {
+        [BILLING_CYCLE_MONTHLY]: {
+          cycle: BILLING_CYCLE_MONTHLY,
+          planId: process.env.RAZORPAY_HYBRID_CORE_MONTHLY_PLAN_ID || '',
+          recurringAmountPaise: 69900,
+          recurringIntervalLabel: 'month',
+          discountPercent: 0,
+        },
+        [BILLING_CYCLE_YEARLY]: {
+          cycle: BILLING_CYCLE_YEARLY,
+          planId: process.env.RAZORPAY_HYBRID_CORE_YEARLY_PLAN_ID || '',
+          recurringAmountPaise: 713000,
+          recurringIntervalLabel: 'year',
+          discountPercent: 15,
+        },
+      },
+    },
+    [BILLING_PLAN_CODE_PRO]: {
+      code: BILLING_PLAN_CODE_PRO,
+      name: 'Scale Plan',
+      setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
+      monthlyAmountPaise: 129900,
+      featureHighlights: [
+        'Everything in Growth Plan',
+        'Advanced analytics module',
+        'Inventory management module',
+      ],
+      billingCycles: {
+        [BILLING_CYCLE_MONTHLY]: {
+          cycle: BILLING_CYCLE_MONTHLY,
+          planId: process.env.RAZORPAY_HYBRID_PRO_MONTHLY_PLAN_ID || '',
+          recurringAmountPaise: 129900,
+          recurringIntervalLabel: 'month',
+          discountPercent: 0,
+        },
+        [BILLING_CYCLE_YEARLY]: {
+          cycle: BILLING_CYCLE_YEARLY,
+          planId: process.env.RAZORPAY_HYBRID_PRO_YEARLY_PLAN_ID || '',
+          recurringAmountPaise: 1247000,
+          recurringIntervalLabel: 'year',
+          discountPercent: 20,
+        },
+      },
+    },
+  }
+}
+
+function normalizePlanCode(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === BILLING_PLAN_CODE_CORE || normalized === BILLING_PLAN_CODE_PRO) {
+    return normalized
+  }
+  return BILLING_PLAN_CODE_CORE
+}
+
+function normalizeBillingCycle(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === BILLING_CYCLE_YEARLY) {
+    return BILLING_CYCLE_YEARLY
+  }
+  return BILLING_CYCLE_MONTHLY
+}
+
+function resolveSelectedPlan({ planCatalog, planCode, billingCycle }) {
+  const selectedBasePlan = planCatalog?.[planCode]
+  if (!selectedBasePlan) return null
+
+  const selectedCycle = selectedBasePlan.billingCycles?.[billingCycle]
+  if (!selectedCycle) return null
+
+  const annualMonthlyEquivalentPaise = Number(selectedBasePlan.monthlyAmountPaise || 0) * 12
+  const savedAmountPaise =
+    billingCycle === BILLING_CYCLE_YEARLY
+      ? Math.max(0, annualMonthlyEquivalentPaise - Number(selectedCycle.recurringAmountPaise || 0))
+      : 0
+
+  return {
+    ...selectedBasePlan,
+    billingCycle,
+    planId: selectedCycle.planId,
+    recurringAmountPaise: selectedCycle.recurringAmountPaise,
+    recurringIntervalLabel: selectedCycle.recurringIntervalLabel,
+    discountPercent: Number(selectedCycle.discountPercent || 0),
+    savedAmountPaise,
+  }
+}
 
 function isReusableSubscriptionStatus(status) {
   const normalized = String(status || '').trim().toLowerCase()
@@ -53,21 +155,34 @@ function isStaleCreatedSubscription(subscription) {
   return Date.now() - createdAtSeconds * 1000 > SUBSCRIPTION_REUSE_STALE_MS
 }
 
-function buildPlanSummary() {
+function buildPlanSummary(plan) {
+  const setupAmountPaise = Number(plan?.setupAmountPaise || HYBRID_SETUP_AMOUNT_PAISE)
+  const recurringAmountPaise = Number(plan?.recurringAmountPaise || plan?.monthlyAmountPaise || 0)
   return {
-    setupAmountPaise: HYBRID_SETUP_AMOUNT_PAISE,
-    firstMonthAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
-    totalDueTodayPaise: HYBRID_SETUP_AMOUNT_PAISE + HYBRID_MONTHLY_AMOUNT_PAISE,
-    recurringAmountPaise: HYBRID_MONTHLY_AMOUNT_PAISE,
+    setupAmountPaise,
+    firstMonthAmountPaise: recurringAmountPaise,
+    totalDueTodayPaise: setupAmountPaise + recurringAmountPaise,
+    recurringAmountPaise,
+    recurringIntervalLabel: plan?.recurringIntervalLabel || 'month',
+    billingCycle: plan?.billingCycle || BILLING_CYCLE_MONTHLY,
+    discountPercent: Number(plan?.discountPercent || 0),
+    savedAmountPaise: Number(plan?.savedAmountPaise || 0),
   }
 }
 
-function buildCheckoutResponse({ subscriptionId, customerId }) {
+function buildCheckoutResponse({ subscriptionId, customerId, plan }) {
   return {
     keyId: getRazorpayKeyId(),
     subscriptionId,
     customerId: customerId || '',
-    planSummary: buildPlanSummary(),
+    selectedPlan: {
+      code: plan.code,
+      name: plan.name,
+      billingCycle: plan.billingCycle || BILLING_CYCLE_MONTHLY,
+      recurringIntervalLabel: plan.recurringIntervalLabel || 'month',
+      featureHighlights: Array.isArray(plan.featureHighlights) ? plan.featureHighlights : [],
+    },
+    planSummary: buildPlanSummary(plan),
   }
 }
 
@@ -177,6 +292,10 @@ function shouldNotifyStatus(nextStatus) {
   return ['grace_period', 'past_due', 'cancelled', 'active'].includes(nextStatus)
 }
 
+function normalizeId(value) {
+  return String(value || '').trim()
+}
+
 async function resolveExistingCustomerByEmail(email) {
   const normalizedEmail = normalizeEmail(email)
   if (!normalizedEmail) {
@@ -270,10 +389,31 @@ export async function verifyOrder(req, res, next) {
 
 export async function createHybridSubscription(req, res, next) {
   try {
-    const hybridPlanId = process.env.RAZORPAY_HYBRID_MONTHLY_PLAN_ID
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
+    }
+
+    const planCatalog = getBillingPlanCatalog()
+    const selectedPlanCode = normalizePlanCode(req.body?.planCode)
+    const selectedBillingCycle = normalizeBillingCycle(req.body?.billingCycle)
+    const selectedPlan = resolveSelectedPlan({
+      planCatalog,
+      planCode: selectedPlanCode,
+      billingCycle: selectedBillingCycle,
+    })
+    const hybridPlanId = selectedPlan?.planId
+
     if (!hybridPlanId) {
       return res.status(500).json({
-        message: 'RAZORPAY_HYBRID_MONTHLY_PLAN_ID is missing in server environment',
+        message:
+          selectedPlanCode === BILLING_PLAN_CODE_PRO
+            ? selectedBillingCycle === BILLING_CYCLE_YEARLY
+              ? 'RAZORPAY_HYBRID_PRO_YEARLY_PLAN_ID is missing in server environment'
+              : 'RAZORPAY_HYBRID_PRO_MONTHLY_PLAN_ID is missing in server environment'
+            : selectedBillingCycle === BILLING_CYCLE_YEARLY
+              ? 'RAZORPAY_HYBRID_CORE_YEARLY_PLAN_ID is missing in server environment'
+              : 'RAZORPAY_HYBRID_CORE_MONTHLY_PLAN_ID is missing in server environment',
       })
     }
 
@@ -284,12 +424,25 @@ export async function createHybridSubscription(req, res, next) {
       try {
         const existingSubscription = await getSubscription(existingSubscriptionId)
         const existingStatus = String(existingSubscription?.status || '').trim().toLowerCase()
+        const existingPlanId = normalizeId(existingSubscription?.plan_id)
+        const selectedPlanId = normalizeId(hybridPlanId)
+        const planMismatch = Boolean(existingPlanId && selectedPlanId && existingPlanId !== selectedPlanId)
 
-        if (isReusableSubscriptionStatus(existingStatus) && !isStaleCreatedSubscription(existingSubscription)) {
+        if (planMismatch) {
+          user.billing = {
+            ...user.billing,
+            status: user.billing?.status === 'active' ? 'active' : 'pending',
+            razorpaySubscriptionId: '',
+          }
+          await user.save()
+        }
+
+        if (!planMismatch && isReusableSubscriptionStatus(existingStatus) && !isStaleCreatedSubscription(existingSubscription)) {
           return res.status(200).json(
             buildCheckoutResponse({
               subscriptionId: existingSubscriptionId,
               customerId: user.billing?.razorpayCustomerId,
+              plan: selectedPlan,
             }),
           )
         }
@@ -373,6 +526,8 @@ export async function createHybridSubscription(req, res, next) {
       notes: {
         userId: String(user._id),
         plan: 'hybrid',
+        planCode: selectedPlan.code,
+        billingCycle: selectedPlan.billingCycle,
       },
     }
 
@@ -395,6 +550,8 @@ export async function createHybridSubscription(req, res, next) {
     user.billing = {
       ...user.billing,
       planType: 'hybrid',
+      planCode: selectedPlan.code,
+      billingCycle: selectedPlan.billingCycle,
       status: 'pending',
       razorpayCustomerId: customerId,
       razorpaySubscriptionId: subscription.id,
@@ -405,6 +562,7 @@ export async function createHybridSubscription(req, res, next) {
       ...buildCheckoutResponse({
         subscriptionId: subscription.id,
         customerId,
+        plan: selectedPlan,
       }),
     })
   } catch (error) {
@@ -423,6 +581,8 @@ export async function verifyHybridSubscription(req, res, next) {
       razorpay_payment_id: paymentId,
       razorpay_subscription_id: subscriptionId,
       razorpay_signature: signature,
+      planCode,
+      billingCycle,
     } = req.body
 
     if (!paymentId || !subscriptionId || !signature) {
@@ -438,10 +598,15 @@ export async function verifyHybridSubscription(req, res, next) {
       return res.status(400).json({ message: 'Invalid subscription signature' })
     }
 
+    const selectedPlanCode = normalizePlanCode(planCode)
+    const selectedBillingCycle = normalizeBillingCycle(billingCycle)
+
     const user = await getUserOrThrow(req.user._id)
     user.billing = {
       ...user.billing,
       planType: 'hybrid',
+      planCode: selectedPlanCode,
+      billingCycle: selectedBillingCycle,
       status: 'active',
       setupPaymentId: paymentId,
       razorpaySubscriptionId: subscriptionId,

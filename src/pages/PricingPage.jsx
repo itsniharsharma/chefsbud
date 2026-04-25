@@ -6,11 +6,40 @@ import { useAuth } from '../hooks/useAuth'
 import { paymentService } from '../services/paymentService'
 import { hasBillingAccess } from '../utils/billingAccess'
 
-const features = [
-  'Complete owner dashboard with menu, orders, tables, analytics, and billing controls',
-  'QR-based customer ordering with real-time operations and order visibility',
-  'AI-powered menu import, offer controls, and revenue-focused analytics',
-  'Monthly autopay with billing lifecycle tracking and grace-period safeguards',
+const BILLING_PLAN_CODE_CORE = 'core'
+const BILLING_PLAN_CODE_PRO = 'pro'
+const BILLING_CYCLE_MONTHLY = 'monthly'
+const BILLING_CYCLE_YEARLY = 'yearly'
+const ONE_TIME_SETUP_PAISE = 1299900
+const planCatalog = [
+  {
+    code: BILLING_PLAN_CODE_CORE,
+    title: 'Growth Plan',
+    monthlyAmountPaise: 69900,
+    yearlyAmountPaise: 713000,
+    yearlyDiscountPercent: 15,
+    badge: 'Best Value Start',
+    features: [
+      'Complete owner dashboard with menu, orders, tables, and billing controls',
+      'QR-based customer ordering with real-time operations and order visibility',
+      'AI-powered menu import and offer controls',
+      'Monthly autopay with billing lifecycle tracking and grace safeguards',
+    ],
+  },
+  {
+    code: BILLING_PLAN_CODE_PRO,
+    title: 'Scale Plan',
+    monthlyAmountPaise: 129900,
+    yearlyAmountPaise: 1247000,
+    yearlyDiscountPercent: 20,
+    badge: 'Includes Advanced Modules',
+    features: [
+      'Everything in Growth Plan',
+      'Advanced Analytics module access',
+      'Inventory module access',
+      'Monthly autopay with billing lifecycle tracking and grace safeguards',
+    ],
+  },
 ]
 
 const moneyFormatter = new Intl.NumberFormat('en-IN', {
@@ -147,13 +176,18 @@ export default function PricingPage() {
   const location = useLocation()
   const { user, restaurant, isAuthenticated, refreshSession } = useAuth()
   const [activePlan, setActivePlan] = useState('')
+  const [billingCycle, setBillingCycle] = useState(BILLING_CYCLE_MONTHLY)
   const [error, setError] = useState('')
   const [successState, setSuccessState] = useState(null)
   const [planSummary, setPlanSummary] = useState({
-    setupAmountPaise: 1299900,
-    firstMonthAmountPaise: 89900,
-    totalDueTodayPaise: 1389800,
-    recurringAmountPaise: 89900,
+    setupAmountPaise: ONE_TIME_SETUP_PAISE,
+    firstMonthAmountPaise: 69900,
+    totalDueTodayPaise: ONE_TIME_SETUP_PAISE + 69900,
+    recurringAmountPaise: 69900,
+    recurringIntervalLabel: 'month',
+    billingCycle: BILLING_CYCLE_MONTHLY,
+    discountPercent: 0,
+    savedAmountPaise: 0,
   })
   const autoLaunchAttemptedRef = useRef(false)
 
@@ -171,7 +205,7 @@ export default function PricingPage() {
     [restaurant?.phone, user?.email, user?.name],
   )
 
-  const activateHybrid = useCallback(async ({ autoStarted = false } = {}) => {
+  const activateHybrid = useCallback(async ({ planCode = BILLING_PLAN_CODE_CORE, cycle = BILLING_CYCLE_MONTHLY, autoStarted = false } = {}) => {
     if (!isAuthenticated) {
       navigate('/register', {
         state: {
@@ -181,18 +215,18 @@ export default function PricingPage() {
       return
     }
 
-    if (activePlan === 'hybrid') {
+    if (activePlan === `${planCode}:${cycle}`) {
       return
     }
 
     setError('')
     setSuccessState(null)
-    setActivePlan('hybrid')
+    setActivePlan(`${planCode}:${cycle}`)
 
     try {
       await loadRazorpayCheckoutScript()
 
-      const subscriptionCheckout = await paymentService.createHybridSubscription()
+      const subscriptionCheckout = await paymentService.createHybridSubscription(planCode, cycle)
       const checkoutSummary = subscriptionCheckout?.planSummary || planSummary
       if (subscriptionCheckout?.planSummary) {
         setPlanSummary(subscriptionCheckout.planSummary)
@@ -209,17 +243,19 @@ export default function PricingPage() {
         },
         notes: {
           plan: 'hybrid',
+          planCode,
+          billingCycle: cycle,
         },
         theme: { color: '#e50914' },
       })
 
-      const verification = await paymentService.verifyHybridSubscription(subscriptionResponse)
+      const verification = await paymentService.verifyHybridSubscription(subscriptionResponse, planCode, cycle)
       const refreshed = await refreshSession()
       const nextBilling = verification?.billing || refreshed?.user?.billing || billing
 
       setSuccessState({
         title: 'Your subscription is active',
-        body: `You now have full access to Chef's Bud. ${formatPaise(checkoutSummary.totalDueTodayPaise)} was authorized today, and ${formatPaise(checkoutSummary.recurringAmountPaise)} will auto-debit every month.`,
+        body: `You now have full access to Chef's Bud. ${formatPaise(checkoutSummary.totalDueTodayPaise)} was authorized today, and ${formatPaise(checkoutSummary.recurringAmountPaise)} will auto-debit every ${checkoutSummary.recurringIntervalLabel || 'month'}.`,
         billing: nextBilling,
       })
     } catch (requestError) {
@@ -258,7 +294,7 @@ export default function PricingPage() {
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-rose-600">Chef&apos;s Bud Billing</p>
           <h1 className="mt-2 text-3xl font-bold text-slate-900 md:text-4xl">A single payment flow that activates your workspace</h1>
           <p className="mx-auto mt-3 max-w-3xl text-sm text-slate-600 md:text-base">
-            Pay setup and the first month together once. After activation, your monthly subscription renews automatically and the platform manages billing status for you.
+            Choose the monthly plan that fits your restaurant. Pay setup and first month together once, then autopay renews monthly.
           </p>
         </div>
 
@@ -274,7 +310,9 @@ export default function PricingPage() {
                 <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(planSummary.totalDueTodayPaise)}</p>
               </div>
               <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Monthly Autopay</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  {planSummary.recurringIntervalLabel === 'year' ? 'Yearly Autopay' : 'Monthly Autopay'}
+                </p>
                 <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(planSummary.recurringAmountPaise)}</p>
               </div>
               <div className="rounded-2xl border border-emerald-200 bg-white px-4 py-3">
@@ -295,59 +333,100 @@ export default function PricingPage() {
         ) : null}
 
         <div className="grid gap-6 lg:grid-cols-[1.2fr,0.8fr]">
-          <section className="card relative flex flex-col border-rose-200 p-6">
-            <span className="absolute right-4 top-4 rounded-full bg-rose-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-              Subscription Autopay
-            </span>
-
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Business Plan</p>
-            <h2 className="mt-2 text-3xl font-bold text-slate-900">{formatPaise(planSummary.totalDueTodayPaise)} today</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Includes {formatPaise(planSummary.setupAmountPaise)} one-time setup and {formatPaise(planSummary.firstMonthAmountPaise)} for your first month. After activation, {formatPaise(planSummary.recurringAmountPaise)} auto-debits every month.
-            </p>
-
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Setup Fee</p>
-                <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(planSummary.setupAmountPaise)}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">First Month</p>
-                <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(planSummary.firstMonthAmountPaise)}</p>
-              </div>
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Recurring</p>
-                <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(planSummary.recurringAmountPaise)}/mo</p>
-              </div>
+          <section className="space-y-4">
+            <div className="inline-flex rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+              <button
+                type="button"
+                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                  billingCycle === BILLING_CYCLE_MONTHLY ? 'bg-rose-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                }`}
+                onClick={() => setBillingCycle(BILLING_CYCLE_MONTHLY)}
+              >
+                Monthly Billing
+              </button>
+              <button
+                type="button"
+                className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                  billingCycle === BILLING_CYCLE_YEARLY ? 'bg-rose-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                }`}
+                onClick={() => setBillingCycle(BILLING_CYCLE_YEARLY)}
+              >
+                Yearly Billing
+              </button>
             </div>
 
-            <ul className="mt-5 space-y-2 text-sm text-slate-700">
-              {features.map((feature) => (
-                <li key={feature} className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
-                  {feature}
-                </li>
-              ))}
-            </ul>
+            <div className="grid gap-4 md:grid-cols-2">
+              {planCatalog.map((plan) => {
+                const recurringAmountPaise = billingCycle === BILLING_CYCLE_YEARLY ? plan.yearlyAmountPaise : plan.monthlyAmountPaise
+                const planTotalToday = ONE_TIME_SETUP_PAISE + recurringAmountPaise
+                const isCurrentPlanLoading = activePlan === `${plan.code}:${billingCycle}`
+                const yearlyMonthlyEquivalentPaise = plan.monthlyAmountPaise * 12
+                const yearlySavedPaise = Math.max(0, yearlyMonthlyEquivalentPaise - plan.yearlyAmountPaise)
+                return (
+                  <article key={plan.code} className="card relative flex h-full flex-col border-rose-200 p-6">
+                    <span className="absolute right-4 top-4 rounded-full bg-rose-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">
+                      {plan.badge}
+                    </span>
 
-            {error ? <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-[var(--primary)]">{error}</p> : null}
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{plan.title}</p>
+                    <h2 className="mt-2 text-3xl font-bold text-slate-900">{formatPaise(planTotalToday)} today</h2>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Includes {formatPaise(ONE_TIME_SETUP_PAISE)} one-time setup and {formatPaise(recurringAmountPaise)} for the first {billingCycle === BILLING_CYCLE_YEARLY ? 'year' : 'month'}.
+                      After activation, {formatPaise(recurringAmountPaise)} auto-debits every {billingCycle === BILLING_CYCLE_YEARLY ? 'year' : 'month'}.
+                    </p>
 
-            <div className="mt-6 flex flex-wrap gap-3">
-              {billingAllowsAccess ? (
-                <Button onClick={() => navigate('/dashboard')}>
-                  Open Dashboard
-                </Button>
-              ) : shouldShowActivateCta ? (
-                <Button disabled={ctaDisabled} onClick={() => activateHybrid()}>
-                  {activePlan === 'hybrid' ? 'Opening secure checkout...' : `Pay ${formatPaise(planSummary.totalDueTodayPaise)} and Activate`}
-                </Button>
-              ) : !isAuthenticated ? (
-                <Button onClick={() => navigate('/register', { state: { source: 'pricing' } })}>Create account to continue</Button>
-              ) : (
-                <Link to={billingDetails.primaryCta?.to || '/contact'}>
-                  <Button>{billingDetails.primaryCta?.label || 'Contact Support'}</Button>
-                </Link>
-              )}
+                    <div className="mt-5 grid gap-3">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Setup Fee</p>
+                        <p className="mt-2 text-xl font-bold text-slate-900">{formatPaise(ONE_TIME_SETUP_PAISE)}</p>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{billingCycle === BILLING_CYCLE_YEARLY ? 'Yearly' : 'Monthly'}</p>
+                        <p className="mt-2 text-xl font-bold text-slate-900">
+                          {formatPaise(recurringAmountPaise)}/{billingCycle === BILLING_CYCLE_YEARLY ? 'yr' : 'mo'}
+                        </p>
+                      </div>
+                      {billingCycle === BILLING_CYCLE_YEARLY ? (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">Yearly Offer</p>
+                          <p className="mt-1 text-sm font-semibold text-emerald-800">
+                            {plan.yearlyDiscountPercent}% off - you save {formatPaise(yearlySavedPaise)}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
 
+                    <ul className="mt-5 space-y-2 text-sm text-slate-700">
+                      {plan.features.map((feature) => (
+                        <li key={`${plan.code}-${feature}`} className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2">
+                          {feature}
+                        </li>
+                      ))}
+                    </ul>
+
+                    <div className="mt-6 flex flex-wrap gap-3">
+                      {billingAllowsAccess ? (
+                        <Button onClick={() => navigate('/dashboard')}>Open Dashboard</Button>
+                      ) : shouldShowActivateCta ? (
+                        <Button disabled={ctaDisabled} onClick={() => activateHybrid({ planCode: plan.code, cycle: billingCycle })}>
+                          {isCurrentPlanLoading ? 'Opening secure checkout...' : `Pay ${formatPaise(planTotalToday)} and Activate`}
+                        </Button>
+                      ) : !isAuthenticated ? (
+                        <Button onClick={() => navigate('/register', { state: { source: 'pricing' } })}>Create account to continue</Button>
+                      ) : (
+                        <Link to={billingDetails.primaryCta?.to || '/contact'}>
+                          <Button>{billingDetails.primaryCta?.label || 'Contact Support'}</Button>
+                        </Link>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+
+            {error ? <p className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-[var(--primary)]">{error}</p> : null}
+
+            <div className="flex flex-wrap gap-3">
               <Link to="/contact">
                 <Button variant="secondary">Talk to Support</Button>
               </Link>
@@ -394,11 +473,15 @@ export default function PricingPage() {
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <p className="text-sm font-semibold text-slate-900">2. Pay once today</p>
-                  <p className="mt-1 text-sm text-slate-600">Authorize {formatPaise(planSummary.totalDueTodayPaise)} in a single checkout for setup plus month one.</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Authorize {formatPaise(planSummary.totalDueTodayPaise)} in a single checkout for setup plus first {planSummary.recurringIntervalLabel || 'month'}.
+                  </p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <p className="text-sm font-semibold text-slate-900">3. Stay active automatically</p>
-                  <p className="mt-1 text-sm text-slate-600">Razorpay handles monthly autopay, while Chef&apos;s Bud manages reminders, grace, and access state.</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Razorpay handles recurring autopay, while Chef&apos;s Bud manages reminders, grace, and access state.
+                  </p>
                 </div>
               </div>
             </section>

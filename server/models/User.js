@@ -10,6 +10,8 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: ['owner'], default: 'owner' },
     billing: {
       planType: { type: String, enum: ['none', 'lifetime', 'hybrid'], default: 'none' },
+      planCode: { type: String, enum: ['none', 'core', 'pro'], default: 'none' },
+      billingCycle: { type: String, enum: ['monthly', 'yearly'], default: 'monthly' },
       status: {
         type: String,
         enum: ['pending', 'setup_paid', 'active', 'grace_period', 'past_due', 'cancelled', 'failed'],
