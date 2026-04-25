@@ -12,6 +12,8 @@ export default function SettingsPage() {
     address: '',
     phone: '',
     lowStockThresholdPercent: '10',
+    inventoryEnabled: true,
+    analyticsEnabled: true,
   })
   const [message, setMessage] = useState('')
   const [staffMessage, setStaffMessage] = useState('')
@@ -32,6 +34,8 @@ export default function SettingsPage() {
       address: restaurant.address || '',
       phone: restaurant.phone || '',
       lowStockThresholdPercent: String(restaurant.inventoryAlertConfig?.lowStockThresholdPercent ?? 10),
+      inventoryEnabled: restaurant.featureConfig?.inventoryEnabled !== false,
+      analyticsEnabled: restaurant.featureConfig?.analyticsEnabled !== false,
     })
   }, [restaurant])
 
@@ -56,6 +60,8 @@ export default function SettingsPage() {
         address: form.address,
         phone: form.phone,
         lowStockThresholdPercent: Number(form.lowStockThresholdPercent || 10),
+        inventoryEnabled: Boolean(form.inventoryEnabled),
+        analyticsEnabled: Boolean(form.analyticsEnabled),
       })
       .then((updated) => {
         setRestaurant(updated)
@@ -137,6 +143,28 @@ export default function SettingsPage() {
           value={form.lowStockThresholdPercent}
           onChange={(e) => setForm((prev) => ({ ...prev, lowStockThresholdPercent: e.target.value }))}
         />
+        <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
+          <span>
+            <span className="block text-sm font-medium text-slate-800">Enable Inventory</span>
+            <span className="block text-xs text-slate-500">Disable to bypass stock, recipes, and inventory processing.</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={Boolean(form.inventoryEnabled)}
+            onChange={(e) => setForm((prev) => ({ ...prev, inventoryEnabled: e.target.checked }))}
+          />
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2">
+          <span>
+            <span className="block text-sm font-medium text-slate-800">Enable Analytics</span>
+            <span className="block text-xs text-slate-500">Disable to stop analytics tracking, dashboards, and heavy reporting.</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={Boolean(form.analyticsEnabled)}
+            onChange={(e) => setForm((prev) => ({ ...prev, analyticsEnabled: e.target.checked }))}
+          />
+        </label>
         <Button type="submit">Save Changes</Button>
       </form>
 

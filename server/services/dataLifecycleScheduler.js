@@ -30,6 +30,7 @@ import AnalyticsBasketPairDaily from '../models/AnalyticsBasketPairDaily.js'
 import AnalyticsBasketPairMonthly from '../models/AnalyticsBasketPairMonthly.js'
 import AnalyticsItemDailyMetrics from '../models/AnalyticsItemDailyMetrics.js'
 import AnalyticsItemMonthlyMetrics from '../models/AnalyticsItemMonthlyMetrics.js'
+import { listEnabledRestaurantIdsForFeature } from './restaurantFeatureFlags.js'
 
 const JOB_LOCK_PREFIX = 'data-lifecycle:job-lock'
 const JOB_LOCK_TTL = Math.max(120, Number(process.env.LIFECYCLE_JOB_LOCK_TTL_SECONDS || 900))
@@ -287,6 +288,12 @@ const rollupJob = async () => {
   let started = false
   
   try {
+    const enabledAnalyticsRestaurantIds = await listEnabledRestaurantIdsForFeature('analyticsEnabled')
+    if (!enabledAnalyticsRestaurantIds.length) {
+      logger.info('Rollup job skipped: no analytics-enabled restaurants')
+      return
+    }
+
     const canRun = await beginJob('rollup', jobId)
     if (!canRun) {
       return
@@ -332,6 +339,11 @@ const cleanupJob = async () => {
   let started = false
   
   try {
+    const enabledAnalyticsRestaurantIds = await listEnabledRestaurantIdsForFeature('analyticsEnabled')
+    const analyticsEnabledFilter = enabledAnalyticsRestaurantIds.length
+      ? { restaurantId: { $in: enabledAnalyticsRestaurantIds } }
+      : null
+
     const canRun = await beginJob('cleanup', jobId)
     if (!canRun) {
       return
@@ -351,38 +363,44 @@ const cleanupJob = async () => {
     }
     
     // Clean up old hourly metrics
-    try {
-      const cutoffDate = new Date()
-      cutoffDate.setDate(cutoffDate.getDate() - config.cleanup.hourlyMetricsRetention)
-      
-      const deleted = await OrderHourlyMetrics.deleteMany({
-        date: { $lt: cutoffDate },
-      })
-      
-      results.hourlyMetricsDeleted = deleted.deletedCount
-      logger.info('Cleaned up old hourly metrics', { deleted: deleted.deletedCount })
-    } catch (error) {
-      const msg = `Cleanup of hourly metrics failed: ${error.message}`
-      logger.error(msg)
-      results.errors.push(msg)
+    if (analyticsEnabledFilter) {
+      try {
+        const cutoffDate = new Date()
+        cutoffDate.setDate(cutoffDate.getDate() - config.cleanup.hourlyMetricsRetention)
+        
+        const deleted = await OrderHourlyMetrics.deleteMany({
+          ...analyticsEnabledFilter,
+          date: { $lt: cutoffDate },
+        })
+        
+        results.hourlyMetricsDeleted = deleted.deletedCount
+        logger.info('Cleaned up old hourly metrics', { deleted: deleted.deletedCount })
+      } catch (error) {
+        const msg = `Cleanup of hourly metrics failed: ${error.message}`
+        logger.error(msg)
+        results.errors.push(msg)
+      }
     }
 
     // Remove rolled-up daily analytics older than configured retention.
-    if (config.cleanup.keepRolledUpDaily) {
+    if (config.cleanup.keepRolledUpDaily && analyticsEnabledFilter) {
       try {
         const cutoffDate = new Date()
         cutoffDate.setDate(cutoffDate.getDate() - config.cleanup.keepRolledUpDailyFor)
 
         const [dailyDeleted, itemDailyDeleted, pairDailyDeleted] = await Promise.all([
           AnalyticsDailyMetrics.deleteMany({
+            ...analyticsEnabledFilter,
             rolledUp: true,
             rolledUpAt: { $exists: true, $lte: cutoffDate },
           }),
           AnalyticsItemDailyMetrics.deleteMany({
+            ...analyticsEnabledFilter,
             rolledUp: true,
             rolledUpAt: { $exists: true, $lte: cutoffDate },
           }),
           AnalyticsBasketPairDaily.deleteMany({
+            ...analyticsEnabledFilter,
             rolledUp: true,
             rolledUpAt: { $exists: true, $lte: cutoffDate },
           }),
@@ -406,49 +424,55 @@ const cleanupJob = async () => {
     }
     
     // Clean up low-frequency basket pairs (keep only top 100 per day)
-    try {
-      const groupedByDay = await AnalyticsBasketPairDaily.aggregate([
-        { $group: { _id: { restaurantId: '$restaurantId', dateKey: '$dateKey' }, count: { $sum: 1 } } },
-        { $match: { count: { $gt: 100 } } },
-      ])
-      
-      let totalDeleted = 0
-      for (const group of groupedByDay) {
-        const toDelete = await AnalyticsBasketPairDaily.find({
-          restaurantId: group._id.restaurantId,
-          dateKey: group._id.dateKey,
-        })
-          .sort({ count: 1 })
-          .skip(100)
-          .lean()
+    if (analyticsEnabledFilter) {
+      try {
+        const groupedByDay = await AnalyticsBasketPairDaily.aggregate([
+          { $match: analyticsEnabledFilter },
+          { $group: { _id: { restaurantId: '$restaurantId', dateKey: '$dateKey' }, count: { $sum: 1 } } },
+          { $match: { count: { $gt: 100 } } },
+        ])
         
-        if (toDelete.length > 0) {
-          const ids = toDelete.map((d) => d._id)
-          const result = await AnalyticsBasketPairDaily.deleteMany({ _id: { $in: ids } })
-          totalDeleted += result.deletedCount
+        let totalDeleted = 0
+        for (const group of groupedByDay) {
+          const toDelete = await AnalyticsBasketPairDaily.find({
+            restaurantId: group._id.restaurantId,
+            dateKey: group._id.dateKey,
+          })
+            .sort({ count: 1 })
+            .skip(100)
+            .lean()
+          
+          if (toDelete.length > 0) {
+            const ids = toDelete.map((d) => d._id)
+            const result = await AnalyticsBasketPairDaily.deleteMany({ _id: { $in: ids } })
+            totalDeleted += result.deletedCount
+          }
         }
+        
+        results.basketPairsDeleted = totalDeleted
+        logger.info('Cleaned up low-frequency basket pairs', { deleted: totalDeleted })
+      } catch (error) {
+        const msg = `Cleanup of basket pairs failed: ${error.message}`
+        logger.error(msg)
+        results.errors.push(msg)
       }
-      
-      results.basketPairsDeleted = totalDeleted
-      logger.info('Cleaned up low-frequency basket pairs', { deleted: totalDeleted })
-    } catch (error) {
-      const msg = `Cleanup of basket pairs failed: ${error.message}`
-      logger.error(msg)
-      results.errors.push(msg)
     }
     
     // Optimize item metrics (remove zero-row entries)
-    try {
-      const removed = await AnalyticsItemDailyMetrics.deleteMany({
-        $and: [{ views: 0 }, { addToCart: 0 }, { orders: 0 }, { revenue: 0 }],
-      })
-      
-      results.itemMetricsOptimized = removed.deletedCount
-      logger.info('Optimized item metrics', { removed: removed.deletedCount })
-    } catch (error) {
-      const msg = `Optimization of item metrics failed: ${error.message}`
-      logger.error(msg)
-      results.errors.push(msg)
+    if (analyticsEnabledFilter) {
+      try {
+        const removed = await AnalyticsItemDailyMetrics.deleteMany({
+          ...analyticsEnabledFilter,
+          $and: [{ views: 0 }, { addToCart: 0 }, { orders: 0 }, { revenue: 0 }],
+        })
+        
+        results.itemMetricsOptimized = removed.deletedCount
+        logger.info('Optimized item metrics', { removed: removed.deletedCount })
+      } catch (error) {
+        const msg = `Optimization of item metrics failed: ${error.message}`
+        logger.error(msg)
+        results.errors.push(msg)
+      }
     }
     
     activeJobs[jobId].endTime = Date.now()
@@ -479,6 +503,12 @@ const inventoryLifecycleJob = async () => {
   let started = false
 
   try {
+    const enabledInventoryRestaurantIds = await listEnabledRestaurantIdsForFeature('inventoryEnabled')
+    if (!enabledInventoryRestaurantIds.length) {
+      logger.info('Inventory lifecycle job skipped: no inventory-enabled restaurants')
+      return
+    }
+
     const canRun = await beginJob('inventory_lifecycle', jobId)
     if (!canRun) {
       return

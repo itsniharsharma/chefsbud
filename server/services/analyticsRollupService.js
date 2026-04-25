@@ -25,6 +25,7 @@ import AnalyticsItemMonthlyMetrics from '../models/AnalyticsItemMonthlyMetrics.j
 import AnalyticsBasketPairMonthly from '../models/AnalyticsBasketPairMonthly.js'
 import { logger } from '../utils/logger.js'
 import config from '../config/dataLifecycle.js'
+import { listEnabledRestaurantIdsForFeature } from './restaurantFeatureFlags.js'
 
 /**
  * Generate month key (e.g., "2026-03")
@@ -53,8 +54,15 @@ const rollupDailyMetrics = async () => {
       cutoffDate: cutoffDate.toISOString(),
     })
     
+    const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('analyticsEnabled')
+    if (!enabledRestaurantIds.length) {
+      logger.info('No analytics-enabled restaurants found; skipping daily rollup')
+      return { status: 'success', type: 'daily', rolled: 0, duration: 0 }
+    }
+
     // Find daily records older than cutoff that haven't been rolled up
     const dailyRecords = await AnalyticsDailyMetrics.find({
+      restaurantId: { $in: enabledRestaurantIds },
       date: { $lt: cutoffDate },
       rolledUp: { $ne: true },
     })
@@ -178,7 +186,14 @@ const rollupItemMetrics = async () => {
       cutoffDate: cutoffDate.toISOString(),
     })
     
+    const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('analyticsEnabled')
+    if (!enabledRestaurantIds.length) {
+      logger.info('No analytics-enabled restaurants found; skipping item rollup')
+      return { status: 'success', type: 'item', rolled: 0, duration: 0 }
+    }
+
     const itemRecords = await AnalyticsItemDailyMetrics.find({
+      restaurantId: { $in: enabledRestaurantIds },
       date: { $lt: cutoffDate },
       rolledUp: { $ne: true },
     })
@@ -309,7 +324,14 @@ const rollupBasketPairMetrics = async () => {
       maxPairs: config.rollup.topBasketPairsPerMonth,
     })
     
+    const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('analyticsEnabled')
+    if (!enabledRestaurantIds.length) {
+      logger.info('No analytics-enabled restaurants found; skipping basket pair rollup')
+      return { status: 'success', type: 'basket_pair', rolled: 0, duration: 0 }
+    }
+
     const pairRecords = await AnalyticsBasketPairDaily.find({
+      restaurantId: { $in: enabledRestaurantIds },
       date: { $lt: cutoffDate },
       rolledUp: { $ne: true },
     })

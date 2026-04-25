@@ -11,6 +11,7 @@ import {
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
 import { requireActiveBilling } from '../middleware/billing.js'
+import { requireAnalyticsEnabled } from '../middleware/featureAccess.js'
 import { createRateLimiter } from '../middleware/rateLimit.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
@@ -29,6 +30,7 @@ router.get(
   requireAuth,
   requireActiveBilling,
   requireOwner,
+  requireAnalyticsEnabled,
   cacheResponse({
     ttlSeconds: 120,
     keyBuilder: (req) => `analytics:dashboard:${req.user._id}:${req.params.restaurantId}`,
@@ -42,6 +44,7 @@ router.get(
   requireAuth,
   requireActiveBilling,
   requireOwner,
+  requireAnalyticsEnabled,
   cacheResponse({
     ttlSeconds: 60,
     keyBuilder: (req) =>
@@ -56,6 +59,7 @@ router.get(
   requireAuth,
   requireActiveBilling,
   requireOwner,
+  requireAnalyticsEnabled,
   getAnalyticsIntegrity,
 )
 
@@ -64,6 +68,7 @@ router.get(
   requireAuth,
   requireActiveBilling,
   requireOwner,
+  requireAnalyticsEnabled,
   cacheResponse({
     ttlSeconds: 60,
     keyBuilder: (req) =>

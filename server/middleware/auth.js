@@ -3,6 +3,12 @@ import Restaurant from '../models/Restaurant.js'
 import User from '../models/User.js'
 import StaffAccount from '../models/StaffAccount.js'
 import { withRedis } from '../config/redis.js'
+function normalizeRestaurantFeatureConfig(restaurant) {
+  return {
+    inventoryEnabled: restaurant?.featureConfig?.inventoryEnabled !== false,
+    analyticsEnabled: restaurant?.featureConfig?.analyticsEnabled !== false,
+  }
+}
 
 const AUTH_CACHE_TTL_SECONDS = Math.max(5, Math.min(Number(process.env.AUTH_CACHE_TTL_SECONDS || 15), 120))
 const AUTH_CACHE_MAX_ENTRIES = Math.max(200, Number(process.env.AUTH_CACHE_MAX_ENTRIES || 5000))
@@ -150,7 +156,7 @@ export async function requireAuth(req, res, next) {
           _id: restaurantId,
           ownerId,
         })
-          .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig')
+          .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig featureConfig')
           .lean(),
       ])
 
@@ -177,10 +183,13 @@ export async function requireAuth(req, res, next) {
         billing: owner.billing,
       }
 
-      req.restaurant = restaurant
+      req.restaurant = {
+        ...restaurant,
+        featureConfig: normalizeRestaurantFeatureConfig(restaurant),
+      }
       await setAuthCachedValue(cacheKey, {
         user: req.user,
-        restaurant,
+        restaurant: req.restaurant,
       })
 
       return next()
@@ -204,7 +213,7 @@ export async function requireAuth(req, res, next) {
         .select('_id name email role emailVerified tokenVersion billing')
         .lean(),
       Restaurant.findOne({ ownerId: decoded.userId })
-        .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig')
+        .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig featureConfig')
         .lean(),
     ])
 
@@ -227,9 +236,11 @@ export async function requireAuth(req, res, next) {
     }
 
     req.restaurant = restaurant
+      ? { ...restaurant, featureConfig: normalizeRestaurantFeatureConfig(restaurant) }
+      : null
     await setAuthCachedValue(cacheKey, {
       user: req.user,
-      restaurant,
+      restaurant: req.restaurant,
     })
 
     next()

@@ -79,6 +79,8 @@ export default function Sidebar({ isOpen, onClose }) {
   const location = useLocation()
   const [logisticsOpen, setLogisticsOpen] = useState(false)
   const role = user?.role || 'owner'
+  const inventoryEnabled = restaurant?.featureConfig?.inventoryEnabled !== false
+  const analyticsEnabled = restaurant?.featureConfig?.analyticsEnabled !== false
   const activeCategoryId = useMemo(() => {
     const search = new URLSearchParams(location.search || '')
     return String(search.get('category') || '').trim()
@@ -113,7 +115,16 @@ export default function Sidebar({ isOpen, onClose }) {
         itemCount: Number(categoryCountMap.get(String(category._id || '')) || 0),
       }))
   }, [menuData])
-  const visibleLinks = useMemo(() => logisticsCards.filter((link) => link.roles.includes(role)), [role])
+  const visibleLinks = useMemo(
+    () =>
+      logisticsCards.filter((link) => {
+        if (!link.roles.includes(role)) return false
+        if (!inventoryEnabled && link.to.startsWith('/inventory')) return false
+        if (!analyticsEnabled && link.to.startsWith('/dashboard/analytics')) return false
+        return true
+      }),
+    [role, inventoryEnabled, analyticsEnabled],
+  )
 
   const onSelectMenuCategory = (categoryId) => {
     const normalizedCategoryId = String(categoryId || '').trim()

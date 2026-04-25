@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js'
 import Order from '../models/Order.js'
 import { processOrderStatusTransition } from './orderStatusProcessingService.js'
 import { reserveStockForOrder } from './inventoryV2Service.js'
+import { isInventoryEnabledForRestaurantId } from './restaurantFeatureFlags.js'
 
 const QUEUE_KEY = 'order:jobs:pending'
 const PROCESSING_KEY = 'order:jobs:processing'
@@ -595,6 +596,15 @@ async function handleOrderStatusChanged(jobData) {
 async function handleReserveOrderInventory(jobData) {
   if (!jobData?.orderId || !jobData?.restaurantId) {
     throw new Error('Invalid job data: missing order reservation fields')
+  }
+
+  const inventoryEnabled = await isInventoryEnabledForRestaurantId(jobData.restaurantId)
+  if (!inventoryEnabled) {
+    logger.info('order_queue_reservation_skipped_inventory_disabled', {
+      orderId: String(jobData.orderId || ''),
+      restaurantId: String(jobData.restaurantId || ''),
+    })
+    return
   }
 
   const order = await Order.findOne({

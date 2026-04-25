@@ -8,6 +8,7 @@ import InventoryDailySummary from '../models/InventoryDailySummary.js'
 import InventoryMonthlySummary from '../models/InventoryMonthlySummary.js'
 import InventoryRollupJobState from '../models/InventoryRollupJobState.js'
 import { logger } from '../utils/logger.js'
+import { listEnabledRestaurantIdsForFeature } from './restaurantFeatureFlags.js'
 
 /**
  * Phase 1: Generate unique UUID v4 for archive job run
@@ -85,7 +86,7 @@ async function updateRollupState({ jobType, windowKey, status, rowCount = 0, che
   )
 }
 
-async function rollupSingleDay(dayStart, dayEnd, { retentionDays = 90 } = {}) {
+async function rollupSingleDay(dayStart, dayEnd, { retentionDays = 90, enabledRestaurantIds = [] } = {}) {
   const dateKey = toDateKey(dayStart)
   const windowKey = `${dateKey}`
   const now = new Date()
@@ -100,6 +101,7 @@ async function rollupSingleDay(dayStart, dayEnd, { retentionDays = 90 } = {}) {
     const rows = await InventoryLedger.aggregate([
       {
         $match: {
+          restaurantId: { $in: enabledRestaurantIds },
           createdAt: { $gte: dayStart, $lt: dayEnd },
         },
       },
@@ -243,6 +245,11 @@ export async function rollupInventoryLedgerToDaily() {
     return { status: 'disabled', dailyWindows: 0 }
   }
 
+  const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('inventoryEnabled')
+  if (!enabledRestaurantIds.length) {
+    return { status: 'success', dailyWindows: 0, rows: 0, windows: [] }
+  }
+
   const lookbackDays = Math.max(1, Number(config.inventoryLifecycle.dailyRollupLookbackDays || 3))
   const retentionDays = Math.max(30, Number(config.inventoryLifecycle.dailySummaryRetentionDays || 90))
 
@@ -252,7 +259,7 @@ export async function rollupInventoryLedgerToDaily() {
   for (let offset = lookbackDays; offset >= 1; offset -= 1) {
     const dayStart = addUtcDays(today, -offset)
     const dayEnd = addUtcDays(dayStart, 1)
-    const result = await rollupSingleDay(dayStart, dayEnd, { retentionDays })
+    const result = await rollupSingleDay(dayStart, dayEnd, { retentionDays, enabledRestaurantIds })
     results.push(result)
   }
 
@@ -378,6 +385,11 @@ export async function rollupInventoryDailyToMonthly() {
     return { status: 'disabled', monthlyWindows: 0 }
   }
 
+  const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('inventoryEnabled')
+  if (!enabledRestaurantIds.length) {
+    return { status: 'success', monthlyWindows: 0, rows: 0, windows: [] }
+  }
+
   const now = new Date()
   const currentMonthStart = startOfUtcMonth(now)
   const windowMonths = Math.max(3, Number(config.inventoryLifecycle.monthlyRebuildWindowMonths || 18))
@@ -386,6 +398,7 @@ export async function rollupInventoryDailyToMonthly() {
   const monthKeys = await InventoryDailySummary.aggregate([
     {
       $match: {
+        restaurantId: { $in: enabledRestaurantIds },
         date: { $gte: fromDate, $lt: currentMonthStart },
       },
     },
@@ -479,6 +492,11 @@ export async function archiveOldInventoryMonthlySummaries() {
     return { status: 'disabled', archivedGroups: 0, deletedDocs: 0 }
   }
 
+  const enabledRestaurantIds = await listEnabledRestaurantIdsForFeature('inventoryEnabled')
+  if (!enabledRestaurantIds.length) {
+    return { status: 'success', archivedGroups: 0, deletedDocs: 0 }
+  }
+
   const archiveAfterMonths = Math.max(6, Number(config.inventoryLifecycle.monthlyArchiveAfterMonths || 12))
   const nowMonth = startOfUtcMonth(new Date())
   const cutoffMonth = addUtcMonths(nowMonth, -archiveAfterMonths)
@@ -488,6 +506,7 @@ export async function archiveOldInventoryMonthlySummaries() {
   const runId = generateRunId()
 
   const candidates = await InventoryMonthlySummary.find({
+    restaurantId: { $in: enabledRestaurantIds },
     monthStartDate: { $lt: cutoffMonth },
   })
     .sort({ monthStartDate: 1, restaurantId: 1, inventoryItemId: 1 })

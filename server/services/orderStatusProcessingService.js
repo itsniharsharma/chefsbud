@@ -5,6 +5,7 @@ import { consumeReservationsForOrder } from './inventoryV2Service.js'
 import { logger } from '../utils/logger.js'
 import { rebuildOrderMetricsForDate } from './orderMetricsService.js'
 import { revertCompletedOrderAnalytics, syncCompletedOrderAnalytics } from './itemAnalyticsService.js'
+import { getRestaurantFeatureFlagsById } from './restaurantFeatureFlags.js'
 
 function toDate(value) {
   const date = value ? new Date(value) : new Date()
@@ -68,6 +69,9 @@ export async function processOrderStatusTransition({
   const targetStatus = String(toStatus || '').trim()
   const sourceStatus = String(fromStatus || '').trim()
   const currentStatus = String(order.orderStatus || '')
+  const featureFlags = await getRestaurantFeatureFlagsById(normalizedRestaurantId)
+  const inventoryEnabled = featureFlags.inventoryEnabled
+  const analyticsEnabled = featureFlags.analyticsEnabled
 
   if (currentStatus !== targetStatus) {
     logger.info('order_status_transition_skipped', {
@@ -86,7 +90,7 @@ export async function processOrderStatusTransition({
 
     try {
       if (!order.inventoryProcessedAt) {
-        if (inventoryBehavior.mode !== 'off') {
+        if (inventoryEnabled && inventoryBehavior.mode !== 'off') {
           let consumedFromReservation = 0
           try {
             const reservationResult = await consumeReservationsForOrder({
@@ -140,7 +144,7 @@ export async function processOrderStatusTransition({
         await markInventoryProcessed(order._id, cycle, toDate(completedAt || order.completedAt || order.updatedAt))
       }
 
-      if (!order.analyticsTrackedAt) {
+      if (analyticsEnabled && !order.analyticsTrackedAt) {
         await syncCompletedOrderAnalytics(order._id)
       }
 
@@ -162,7 +166,7 @@ export async function processOrderStatusTransition({
 
   if (sourceStatus === 'Completed' && targetStatus !== 'Completed') {
     try {
-      if (order.inventoryProcessedAt) {
+      if (inventoryEnabled && order.inventoryProcessedAt) {
         const cycle = Math.max(1, Number(order.inventoryConsumptionCycle || inventoryCycle || 1))
         await reverseOrderConsumption(order, {
           createdBy,
@@ -171,7 +175,7 @@ export async function processOrderStatusTransition({
         await markInventoryReversed(order._id)
       }
 
-      if (order.analyticsTrackedAt) {
+      if (analyticsEnabled && order.analyticsTrackedAt) {
         await revertCompletedOrderAnalytics(order)
       }
 

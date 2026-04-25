@@ -23,12 +23,13 @@ import {
 import { requireAuth } from '../middleware/auth.js'
 import { requireOwner } from '../middleware/authorize.js'
 import { requireActiveBilling } from '../middleware/billing.js'
+import { requireInventoryEnabled } from '../middleware/featureAccess.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import { cacheResponse } from '../services/responseCache.js'
 
 const router = Router()
 
-router.use(requireAuth, requireActiveBilling)
+router.use(requireAuth, requireActiveBilling, requireInventoryEnabled)
 
 router.get(
   '/suppliers',

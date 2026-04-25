@@ -30,7 +30,7 @@ function normalizeStaffPath(pathname) {
 }
 
 export default function ProtectedRoute({ children }) {
-  const { isAuthenticated, authLoading, user } = useAuth()
+  const { isAuthenticated, authLoading, user, restaurant } = useAuth()
   const location = useLocation()
 
   if (authLoading) {
@@ -50,6 +50,15 @@ export default function ProtectedRoute({ children }) {
     if (!staffAllowedPaths.has(currentPath)) {
       return <Navigate to="/dashboard/orders" replace />
     }
+  }
+
+  const inventoryEnabled = restaurant?.featureConfig?.inventoryEnabled !== false
+  const analyticsEnabled = restaurant?.featureConfig?.analyticsEnabled !== false
+  if (!inventoryEnabled && location.pathname.startsWith('/inventory')) {
+    return <Navigate to="/dashboard/orders" replace />
+  }
+  if (!analyticsEnabled && location.pathname.startsWith('/dashboard/analytics')) {
+    return <Navigate to="/dashboard" replace />
   }
 
   return children

@@ -9,6 +9,15 @@ import {
 import { invalidateCacheByTags } from '../services/responseCache.js'
 import { uniqueSlug } from '../utils/slugify.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
+import {
+  getRestaurantFeatureFlagsFromEntity,
+  invalidateRestaurantFeatureFlagsCache,
+} from '../services/restaurantFeatureFlags.js'
+import {
+  purgeAnalyticsModuleData,
+  purgeInventoryLifecycleData,
+} from '../services/moduleDataCleanupService.js'
+import { logger } from '../utils/logger.js'
 
 function serializeRestaurantForOwner(restaurant) {
   if (!restaurant) return null
@@ -21,6 +30,7 @@ function serializeRestaurantForOwner(restaurant) {
       updatedAt: source?.kotReprintConfig?.updatedAt || null,
     },
     paymentConfig: serializeRestaurantPaymentConfig(source.paymentConfig),
+    featureConfig: getRestaurantFeatureFlagsFromEntity(source),
   }
 }
 
@@ -67,6 +77,7 @@ export async function updateMyRestaurant(req, res, next) {
     }
 
     const { name, address, phone } = req.body
+    const previousFeatureConfig = getRestaurantFeatureFlagsFromEntity(restaurant)
 
     if (typeof name === 'string' && name.trim() && name.trim() !== restaurant.name) {
       restaurant.name = name.trim()
@@ -93,8 +104,49 @@ export async function updateMyRestaurant(req, res, next) {
       }
     }
 
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'inventoryEnabled')) {
+      if (typeof req.body.inventoryEnabled !== 'boolean') {
+        return res.status(400).json({ message: 'inventoryEnabled must be a boolean' })
+      }
+      restaurant.featureConfig = {
+        ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
+        inventoryEnabled: req.body.inventoryEnabled,
+      }
+    }
+
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'analyticsEnabled')) {
+      if (typeof req.body.analyticsEnabled !== 'boolean') {
+        return res.status(400).json({ message: 'analyticsEnabled must be a boolean' })
+      }
+      restaurant.featureConfig = {
+        ...(restaurant.featureConfig?.toObject ? restaurant.featureConfig.toObject() : restaurant.featureConfig),
+        analyticsEnabled: req.body.analyticsEnabled,
+      }
+    }
+
     await restaurant.save()
+    invalidateRestaurantFeatureFlagsCache(restaurant._id)
     invalidateCacheByTags([`analytics:${String(restaurant._id)}`])
+
+    const nextFeatureConfig = getRestaurantFeatureFlagsFromEntity(restaurant)
+    if (previousFeatureConfig.analyticsEnabled && !nextFeatureConfig.analyticsEnabled) {
+      void purgeAnalyticsModuleData(restaurant._id).catch((error) => {
+        logger.warn('analytics_module_data_purge_failed', {
+          restaurantId: String(restaurant._id || ''),
+          message: error?.message || 'analytics module data purge failed',
+        })
+      })
+    }
+
+    if (previousFeatureConfig.inventoryEnabled && !nextFeatureConfig.inventoryEnabled) {
+      void purgeInventoryLifecycleData(restaurant._id).catch((error) => {
+        logger.warn('inventory_lifecycle_data_purge_failed', {
+          restaurantId: String(restaurant._id || ''),
+          message: error?.message || 'inventory lifecycle data purge failed',
+        })
+      })
+    }
+
     return res.json(serializeRestaurantForOwner(restaurant))
   } catch (error) {
     next(error)

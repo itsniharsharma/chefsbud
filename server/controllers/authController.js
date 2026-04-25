@@ -9,13 +9,17 @@ import StaffAccount from '../models/StaffAccount.js'
 import { enqueueRegistrationOtpEmailJob } from '../services/orderOutboxService.js'
 import { uniqueSlug } from '../utils/slugify.js'
 
-const sessionRestaurantProjection = '_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig'
+const sessionRestaurantProjection = '_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig featureConfig'
 
 function serializeSessionRestaurant(restaurant) {
   if (!restaurant) return null
 
   return {
     ...restaurant,
+    featureConfig: {
+      inventoryEnabled: restaurant?.featureConfig?.inventoryEnabled !== false,
+      analyticsEnabled: restaurant?.featureConfig?.analyticsEnabled !== false,
+    },
     hasKotReprintPasskey: Boolean(restaurant?.kotReprintConfig?.passkeyHash),
     kotReprintConfig: {
       updatedAt: restaurant?.kotReprintConfig?.updatedAt || null,

@@ -24,6 +24,10 @@ import { emitOrderChanged } from '../realtime/orderEvents.js'
 import { recordEndpointMetric } from '../middleware/performanceTracing.js'
 import { logger } from '../utils/logger.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
+import {
+  getRestaurantFeatureFlagsFromEntity,
+  isAnalyticsEnabledForRestaurantId,
+} from '../services/restaurantFeatureFlags.js'
 
 const PUBLIC_TABLE_ORDER_LIMIT = Math.min(50, Math.max(5, Number(process.env.PUBLIC_TABLE_ORDER_LIMIT || 25)))
 const CUSTOMER_FEEDBACK_WINDOW_MINUTES = Math.max(5, Math.min(Number(process.env.CUSTOMER_FEEDBACK_WINDOW_MINUTES || 60), 24 * 60))
@@ -461,6 +465,8 @@ export async function updateOrderStatus(req, res, next) {
 
     const wasCompleted = existingOrder.orderStatus === 'Completed'
     const isCompleted = orderStatus === 'Completed'
+    const featureFlags = getRestaurantFeatureFlagsFromEntity(restaurant)
+    const asyncStatusProcessingEnabled = featureFlags.inventoryEnabled || featureFlags.analyticsEnabled
 
     const update = {
       orderStatus,
@@ -489,7 +495,7 @@ export async function updateOrderStatus(req, res, next) {
 
         ensureOrderStillExists(previousOrder)
 
-        const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus
+        const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus && asyncStatusProcessingEnabled
         if (shouldQueueStatusWork && USE_LEGACY_WORKERS) {
           await createOrderStatusChangedOutboxEvent({
             orderId: previousOrder._id,
@@ -510,67 +516,65 @@ export async function updateOrderStatus(req, res, next) {
 
     const responseOrder = buildOptimisticOrderStatusPayload(previousOrder, update, orderStatus)
 
-    if (eventQueued) {
-      try {
-        if (!USE_LEGACY_WORKERS) {
-          const queued = await enqueueOrderJob({
-            jobType: 'order_status_changed',
-            jobData: {
-              orderId: previousOrder._id,
-              restaurantId: restaurant._id,
-              fromStatus: previousOrder.orderStatus,
-              toStatus: orderStatus,
-              inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
-              completedAt: update.completedAt,
-            },
-          })
-
-          if (!queued) {
-            logger.error('order_status_redis_queue_enqueue_failed', {
-              orderId: String(previousOrder?._id || ''),
-              restaurantId: String(restaurant?._id || ''),
-            })
-
-            // Fallback persistence for recovery (processed only if legacy workers are re-enabled).
-            await createOrderStatusChangedOutboxEvent({
-              orderId: previousOrder._id,
-              restaurantId: restaurant._id,
-              fromStatus: previousOrder.orderStatus,
-              toStatus: orderStatus,
-              transitionToken: previousOrder.updatedAt?.getTime?.() || previousOrder.updatedAt || '',
-              inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
-              completedAt: update.completedAt,
-            })
-          }
-        }
-
-        // Keep board/status views coherent immediately after status changes.
-        invalidateCacheByTags(
-          buildOrderCacheTags({
-            restaurant,
-            tableNumber: responseOrder.tableNumber,
-            orderId: responseOrder._id,
-            includeAnalytics: wasCompleted !== isCompleted,
-          }),
-          { skipRedis: true },
-        )
-
-        runNonCriticalTask('order_status_cache_and_realtime', async () => {
-          await invalidateOrderQueries(restaurant._id)
-          publishOrderChange({
+    try {
+      if (eventQueued && !USE_LEGACY_WORKERS) {
+        const queued = await enqueueOrderJob({
+          jobType: 'order_status_changed',
+          jobData: {
+            orderId: previousOrder._id,
             restaurantId: restaurant._id,
-            type: 'status-updated',
-            orderId: responseOrder._id,
-            extra: { orderStatus: responseOrder.orderStatus },
+            fromStatus: previousOrder.orderStatus,
+            toStatus: orderStatus,
+            inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
+            completedAt: update.completedAt,
+          },
+        })
+
+        if (!queued) {
+          logger.error('order_status_redis_queue_enqueue_failed', {
+            orderId: String(previousOrder?._id || ''),
+            restaurantId: String(restaurant?._id || ''),
           })
-        })
-      } catch (sideEffectError) {
-        logger.warn('order_status_post_update_side_effects_failed', {
-          orderId: String(responseOrder?._id || ''),
-          restaurantId: String(restaurant?._id || ''),
-          message: sideEffectError?.message || 'order_status_side_effects_failed',
-        })
+
+          // Fallback persistence for recovery (processed only if legacy workers are re-enabled).
+          await createOrderStatusChangedOutboxEvent({
+            orderId: previousOrder._id,
+            restaurantId: restaurant._id,
+            fromStatus: previousOrder.orderStatus,
+            toStatus: orderStatus,
+            transitionToken: previousOrder.updatedAt?.getTime?.() || previousOrder.updatedAt || '',
+            inventoryCycle: Number(previousOrder.inventoryConsumptionCycle || 0),
+            completedAt: update.completedAt,
+          })
+        }
       }
+
+      // Keep board/status views coherent immediately after status changes.
+      invalidateCacheByTags(
+        buildOrderCacheTags({
+          restaurant,
+          tableNumber: responseOrder.tableNumber,
+          orderId: responseOrder._id,
+          includeAnalytics: wasCompleted !== isCompleted,
+        }),
+        { skipRedis: true },
+      )
+
+      runNonCriticalTask('order_status_cache_and_realtime', async () => {
+        await invalidateOrderQueries(restaurant._id)
+        publishOrderChange({
+          restaurantId: restaurant._id,
+          type: 'status-updated',
+          orderId: responseOrder._id,
+          extra: { orderStatus: responseOrder.orderStatus },
+        })
+      })
+    } catch (sideEffectError) {
+      logger.warn('order_status_post_update_side_effects_failed', {
+        orderId: String(responseOrder?._id || ''),
+        restaurantId: String(restaurant?._id || ''),
+        message: sideEffectError?.message || 'order_status_side_effects_failed',
+      })
     }
 
     res.set('X-Background-Jobs-Queued', eventQueued ? '1' : '0')
@@ -826,10 +830,12 @@ export async function createOrder(req, res, next) {
     const draftDurationMs = Date.now() - draftStartedAt
     if (traceEnabled) console.timeEnd('draft')
 
+    const featureFlags = getRestaurantFeatureFlagsFromEntity(draft.restaurant)
     const inventoryBehavior = getOrderInventoryBehavior()
+    const inventoryEnabled = featureFlags.inventoryEnabled
     const asyncInventoryEnabled = isOrderInventoryAsyncEnabled()
     const orderCreationInventoryBehavior =
-      inventoryBehavior.reserveOnCreate && asyncInventoryEnabled
+      inventoryEnabled && inventoryBehavior.reserveOnCreate && asyncInventoryEnabled
         ? inventoryBehavior
         : {
             ...inventoryBehavior,
@@ -838,7 +844,7 @@ export async function createOrder(req, res, next) {
 
     const orderDateKey = buildOrderDateKey()
 
-    if (inventoryBehavior.reserveOnCreate && !asyncInventoryEnabled) {
+    if (inventoryEnabled && inventoryBehavior.reserveOnCreate && !asyncInventoryEnabled) {
       logger.error('order_inventory_async_mode_required', {
         restaurantSlug: String(restaurantSlug || ''),
         tableNumber: Number(tableNumber || 0),
@@ -892,7 +898,7 @@ export async function createOrder(req, res, next) {
 
             order = createdOrders[0]
 
-            if (USE_LEGACY_WORKERS) {
+            if (inventoryEnabled && USE_LEGACY_WORKERS) {
               await createOrderCreatedOutboxEvent({
                 orderId: order._id,
                 restaurantId: draft.restaurant._id,
@@ -967,7 +973,7 @@ export async function createOrder(req, res, next) {
     if (traceEnabled) console.time('inventory')
     const inventoryStartedAt = Date.now()
     let inventoryMode = 'skipped'
-    if (orderCreationInventoryBehavior.reserveOnCreate) {
+    if (inventoryEnabled && orderCreationInventoryBehavior.reserveOnCreate) {
       inventoryMode = asyncInventoryEnabled ? (USE_LEGACY_WORKERS ? 'async-outbox' : 'async-redis') : 'async-forced'
       if (!USE_LEGACY_WORKERS && asyncInventoryEnabled && order?._id) {
         const queuedReservation = await enqueueOrderJob({
@@ -1193,14 +1199,17 @@ export async function ratePublicOrder(req, res, next) {
     ], { skipRedis: true })
 
     if (updated.restaurantId) {
-      await runMetricsTask('apply_order_rating_analytics', () =>
-        applyOrderRatingAnalytics({
-          restaurantId: updated.restaurantId,
-          completedAt: updated.completedAt,
-          nextRating: updated.customerRating,
-          previousRating: null,
-        }),
-      )
+      const analyticsEnabled = await isAnalyticsEnabledForRestaurantId(updated.restaurantId)
+      if (analyticsEnabled) {
+        await runMetricsTask('apply_order_rating_analytics', () =>
+          applyOrderRatingAnalytics({
+            restaurantId: updated.restaurantId,
+            completedAt: updated.completedAt,
+            nextRating: updated.customerRating,
+            previousRating: null,
+          }),
+        )
+      }
 
       publishOrderChange({
         restaurantId: updated.restaurantId,

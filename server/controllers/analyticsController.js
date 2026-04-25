@@ -17,6 +17,10 @@ import { seedCachedResponse } from '../services/responseCache.js'
 import { resolveRequestRestaurant } from '../utils/requestRestaurant.js'
 import { resolveRestaurantIdentityBySlug } from '../services/orderDraftCache.js'
 import { logger } from '../utils/logger.js'
+import {
+  getRestaurantFeatureFlagsById,
+  getRestaurantFeatureFlagsFromEntity,
+} from '../services/restaurantFeatureFlags.js'
 
 const ANALYTICS_INLINE_BACKFILL_BATCH_SIZE = Math.max(10, Math.min(Number(process.env.ANALYTICS_INLINE_BACKFILL_BATCH_SIZE || 40), 200))
 const ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS = Math.max(10_000, Number(process.env.ANALYTICS_INLINE_BACKFILL_MIN_INTERVAL_MS || 60_000))
@@ -400,7 +404,7 @@ async function buildDashboardPayload(ownerRestaurant) {
       endDate: startDay,
     }),
     Table.countDocuments({ restaurantId: ownerRestaurant._id, active: true }),
-    LOW_STOCK_NOTIFICATIONS_ENABLED
+    LOW_STOCK_NOTIFICATIONS_ENABLED && getRestaurantFeatureFlagsFromEntity(ownerRestaurant).inventoryEnabled
       ? buildLowStockDashboardNotifications(ownerRestaurant._id, lowStockThresholdPercent)
       : Promise.resolve([]),
   ])
@@ -710,6 +714,11 @@ export async function trackPublicMenuExposure(req, res, next) {
     if (!restaurantLookup?.restaurantId) {
       return res.status(404).json({ message: 'Restaurant not found' })
     }
+    const analyticsEnabled = await getRestaurantFeatureFlagsById(restaurantLookup.restaurantId)
+      .then((flags) => flags.analyticsEnabled)
+    if (!analyticsEnabled) {
+      return res.status(202).json({ tracked: 0, disabled: true })
+    }
 
     const validItemIds = await MenuItem.find({
       restaurantId: restaurantLookup.restaurantId,
@@ -751,6 +760,11 @@ export async function trackPublicAddToCart(req, res, next) {
     const restaurantLookup = await resolveRestaurantIdentityBySlug(restaurantSlug)
     if (!restaurantLookup?.restaurantId) {
       return res.status(404).json({ message: 'Restaurant not found' })
+    }
+    const analyticsEnabled = await getRestaurantFeatureFlagsById(restaurantLookup.restaurantId)
+      .then((flags) => flags.analyticsEnabled)
+    if (!analyticsEnabled) {
+      return res.status(202).json({ tracked: false, disabled: true })
     }
 
     const result = await trackAddToCart({
