@@ -86,6 +86,13 @@ function respondRestaurantNotFound(res) {
   return res.status(404).json({ message: 'Restaurant not found' })
 }
 
+function ensureOrderStillExists(order, message = 'Order not found') {
+  if (order) return order
+  const error = new Error(message)
+  error.statusCode = 404
+  throw error
+}
+
 function buildOrderCacheTags({ restaurant, tableNumber, orderId, includeAnalytics = false }) {
   const tags = [
     `orders:board:${String(restaurant._id)}`,
@@ -480,9 +487,7 @@ export async function updateOrderStatus(req, res, next) {
           },
         ).lean()
 
-        if (!previousOrder) {
-          throw new Error('Order not found')
-        }
+        ensureOrderStillExists(previousOrder)
 
         const shouldQueueStatusWork = previousOrder.orderStatus !== orderStatus
         if (shouldQueueStatusWork && USE_LEGACY_WORKERS) {
@@ -1278,6 +1283,7 @@ export async function markOrderKotPrinted(req, res, next) {
       { $set: update },
       { returnDocument: 'after', runValidators: true },
     ).lean()
+    ensureOrderStillExists(order)
 
     if (isReprint) {
       sendKotReprintAuditEmail({
@@ -1405,6 +1411,7 @@ export async function markOrderPrintBundle(req, res, next) {
       { $set: update },
       { returnDocument: 'after', runValidators: true },
     ).lean()
+    ensureOrderStillExists(order)
 
     if (isKotReprint) {
       sendKotReprintAuditEmail({
@@ -1500,6 +1507,7 @@ export async function markOrderBillPrinted(req, res, next) {
       { $set: update },
       { returnDocument: 'after', runValidators: true },
     ).lean()
+    ensureOrderStillExists(order)
 
     invalidateCacheByTags(
       buildOrderCacheTags({
@@ -1518,6 +1526,9 @@ export async function markOrderBillPrinted(req, res, next) {
 
     return res.json(order)
   } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message })
+    }
     next(error)
   }
 }
