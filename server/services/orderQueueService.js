@@ -269,7 +269,17 @@ function extractBrpopPayload(result) {
 
 async function blockingPop(key, timeoutSeconds) {
   const blockingRedis = await getBlockingRedisClient()
-  if (blockingRedis && typeof blockingRedis.sendCommand === 'function') {
+  if (!blockingRedis) {
+    throw new Error('blocking_redis_client_unavailable')
+  }
+
+  // Prefer modern Redis command support first (Redis >= 6.2).
+  if (typeof blockingRedis.blMove === 'function') {
+    return blockingRedis.blMove(key, PROCESSING_KEY, 'RIGHT', 'LEFT', timeoutSeconds)
+  }
+
+  // Backward-compatible fallback for older clients/servers.
+  if (typeof blockingRedis.sendCommand === 'function') {
     return blockingRedis.sendCommand(['BRPOPLPUSH', key, PROCESSING_KEY, String(timeoutSeconds)])
   }
 
@@ -307,8 +317,18 @@ async function parseAndCollectJob(redis, rawPayload, jobs) {
 }
 
 async function movePendingToProcessing(redis) {
-  if (typeof redis?.command === 'function') {
-    return redis.command(['RPOPLPUSH', QUEUE_KEY, PROCESSING_KEY])
+  if (!redis) {
+    throw new Error('redis_client_unavailable')
+  }
+
+  // Prefer modern Redis command support first (Redis >= 6.2).
+  if (typeof redis.lMove === 'function') {
+    return redis.lMove(QUEUE_KEY, PROCESSING_KEY, 'RIGHT', 'LEFT')
+  }
+
+  // Backward-compatible fallback for older clients/servers.
+  if (typeof redis.sendCommand === 'function') {
+    return redis.sendCommand(['RPOPLPUSH', QUEUE_KEY, PROCESSING_KEY])
   }
 
   throw new Error('redis_client_does_not_support_rpoplpush')
@@ -474,15 +494,6 @@ async function processJob(job) {
       case 'reserve_order_inventory':
         await handleReserveOrderInventory(jobData)
         break
-      case 'update_inventory':
-        await handleInventoryUpdate(jobData)
-        break
-      case 'track_analytics':
-        await handleAnalyticsTracking(jobData)
-        break
-      case 'notify_order_change':
-        await handleOrderNotification(jobData)
-        break
       default:
         throw new Error(`Unknown job type: ${jobType}`)
     }
@@ -565,42 +576,6 @@ async function moveToDeadLetter(job, error, attempts) {
 
 // ─────────────────────────────────────────────────────────────────
 // Job handlers (implement as needed)
-
-async function handleInventoryUpdate(jobData) {
-  // Backward-compat alias: map old job type to canonical handler.
-  await handleReserveOrderInventory(jobData)
-}
-
-async function handleAnalyticsTracking(jobData) {
-  // Backward-compat alias: preserve old producer compatibility.
-  await handleOrderStatusChanged({
-    ...jobData,
-    toStatus: String(jobData?.toStatus || jobData?.orderStatus || 'Completed'),
-  })
-}
-
-async function handleOrderNotification(jobData) {
-  if (!jobData?.orderId) {
-    throw new Error('Invalid job data: missing orderId')
-  }
-
-  try {
-    // Placeholder for notification service (Twilio SMS, FCM push, etc.)
-    // For now, just log - can be extended in Phase 2
-    logger.info('order_queue_notification_queued', {
-      orderId: jobData.orderId,
-      restaurantId: jobData.restaurantId,
-      orderStatus: jobData.orderStatus,
-    })
-    // TODO: Integrate with actual notification service (Twilio, FCM, etc.)
-  } catch (error) {
-    logger.error('order_queue_notification_failed', {
-      orderId: jobData.orderId,
-      error: error?.message,
-    })
-    throw error
-  }
-}
 
 async function handleOrderStatusChanged(jobData) {
   if (!jobData?.orderId || !jobData?.restaurantId || !jobData?.toStatus) {
