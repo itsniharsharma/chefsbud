@@ -49,6 +49,13 @@ function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase()
 }
 
+function normalizeUsername(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+}
+
 function generateOtpCode() {
   return String(randomInt(100000, 1000000))
 }
@@ -123,6 +130,7 @@ function serializeUser(user) {
   return {
     id: user._id,
     name: user.name,
+    username: user.username || '',
     email: user.email,
     emailVerified: user.emailVerified !== false,
     role: user.role,
@@ -149,18 +157,28 @@ export async function initiateRegistration(req, res, next) {
       return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
     }
 
-    const { name, email, password, restaurantName, address = '', phone = '', gstin } = req.body
+    const { name, username, email, password, restaurantName, address = '', phone = '', gstin } = req.body
+    const normalizedUsername = normalizeUsername(username)
     const normalizedEmail = normalizeEmail(email)
     const normalizedGstin = normalizeGstin(gstin)
 
-    const [existing, existingGstin, pendingByGstin] = await Promise.all([
+    if (normalizedUsername.length < 3 || normalizedUsername.length > 40) {
+      return res.status(400).json({ message: 'Username must be between 3 and 40 characters' })
+    }
+
+    const [existing, existingByUsername, existingGstin, pendingByGstin, pendingByUsername] = await Promise.all([
       User.findOne({ email: normalizedEmail }).select('_id').lean(),
+      User.findOne({ username: normalizedUsername }).select('_id').lean(),
       Restaurant.findOne({ gstin: normalizedGstin }).select('_id').lean(),
       PendingRegistration.findOne({ gstin: normalizedGstin }).select('email').lean(),
+      PendingRegistration.findOne({ username: normalizedUsername }).select('email').lean(),
     ])
 
     if (existing) {
       return res.status(409).json({ message: 'Email is already in use' })
+    }
+    if (existingByUsername) {
+      return res.status(409).json({ message: 'Username is already in use' })
     }
 
     if (existingGstin) {
@@ -170,12 +188,16 @@ export async function initiateRegistration(req, res, next) {
     if (pendingByGstin && pendingByGstin.email !== normalizedEmail) {
       return res.status(409).json({ message: 'GSTIN is already being verified with another email' })
     }
+    if (pendingByUsername && pendingByUsername.email !== normalizedEmail) {
+      return res.status(409).json({ message: 'Username is already being verified by another account' })
+    }
 
     const otpCode = generateOtpCode()
     const [hashedPassword, otpHash] = await Promise.all([bcrypt.hash(String(password), 10), hashOtp(otpCode)])
 
     const pendingPayload = {
       name,
+      username: normalizedUsername,
       email: normalizedEmail,
       passwordHash: hashedPassword,
       restaurantName: restaurantName || `${name}'s Restaurant`,
@@ -220,6 +242,10 @@ export async function initiateRegistration(req, res, next) {
 
       if ('email' in duplicateFields) {
         return res.status(409).json({ message: 'Email is already in use' })
+      }
+
+      if ('username' in duplicateFields) {
+        return res.status(409).json({ message: 'Username is already in use' })
       }
 
       if ('slug' in duplicateFields) {
@@ -309,10 +335,17 @@ export async function verifyRegistration(req, res, next) {
       return res.status(400).json({ message: 'Invalid verification code' })
     }
 
-    const existingUser = await User.findOne({ email: normalizedEmail }).lean()
+    const [existingUser, existingByUsername] = await Promise.all([
+      User.findOne({ email: normalizedEmail }).lean(),
+      User.findOne({ username: pending.username }).lean(),
+    ])
     if (existingUser) {
       await PendingRegistration.deleteOne({ _id: pending._id })
       return res.status(409).json({ message: 'Email is already in use' })
+    }
+    if (existingByUsername) {
+      await PendingRegistration.deleteOne({ _id: pending._id })
+      return res.status(409).json({ message: 'Username is already in use' })
     }
 
     const existingGstin = await Restaurant.findOne({ gstin: pending.gstin }).lean()
@@ -323,6 +356,7 @@ export async function verifyRegistration(req, res, next) {
 
     const user = await User.create({
       name: pending.name,
+      username: pending.username,
       email: pending.email,
       password: pending.passwordHash,
       emailVerified: true,
@@ -346,6 +380,7 @@ export async function verifyRegistration(req, res, next) {
     const token = signToken({
       userId: String(user._id || user.id),
       name: user.name,
+      username: user.username,
       email: user.email,
       role: user.role,
       tokenVersion: Number(user.tokenVersion || 0),
@@ -369,6 +404,10 @@ export async function verifyRegistration(req, res, next) {
       if ('email' in duplicateFields) {
         return res.status(409).json({ message: 'Email is already in use' })
       }
+
+      if ('username' in duplicateFields) {
+        return res.status(409).json({ message: 'Username is already in use' })
+      }
     }
     next(error)
   }
@@ -381,17 +420,20 @@ export async function login(req, res, next) {
       return res.status(400).json({ message: 'Validation failed', errors: errors.array() })
     }
 
-    const { email, password } = req.body
-    const normalizedEmail = normalizeEmail(email)
-    const user = await User.findOne({ email: normalizedEmail })
-      .select('_id name email password emailVerified role billing tokenVersion')
+    const { username, password } = req.body
+    const normalizedUsername = normalizeUsername(username)
+    const normalizedEmail = normalizeEmail(username)
+    const user = await User.findOne({
+      $or: [{ username: normalizedUsername }, { email: normalizedEmail }],
+    })
+      .select('_id name username email password emailVerified role billing tokenVersion')
       .lean()
     if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' })
+      return res.status(401).json({ message: 'Invalid email, username, or passkey' })
     }
 
     if (typeof user.password !== 'string' || user.password.length === 0) {
-      return res.status(401).json({ message: 'Invalid email or password' })
+      return res.status(401).json({ message: 'Invalid email, username, or passkey' })
     }
 
     let valid = false
@@ -402,7 +444,7 @@ export async function login(req, res, next) {
     }
 
     if (!valid) {
-      return res.status(401).json({ message: 'Invalid email or password' })
+      return res.status(401).json({ message: 'Invalid email, username, or passkey' })
     }
 
     if (user.emailVerified === false) {
@@ -413,6 +455,7 @@ export async function login(req, res, next) {
     const token = signToken({
       userId: String(user._id || user.id),
       name: user.name,
+      username: user.username || '',
       email: user.email,
       role: user.role,
       tokenVersion: Number(user.tokenVersion || 0),
@@ -519,7 +562,7 @@ export async function me(req, res, next) {
     const serializedRequestRestaurant = serializeSessionRestaurant(req.restaurant)
     const [currentUser, restaurant] = await Promise.all([
       User.findById(req.user._id)
-        .select('_id name email emailVerified role billing tokenVersion')
+        .select('_id name username email emailVerified role billing tokenVersion')
         .lean(),
       serializedRequestRestaurant
         ? Promise.resolve(serializedRequestRestaurant)
@@ -549,6 +592,53 @@ export async function logout(req, res, next) {
     invalidateOwnerRestaurantCache(req.user._id)
     return res.json({ message: 'Logged out' })
   } catch (error) {
+    next(error)
+  }
+}
+
+export async function updateOwnerCredentials(req, res, next) {
+  try {
+    const nextUsernameRaw = req.body?.username
+    const nextPasskeyRaw = req.body?.passkey
+
+    if (typeof nextUsernameRaw !== 'string' && typeof nextPasskeyRaw !== 'string') {
+      return res.status(400).json({ message: 'Provide username or passkey to update.' })
+    }
+
+    const update = {}
+    if (typeof nextUsernameRaw === 'string') {
+      const normalizedUsername = normalizeUsername(nextUsernameRaw)
+      if (normalizedUsername.length < 3 || normalizedUsername.length > 40) {
+        return res.status(400).json({ message: 'Username must be between 3 and 40 characters' })
+      }
+      update.username = normalizedUsername
+    }
+
+    if (typeof nextPasskeyRaw === 'string' && nextPasskeyRaw.length > 0) {
+      if (nextPasskeyRaw.length < 6 || nextPasskeyRaw.length > 80) {
+        return res.status(400).json({ message: 'Passkey must be between 6 and 80 characters' })
+      }
+      update.password = await bcrypt.hash(nextPasskeyRaw, 10)
+    }
+
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ message: 'Nothing to update' })
+    }
+
+    const user = await User.findOneAndUpdate(
+      { _id: req.user._id },
+      { $set: update },
+      { returnDocument: 'after', projection: '_id name username email emailVerified role billing tokenVersion' },
+    ).lean()
+
+    return res.json({
+      message: 'Owner credentials updated',
+      user: serializeUser(user),
+    })
+  } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ message: 'Username is already in use' })
+    }
     next(error)
   }
 }

@@ -106,6 +106,14 @@ export function AuthProvider({ children }) {
     setRestaurant(null)
   }, [token])
 
+  const updateOwnerCredentials = useCallback(async (payload) => {
+    const result = await authService.updateOwnerCredentials(payload)
+    if (result?.user) {
+      setUser((prev) => ({ ...(prev || {}), ...result.user }))
+    }
+    return result
+  }, [])
+
   const value = useMemo(
     () => ({
       token,
@@ -117,12 +125,13 @@ export function AuthProvider({ children }) {
       staffLogin,
       initiateRegistration,
       verifyRegistration,
+      updateOwnerCredentials,
       logout,
       refreshSession,
       setUser,
       setRestaurant,
     }),
-    [token, user, restaurant, authLoading, login, staffLogin, initiateRegistration, verifyRegistration, logout, refreshSession, setUser, setRestaurant],
+    [token, user, restaurant, authLoading, login, staffLogin, initiateRegistration, verifyRegistration, updateOwnerCredentials, logout, refreshSession, setUser, setRestaurant],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

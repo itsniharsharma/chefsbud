@@ -19,6 +19,9 @@ export const authService = {
   me() {
     return api.get('/auth/me').then((response) => response.data)
   },
+  updateOwnerCredentials(payload) {
+    return api.put('/auth/me/credentials', payload).then((response) => response.data)
+  },
   logout() {
     return api.post('/auth/logout').then((response) => response.data)
   },

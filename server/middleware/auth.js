@@ -150,7 +150,7 @@ export async function requireAuth(req, res, next) {
           .select('_id ownerId restaurantId username displayName isActive')
           .lean(),
         User.findById(ownerId)
-          .select('_id name email role emailVerified tokenVersion billing')
+          .select('_id name username email role emailVerified tokenVersion billing')
           .lean(),
         Restaurant.findOne({
           _id: restaurantId,
@@ -178,6 +178,7 @@ export async function requireAuth(req, res, next) {
         staffDisplayName: staff.displayName,
         restaurantId: staff.restaurantId,
         name: staff.displayName || staff.username,
+        username: owner.username || '',
         email: owner.email,
         emailVerified: owner.emailVerified,
         billing: owner.billing,
@@ -210,7 +211,7 @@ export async function requireAuth(req, res, next) {
 
     const [user, restaurant] = await Promise.all([
       User.findById(decoded.userId)
-        .select('_id name email role emailVerified tokenVersion billing')
+        .select('_id name username email role emailVerified tokenVersion billing')
         .lean(),
       Restaurant.findOne({ ownerId: decoded.userId })
         .select('_id ownerId slug name gstin address phone paymentConfig kotReprintConfig.passkeyHash kotReprintConfig.updatedAt inventoryAlertConfig featureConfig')
@@ -229,6 +230,7 @@ export async function requireAuth(req, res, next) {
     req.user = {
       _id: user._id,
       name: user.name,
+      username: user.username || '',
       email: user.email,
       role: user.role,
       emailVerified: user.emailVerified,

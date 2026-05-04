@@ -5,7 +5,7 @@ import { useAuth } from '../hooks/useAuth'
 import { restaurantService } from '../services/restaurantService'
 
 export default function SettingsPage() {
-  const { user, restaurant, setRestaurant } = useAuth()
+  const { user, restaurant, setRestaurant, updateOwnerCredentials } = useAuth()
   const [form, setForm] = useState({
     restaurantName: '',
     gstin: '',
@@ -18,6 +18,9 @@ export default function SettingsPage() {
   const [message, setMessage] = useState('')
   const [staffMessage, setStaffMessage] = useState('')
   const [staffAccounts, setStaffAccounts] = useState([])
+  const [ownerCredentialMessage, setOwnerCredentialMessage] = useState('')
+  const [ownerUsername, setOwnerUsername] = useState('')
+  const [ownerPasskey, setOwnerPasskey] = useState('')
   const [kotMessage, setKotMessage] = useState('')
   const [kotPasskey, setKotPasskey] = useState('')
   const [staffForm, setStaffForm] = useState({
@@ -47,7 +50,8 @@ export default function SettingsPage() {
       inventoryEnabled: entitlementDefaults ? entitlementDefaults.inventoryEnabled : restaurant.featureConfig?.inventoryEnabled !== false,
       analyticsEnabled: entitlementDefaults ? entitlementDefaults.analyticsEnabled : restaurant.featureConfig?.analyticsEnabled !== false,
     })
-  }, [isCorePlan, isProPlan, restaurant])
+    setOwnerUsername(user?.username || '')
+  }, [isCorePlan, isProPlan, restaurant, user?.username])
 
   useEffect(() => {
     restaurantService
@@ -124,6 +128,23 @@ export default function SettingsPage() {
       })
       .catch((requestError) => {
         setKotMessage(requestError?.response?.data?.message || 'Failed to save KOT reprint passkey')
+      })
+  }
+
+  const onSaveOwnerCredentials = (event) => {
+    event.preventDefault()
+    setOwnerCredentialMessage('')
+
+    updateOwnerCredentials({
+      username: ownerUsername,
+      ...(ownerPasskey ? { passkey: ownerPasskey } : {}),
+    })
+      .then(() => {
+        setOwnerPasskey('')
+        setOwnerCredentialMessage('Owner login credentials updated successfully')
+      })
+      .catch((requestError) => {
+        setOwnerCredentialMessage(requestError?.response?.data?.message || 'Failed to update owner credentials')
       })
   }
 
@@ -230,6 +251,35 @@ export default function SettingsPage() {
           ))}
           {!staffAccounts.length && <p className="text-xs text-slate-500">No staff credentials created yet.</p>}
         </div>
+      </form>
+
+      <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSaveOwnerCredentials}>
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">Owner Login Credentials</h2>
+          <p className="text-xs text-slate-500">Use username and passkey to log in as manager. Keep these secure.</p>
+        </div>
+        {ownerCredentialMessage && <p className="text-sm text-[var(--primary)]">{ownerCredentialMessage}</p>}
+        <FormInput
+          label="Owner Username"
+          value={ownerUsername}
+          onChange={(event) => setOwnerUsername(event.target.value)}
+          required
+        />
+        <FormInput
+          label="Current Passkey"
+          type="password"
+          value="••••••••"
+          readOnly
+          className="bg-slate-50 text-slate-500"
+        />
+        <FormInput
+          label="Owner Passkey (leave blank to keep unchanged)"
+          type="password"
+          value={ownerPasskey}
+          onChange={(event) => setOwnerPasskey(event.target.value)}
+          placeholder="••••••••"
+        />
+        <Button type="submit">Save Owner Credentials</Button>
       </form>
 
       <form className="card max-w-3xl space-y-3 p-4" onSubmit={onSaveKotReprintConfig}>

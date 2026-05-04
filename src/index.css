@@ -100,7 +100,7 @@ canvas {
 .auth-brand-panel {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(145deg, #0f172a 0%, #0f766e 52%, #8f1d22 100%);
+  background: linear-gradient(145deg, #45070a 0%, #8f1017 48%, #e50914 100%);
   color: #ffffff;
 }
 
@@ -109,8 +109,8 @@ canvas {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(120deg, rgba(255, 255, 255, 0.12), transparent 42%),
-    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, 0.24), transparent 24%);
+    linear-gradient(120deg, rgba(255, 255, 255, 0.15), transparent 42%),
+    radial-gradient(circle at 88% 10%, rgba(255, 255, 255, 0.18), transparent 24%);
 }
 
 .auth-brand-panel::after {
@@ -167,11 +167,11 @@ canvas {
 }
 
 .auth-mode-button.active {
-  border-color: #0f766e;
-  background: #e7f7f3;
+  border-color: #e50914;
+  background: #fff1f2;
   box-shadow:
-    inset 5px 0 0 #0f766e,
-    0 8px 18px rgba(15, 118, 110, 0.18);
+    inset 5px 0 0 #e50914,
+    0 8px 18px rgba(229, 9, 20, 0.16);
 }
 
 .auth-mode-button-title {
@@ -181,6 +181,19 @@ canvas {
 
 .auth-mode-button-copy {
   color: #334155;
+}
+
+@media (max-width: 768px) {
+  .auth-frame,
+  .auth-card {
+    border-radius: 14px;
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  }
+
+  .auth-shell {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
 }
 
 .input {

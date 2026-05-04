@@ -7,9 +7,11 @@ import {
   me,
   resendRegistrationCode,
   staffLogin,
+  updateOwnerCredentials,
   verifyRegistration,
 } from '../controllers/authController.js'
 import { requireAuth } from '../middleware/auth.js'
+import { requireOwner } from '../middleware/authorize.js'
 import { createRateLimiter } from '../middleware/rateLimit.js'
 
 const router = Router()
@@ -19,7 +21,7 @@ const loginLimiter = createRateLimiter({
   id: 'auth-login',
   capacity: Number(process.env.RATE_LIMIT_LOGIN_CAPACITY || 12),
   windowMs: Number(process.env.RATE_LIMIT_LOGIN_WINDOW_MS || 60_000),
-  keyFn: (req) => `${req.ip}:${String(req.body?.email || '').trim().toLowerCase()}`,
+  keyFn: (req) => `${req.ip}:${String(req.body?.username || '').trim().toLowerCase()}`,
 })
 
 const staffLoginLimiter = createRateLimiter({
@@ -48,6 +50,7 @@ router.post(
   registerLimiter,
   [
     body('name').trim().notEmpty().withMessage('name is required'),
+    body('username').isString().trim().isLength({ min: 3, max: 40 }).withMessage('username is required'),
     body('email').isEmail().withMessage('valid email is required'),
     body('password').isLength({ min: 6 }).withMessage('password must be at least 6 characters'),
     body('restaurantName').optional().isString(),
@@ -77,7 +80,25 @@ router.post('/register/resend-code', otpLimiter, [body('email').isEmail().withMe
 router.post(
   '/login',
   loginLimiter,
-  [body('email').isEmail().withMessage('valid email is required'), body('password').notEmpty()],
+  [
+    body('username')
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 80 })
+      .withMessage('Email or username must be between 3 and 80 characters')
+      .custom((value) => {
+        const normalizedUsername = String(value || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '')
+        const normalizedEmail = String(value || '').trim().toLowerCase()
+        const isValidEmailFormat = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
+        const isValidUsernameFormat = normalizedUsername.length >= 3 && normalizedUsername.length <= 40
+
+        if (!isValidEmailFormat && !isValidUsernameFormat) {
+          throw new Error('Please enter a valid email address or username')
+        }
+        return true
+      }),
+    body('password').notEmpty().withMessage('Passkey is required'),
+  ],
   login,
 )
 
@@ -89,6 +110,16 @@ router.post(
 )
 
 router.get('/me', requireAuth, me)
+router.put(
+  '/me/credentials',
+  requireAuth,
+  requireOwner,
+  [
+    body('username').optional().isString().trim().isLength({ min: 3, max: 40 }),
+    body('passkey').optional().isString().isLength({ min: 6, max: 80 }),
+  ],
+  updateOwnerCredentials,
+)
 router.post('/logout', requireAuth, logout)
 
 export default router

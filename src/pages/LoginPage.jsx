@@ -7,8 +7,8 @@ import { hasBillingAccess } from '../utils/billingAccess'
 
 export default function LoginPage() {
   const [mode, setMode] = useState('manager')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('')
+  const [passkey, setPasskey] = useState('')
   const [staffUsername, setStaffUsername] = useState('')
   const [staffPasskey, setStaffPasskey] = useState('')
   const [loading, setLoading] = useState(false)
@@ -26,7 +26,7 @@ export default function LoginPage() {
       const result =
         mode === 'staff'
           ? await staffLogin({ username: staffUsername, passkey: staffPasskey })
-          : await login({ email, password })
+          : await login({ username, password: passkey })
 
       if (!hasBillingAccess(result?.user?.billing)) {
         navigate('/plans', {
@@ -48,7 +48,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="auth-shell flex items-center justify-center px-4 py-8">
+    <div className="auth-shell flex items-center justify-center px-3 py-6 sm:px-4 sm:py-8">
       <form className="auth-card w-full max-w-xl p-6" onSubmit={onSubmit}>
         <Link to="/" className="mb-4 inline-block text-sm font-semibold text-slate-700 hover:text-[var(--primary)]">
           ← Back to Landing
@@ -83,12 +83,20 @@ export default function LoginPage() {
         <div className="space-y-3">
           {mode === 'manager' ? (
             <>
-              <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <div>
+                <FormInput 
+                  label="Email or Username" 
+                  value={username} 
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your email or username"
+                />
+                <p className="mt-1 text-xs text-slate-500">You can login with either your email address or username</p>
+              </div>
               <FormInput
-                label="Password"
+                label="Passkey"
                 type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                value={passkey}
+                onChange={(e) => setPasskey(e.target.value)}
               />
             </>
           ) : (

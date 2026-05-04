@@ -12,6 +12,7 @@ export default function RegisterPage() {
   // signup state
   const [step, setStep] = useState('details')
   const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [restaurantName, setRestaurantName] = useState('')
@@ -26,7 +27,7 @@ export default function RegisterPage() {
 
   // login state
   const [loginMode, setLoginMode] = useState('manager')
-  const [loginEmail, setLoginEmail] = useState('')
+  const [loginUsername, setLoginUsername] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [staffUsername, setStaffUsername] = useState('')
   const [staffPasskey, setStaffPasskey] = useState('')
@@ -46,6 +47,7 @@ export default function RegisterPage() {
     try {
       const response = await initiateRegistration({
         name,
+        username,
         email,
         password,
         restaurantName,
@@ -109,7 +111,7 @@ export default function RegisterPage() {
       const result =
         loginMode === 'staff'
           ? await staffLogin({ username: staffUsername, passkey: staffPasskey })
-          : await login({ email: loginEmail, password: loginPassword })
+          : await login({ username: loginUsername, password: loginPassword })
 
       if (!hasBillingAccess(result?.user?.billing)) {
         navigate('/plans', { replace: true })
@@ -134,7 +136,7 @@ export default function RegisterPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white">Owner Access</p>
               <h2 className="mt-3 text-4xl font-bold leading-tight">Premium control for premium hospitality teams</h2>
               <p className="mt-4 text-sm text-white">
-                Sign up once, verify your email, and move straight into a single subscription checkout to unlock your dashboard.
+                Sign up once, verify your email, and unlock your dashboard with secure username and passkey access.
               </p>
 
               <div className="mt-8 space-y-3">
@@ -142,7 +144,7 @@ export default function RegisterPage() {
                   Fast owner onboarding with email verification
                 </div>
                 <div className="auth-feature px-4 py-3 text-sm">
-                  One payment today that covers setup plus your first month
+                  Username + passkey based manager login from any device
                 </div>
                 <div className="auth-feature px-4 py-3 text-sm">
                   Automated monthly billing with access protection and grace handling
@@ -211,8 +213,8 @@ export default function RegisterPage() {
                 <form className="space-y-3" onSubmit={onLoginSubmit}>
                   {loginMode === 'manager' ? (
                     <>
-                      <FormInput label="Email" type="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} required />
-                      <FormInput label="Password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
+                      <FormInput label="Username" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} required />
+                      <FormInput label="Passkey" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
                     </>
                   ) : (
                     <>
@@ -256,7 +258,13 @@ export default function RegisterPage() {
                       <FormInput label="Full Name" value={name} onChange={(e) => setName(e.target.value)} required />
                       <FormInput label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
                       <FormInput
-                        label="Password"
+                        label="Unique Username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        required
+                      />
+                      <FormInput
+                        label="Passkey"
                         type="password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
